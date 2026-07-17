@@ -112,6 +112,41 @@ def player_rank(rating: PlayerRating, rank: int, total_ranked: int, aliases: lis
     return embed
 
 
+def _record_lines(records: dict[str, list[int]], limit: int) -> str:
+    rows = [(k, w, losses) for k, (w, losses) in records.items()]
+    rows.sort(key=lambda r: r[1] + r[2], reverse=True)  # by games played
+    lines = []
+    for name, w, losses in rows[:limit]:
+        total = w + losses
+        lines.append(f"**{name}** — {w}-{losses} ({100 * w / total:.0f}%)")
+    return "\n".join(lines) or "*none*"
+
+
+def player_profile(
+    rating: PlayerRating,
+    rank: int,
+    total_ranked: int,
+    aliases: list[str],
+    race_records: dict[str, list[int]],
+    unit_records: dict[str, list[int]],
+) -> discord.Embed:
+    embed = discord.Embed(title=f"{rating.name} — profile", color=ACCENT)
+    embed.add_field(name="Rating", value=f"{rating.ordinal:.1f}", inline=True)
+    embed.add_field(name="Rank", value=f"#{rank} of {total_ranked}", inline=True)
+    embed.add_field(
+        name="Record",
+        value=f"{rating.wins}-{rating.losses} ({100 * rating.wins / rating.games:.0f}%)",
+        inline=True,
+    )
+    embed.add_field(name="Races", value=_record_lines(race_records, 3), inline=True)
+    embed.add_field(name="Most-played units", value=_record_lines(unit_records, 10), inline=True)
+    others = [a for a in aliases if a.lower() != rating.name.lower()]
+    if others:
+        embed.add_field(name="Also played as", value=", ".join(others[:12]), inline=False)
+    embed.set_footer(text=f"μ={rating.mu:.1f} σ={rating.sigma:.1f} · decided games only")
+    return embed
+
+
 def queue_status(players: list[QueuedPlayer], target: int) -> discord.Embed:
     embed = discord.Embed(title="Matchmaking Queue", color=ACCENT)
     if players:

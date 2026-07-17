@@ -391,6 +391,30 @@ class MatchStore:
     def match_count(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
 
+    def player_records_by(
+        self, handle: str, column: str, confidence_gate: float, min_duration: int
+    ) -> dict[str, list[int]]:
+        """For one account, wins/losses grouped by 'race' or 'pick', over
+        decided matches. Returns {value: [wins, losses]}."""
+        if column not in ("race", "pick"):
+            raise ValueError(f"unsupported column: {column}")
+        rows = self._conn.execute(
+            f"""SELECT mp.{column} AS val, (mp.team = m.winning_team) AS won, COUNT(*) AS n
+               FROM match_players mp JOIN matches m ON m.id = mp.match_id
+               WHERE mp.toon_handle = ?
+                 AND m.winning_team IS NOT NULL
+                 AND m.winner_confidence >= ?
+                 AND m.duration_seconds >= ?
+                 AND mp.{column} IS NOT NULL
+               GROUP BY mp.{column}, won""",
+            (handle, confidence_gate, min_duration),
+        ).fetchall()
+        records: dict[str, list[int]] = {}
+        for r in rows:
+            entry = records.setdefault(r["val"], [0, 0])
+            entry[0 if r["won"] else 1] = r["n"]
+        return records
+
     def known_player(self, sc2_name: str) -> bool:
         """Whether this SC2 name appears in any stored match (typo guard)."""
         row = self._conn.execute(

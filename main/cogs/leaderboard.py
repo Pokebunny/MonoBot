@@ -31,25 +31,50 @@ class Leaderboard(commands.Cog):
         board = self.ratings.book().leaderboard(min_games=min_games)
         await ctx.send(embed=match_embeds.leaderboard(board, min_games))
 
-    @commands.hybrid_command(help="show a player's rating and record")
-    @commands.cooldown(1, 5, commands.BucketType.user)
-    async def rank(self, ctx, *, player: str):
+    def _resolve(self, player: str):
+        """Resolve a display name (current or former) to (rating, rank, board
+        size, number of same-named accounts), or None if no rated games.
+        Names aren't unique, so pick the most-active matching account."""
         book = self.ratings.book()
-        # Resolve via match history so former names still find the account;
-        # a name can map to several accounts (not unique), so pick the most active.
         rated = [book.ratings[h] for h in self.store.handles_for_name(player) if h in book.ratings]
         if not rated:
-            await ctx.send(f"No rated games found for **{player}**.")
-            return
+            return None
         rated.sort(key=lambda r: r.games, reverse=True)
         rating = rated[0]
         board = book.leaderboard(min_games=1)
         rank = next(i for i, r in enumerate(board, 1) if r.handle == rating.handle)
+        return rating, rank, len(board), len(rated)
+
+    @commands.hybrid_command(help="show a player's rating and record")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def rank(self, ctx, *, player: str):
+        resolved = self._resolve(player)
+        if resolved is None:
+            await ctx.send(f"No rated games found for **{player}**.")
+            return
+        rating, rank, total, n_accounts = resolved
         aliases = self.store.aliases_for_handle(rating.handle)
-        await ctx.send(embed=match_embeds.player_rank(rating, rank, len(board), aliases))
-        if len(rated) > 1:
+        await ctx.send(embed=match_embeds.player_rank(rating, rank, total, aliases))
+        if n_accounts > 1:
             await ctx.send(
-                f"*(Note: {len(rated)} different accounts have played as **{player}**; showing the most active.)*"
+                f"*(Note: {n_accounts} different accounts have played as **{player}**; showing the most active.)*"
+            )
+
+    @commands.hybrid_command(help="show a player's full profile: rating, races, and units played")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def profile(self, ctx, *, player: str):
+        resolved = self._resolve(player)
+        if resolved is None:
+            await ctx.send(f"No rated games found for **{player}**.")
+            return
+        rating, rank, total, n_accounts = resolved
+        aliases = self.store.aliases_for_handle(rating.handle)
+        races = self.store.player_records_by(rating.handle, "race", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
+        units = self.store.player_records_by(rating.handle, "pick", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
+        await ctx.send(embed=match_embeds.player_profile(rating, rank, total, aliases, races, units))
+        if n_accounts > 1:
+            await ctx.send(
+                f"*(Note: {n_accounts} different accounts have played as **{player}**; showing the most active.)*"
             )
 
     @commands.hybrid_command(help="show win rates by unit pick")

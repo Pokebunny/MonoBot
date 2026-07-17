@@ -186,6 +186,19 @@ def test_unit_records(store):
     assert records["Marine"] == [4, 8]
 
 
+def test_player_records_by(store):
+    store.ingest(_match(winning_team=1, played_at=_at(0)), hash_replay(b"g1"))
+    store.ingest(_match(winning_team=2, played_at=_at(20)), hash_replay(b"g2"))
+    store.ingest(_match(winning_team=1, played_at=_at(40)), hash_replay(b"g3"))
+    # A0 (h-A0) is team 1, Zerg/Zergling: won g1 & g3, lost g2.
+    races = store.player_records_by("h-A0", "race", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
+    units = store.player_records_by("h-A0", "pick", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
+    assert races["Zerg"] == [2, 1]
+    assert units["Zergling"] == [2, 1]
+    with pytest.raises(ValueError):
+        store.player_records_by("h-A0", "name; DROP TABLE matches", 0.7, 120)
+
+
 def test_ratings_from_store(store):
     for i in range(5):
         store.ingest(_match(played_at=_at(i * 30)), hash_replay(f"game{i}".encode()))

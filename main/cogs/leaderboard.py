@@ -4,7 +4,7 @@ import logging
 
 from discord.ext import commands
 from services import match_embeds
-from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, RatingBook
+from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, RatingCache
 from services.storage import MatchStore
 
 logger = logging.getLogger(__name__)
@@ -17,28 +17,21 @@ class Leaderboard(commands.Cog):
         self.client = client
         if not hasattr(client, "match_store"):
             client.match_store = MatchStore()
+        if not hasattr(client, "rating_cache"):
+            client.rating_cache = RatingCache(client.match_store)
         self.store: MatchStore = client.match_store
-        self._book: RatingBook | None = None
-        self._book_version = -1
-
-    def _ratings(self) -> RatingBook:
-        """Rating book derived from stored matches, cached until the store
-        changes. Rebuilding replays full history (~1s per 1000 matches)."""
-        if self._book is None or self._book_version != self.store.change_count:
-            self._book = RatingBook.from_matches(m for _, m in self.store.all_matches())
-            self._book_version = self.store.change_count
-        return self._book
+        self.ratings: RatingCache = client.rating_cache
 
     @commands.hybrid_command(help="show the rating leaderboard")
     @commands.cooldown(1, 5, commands.BucketType.channel)
     async def leaderboard(self, ctx, min_games: int = DEFAULT_MIN_GAMES):
-        board = self._ratings().leaderboard(min_games=min_games)
+        board = self.ratings.book().leaderboard(min_games=min_games)
         await ctx.send(embed=match_embeds.leaderboard(board, min_games))
 
     @commands.hybrid_command(help="show a player's rating and record")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def rank(self, ctx, *, player: str):
-        book = self._ratings()
+        book = self.ratings.book()
         rating = book.ratings.get(player)
         if rating is None:
             # Case-insensitive fallback so !rank pokebunny works.

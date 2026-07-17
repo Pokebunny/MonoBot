@@ -108,9 +108,8 @@ class Replays(commands.Cog):
         embed = match_embeds.match_summary(match, result.match_id)
         if result.status == "updated":
             embed.set_footer(text=f"Match #{result.match_id} · refined from a more complete recording")
-        needs_confirmation = (
-            match.duration_seconds >= MIN_DURATION_SECONDS
-            and (match.winning_team is None or match.winner_confidence < MIN_WINNER_CONFIDENCE)
+        needs_confirmation = match.duration_seconds >= MIN_DURATION_SECONDS and (
+            match.winning_team is None or match.winner_confidence < MIN_WINNER_CONFIDENCE
         )
         if needs_confirmation:
             await channel.send(embed=embed, view=ConfirmWinnerView(self.store, result.match_id))

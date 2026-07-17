@@ -28,6 +28,7 @@ class IngestResult(NamedTuple):
     status: str
     match_id: int | None
 
+
 DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "monobot.db")
 
 _SCHEMA = """
@@ -112,9 +113,7 @@ class MatchStore:
         logger.info("Migrating matches table: adding content_key")
         self._conn.execute("ALTER TABLE matches ADD COLUMN content_key TEXT")
         for match_id, match in self.all_matches():
-            self._conn.execute(
-                "UPDATE matches SET content_key = ? WHERE id = ?", (content_key(match), match_id)
-            )
+            self._conn.execute("UPDATE matches SET content_key = ? WHERE id = ?", (content_key(match), match_id))
         self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_matches_content_key ON matches(content_key)")
         self._conn.commit()
 
@@ -267,9 +266,7 @@ class MatchStore:
         return [r["sc2_name"] for r in rows]
 
     def discord_id_for(self, sc2_name: str) -> str | None:
-        row = self._conn.execute(
-            "SELECT discord_id FROM player_links WHERE sc2_name = ?", (sc2_name,)
-        ).fetchone()
+        row = self._conn.execute("SELECT discord_id FROM player_links WHERE sc2_name = ?", (sc2_name,)).fetchone()
         return row["discord_id"] if row else None
 
     def has_replay(self, file_hash: str) -> bool:
@@ -303,9 +300,7 @@ class MatchStore:
 
     def known_player(self, sc2_name: str) -> bool:
         """Whether this SC2 name appears in any stored match (typo guard)."""
-        row = self._conn.execute(
-            "SELECT 1 FROM match_players WHERE name = ? LIMIT 1", (sc2_name,)
-        ).fetchone()
+        row = self._conn.execute("SELECT 1 FROM match_players WHERE name = ? LIMIT 1", (sc2_name,)).fetchone()
         return row is not None
 
     def unit_records(self, confidence_gate: float, min_duration: int) -> dict[str, list[int]]:

@@ -1,6 +1,7 @@
 """Discord embed builders for matches, leaderboards, and stats."""
 
 import discord
+from models.matchmaking import ProposedMatch, QueuedPlayer
 from models.rating import PlayerRating
 from models.replay import MonobattleMatch
 
@@ -107,12 +108,43 @@ def player_rank(rating: PlayerRating, rank: int, total_ranked: int) -> discord.E
     return embed
 
 
+def queue_status(players: list[QueuedPlayer], target: int) -> discord.Embed:
+    embed = discord.Embed(title="Matchmaking Queue", color=ACCENT)
+    if players:
+        lines = []
+        for p in players:
+            tag = "" if p.rated else " *(unrated)*"
+            lines.append(f"• {p.display_name}{tag}")
+        embed.description = "\n".join(lines)
+    else:
+        embed.description = "*Queue is empty. Click **Join** to get in.*"
+    embed.set_footer(text=f"{len(players)}/{target} — teams form automatically when full")
+    return embed
+
+
+def _team_field(name: str, team: list[QueuedPlayer]) -> tuple[str, str]:
+    lines = "\n".join(f"• {p.display_name}" for p in team)
+    return name, lines or "*empty*"
+
+
+def proposed_match(match: ProposedMatch) -> discord.Embed:
+    fav = match.team1_win_probability
+    embed = discord.Embed(
+        title="Match found!",
+        description=f"Balance: **{match.fairness:.0%}** (Team 1 win chance ≈ {fav:.0%})",
+        color=ACCENT,
+    )
+    n1, v1 = _team_field("Team 1", match.team1)
+    n2, v2 = _team_field("Team 2", match.team2)
+    embed.add_field(name=n1, value=v1, inline=True)
+    embed.add_field(name=n2, value=v2, inline=True)
+    if any(not p.rated for p in match.team1 + match.team2):
+        embed.set_footer(text="Unrated players were balanced at a default skill estimate.")
+    return embed
+
+
 def unit_stats(records: dict[str, list[int]], min_games: int = 10) -> discord.Embed:
-    rows = [
-        (pick, wins, losses)
-        for pick, (wins, losses) in records.items()
-        if wins + losses >= min_games
-    ]
+    rows = [(pick, wins, losses) for pick, (wins, losses) in records.items() if wins + losses >= min_games]
     rows.sort(key=lambda r: r[1] / (r[1] + r[2]), reverse=True)
     lines = [f"{'Unit':<14} {'W':>4} {'L':>4}  {'Win%':>5}"]
     for pick, wins, losses in rows:

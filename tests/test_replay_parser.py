@@ -42,7 +42,7 @@ def test_inferred_winner(matches):
     for number in (713, 716):
         m = _match(matches, number)
         assert m.winning_team == 1, m.file_name
-        assert m.winner_method == "inferred:army+gg+leaver"
+        assert m.winner_method == "inferred:army+departures+gg"
         assert m.winner_confidence == 0.9
 
 

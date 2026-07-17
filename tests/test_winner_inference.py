@@ -51,23 +51,30 @@ def test_gg_concession_team2_loses():
     assert conf >= 0.7
 
 
-def test_early_dropout_ignored():
-    # A leaver before 120s is a dropout, not a concession.
-    replay = _replay([_leave(30, "A0")])
-    team, conf, method = _infer_winner(replay)
-    assert team is None
-    assert method == "unknown"
-
-
-def test_early_leaver_low_confidence():
-    # First leaver long before the end: signal fires but below rating gate.
-    replay = _replay([_leave(300, "A0")], seconds=900)
+def test_more_departures_marks_the_loser():
+    # Team 1 lost two players, team 2 one -> team 1 conceded.
+    replay = _replay([_leave(300, "A0"), _leave(400, "A1"), _leave(500, "B0")], seconds=900)
     team, conf, method = _infer_winner(replay)
     assert team == 2
-    assert conf < 0.7
+    assert conf >= 0.7
+    assert "departures" in method
 
 
-def test_late_first_leaver_confident():
+def test_recorder_ending_leave_excluded():
+    # The final leave near the end is the recorder's; only A0's counts.
+    replay = _replay([_leave(300, "A0"), _leave(895, "B0")], seconds=900)
+    team, conf, method = _infer_winner(replay)
+    assert team == 2
+
+
+def test_balanced_departures_no_signal():
+    # Equal departures on both teams -> net-departures stays silent.
+    replay = _replay([_leave(300, "A0"), _leave(400, "B0")], seconds=900)
+    team, conf, method = _infer_winner(replay)
+    assert team is None
+
+
+def test_single_late_leaver_confident():
     replay = _replay([_leave(880, "B2")], seconds=900)
     team, conf, method = _infer_winner(replay)
     assert team == 1

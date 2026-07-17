@@ -180,20 +180,21 @@ _UNIT_RACE = {
 
 # Winner-inference tuning. Solo confidences reflect blind validation against
 # the 446 replays with a recorded winner (2026-07, event-time clock):
-#   army dominance 99.5%, gg-concession 95.8%,
-#   first leaver <=5min before recording end 98.8%, earlier only 87.6%
-#   (a team playing a man down still wins ~1 in 8).
+#   net-departures 99.8% (fires on 444/446), army dominance 100% (fires 402),
+#   gg-concession 95.8%. army and net-departures never disagree on a
+#   recorded-winner game, so a conflict (only seen in unrecorded games like a
+#   cannon-rush base race) is resolved in departures' favor.
 _ARMY_DOMINANCE_RATIO = 1.5  # team army value ratio considered decisive
 _ARMY_MINIMUM = 2000  # leader must have real army or the snapshot is noise
 _GG_WINDOW_SECONDS = 90  # gg this close before leaving = concession
 # Standalone gg/ggs/ggwp/ggggg — not the "gg" inside "laggin" or "buggy".
 _GG_RE = re.compile(r"(?<![a-z])g{2,}\s*(wp)?s?(?![a-z])")
-_MIN_CONCESSION_SECOND = 120  # earlier leavers are dropouts, not concessions
-_LATE_LEAVE_WINDOW = 300  # first leave this close to recording end = loss
+_RECORDER_LEAVE_WINDOW = 10  # a leave this close to the end is the recorder's
 _CONF_RECORDED = 1.0
 _CONF_AGREEMENT = 0.9
-_CONF_SOLO = {"army": 0.7, "gg": 0.75, "leaver": 0.75, "early-leaver": 0.55}
-_CONF_GG_CONFLICT = 0.7  # gg wins conflicts: army value misses base races
+_CONF_SOLO = {"departures": 0.85, "army": 0.8, "gg": 0.8}
+_CONF_GG_CONFLICT = 0.7  # gg is an explicit concession — wins any conflict
+_CONF_DEPARTURES_CONFLICT = 0.75  # departures beat army (base races/cannon rush)
 _CONF_CONFLICT = 0.0
 
 
@@ -340,11 +341,7 @@ def _infer_winner(replay) -> tuple[int | None, float, str]:
     ):
         army_pick = ranked[0]
 
-    # Signal 2: gg-concession — a "gg" said shortly before leaving is an
-    # explicit concession; one-sided concessions name the loser.
-    # Signal 3: first leaver — the first non-dropout leaver's team lost;
-    # strong when the leave is near the recording's end, weak when the team
-    # played on a player down (they win those ~15% of the time).
+    # Collect gg-chat times and every leave event.
     gg_at = {}
     leaves = []
     for e in replay.events:
@@ -353,23 +350,35 @@ def _infer_winner(replay) -> tuple[int | None, float, str]:
             if _GG_RE.search(e.text.lower()) and e.player.name in team_of:
                 gg_at[e.player.name] = e.second
         elif n == "PlayerLeaveEvent" and getattr(e, "player", None) is not None:
-            name = e.player.name
-            if name in team_of and e.second >= _MIN_CONCESSION_SECOND:
-                leaves.append((e.second, name, team_of[name]))
-
-    gg_leave_teams = {team for sec, name, team in leaves if name in gg_at and sec - gg_at[name] <= _GG_WINDOW_SECONDS}
+            if e.player.name in team_of:
+                leaves.append((e.second, e.player.name, team_of[e.player.name]))
+    leaves.sort()
     # Recording end in EVENT time: event timestamps run on a different clock
     # than game_length (real time vs game time, ~1.4x on Faster), so the end
     # marker must come from the events themselves.
     end_second = replay.events[-1].second if replay.events else 0
+
     picks: dict[str, int] = {}
+
+    # Signal 2: gg-concession — a "gg" said shortly before leaving is an
+    # explicit concession; a one-sided one names the loser.
+    gg_leave_teams = {team for sec, name, team in leaves if name in gg_at and sec - gg_at[name] <= _GG_WINDOW_SECONDS}
     if len(gg_leave_teams) == 1:
         gg_loser = gg_leave_teams.pop()
         picks["gg"] = next(t for t in team_numbers if t != gg_loser)
+
+    # Signal 3: net departures — excluding the recorder's game-ending leave,
+    # the team that lost more players conceded. Robust to a single early
+    # leaver on the winning team, and subsumes full-team elimination.
     if leaves:
-        first_second, _, first_team = leaves[0]
-        signal = "leaver" if end_second - first_second <= _LATE_LEAVE_WINDOW else "early-leaver"
-        picks[signal] = next(t for t in team_numbers if t != first_team)
+        counting = leaves[:-1] if end_second - leaves[-1][0] <= _RECORDER_LEAVE_WINDOW else leaves
+        left: dict[int, set] = defaultdict(set)
+        for _, name, team in counting:
+            left[team].add(name)
+        gone = sorted(team_numbers, key=lambda t: len(left[t]), reverse=True)
+        if len(gone) >= 2 and len(left[gone[0]]) > len(left[gone[1]]):
+            picks["departures"] = next(t for t in team_numbers if t != gone[0])
+
     if army_pick is not None:
         picks["army"] = army_pick
 
@@ -382,10 +391,13 @@ def _infer_winner(replay) -> tuple[int | None, float, str]:
         if len(picks) >= 2:
             return winner, _CONF_AGREEMENT, method
         return winner, _CONF_SOLO[next(iter(picks))], method
-    # Disagreement: an explicit gg concession outranks army value (base
-    # races) and leave order; other conflicts go to manual confirmation.
+    # Conflict: an explicit gg concession is decisive; otherwise trust
+    # departures over army value (which misreads base races / cannon rushes,
+    # where the losing team keeps a big idle army on a dead economy).
     if "gg" in picks:
         return picks["gg"], _CONF_GG_CONFLICT, method + "(gg-conflict)"
+    if "departures" in picks:
+        return picks["departures"], _CONF_DEPARTURES_CONFLICT, method + "(departures-over-army)"
     return None, _CONF_CONFLICT, "conflict:" + "+".join(sorted(picks))
 
 

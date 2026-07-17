@@ -15,10 +15,18 @@ import json
 import logging
 import os
 import sqlite3
+from typing import NamedTuple
 
 from models.replay import MatchPlayer, MonobattleMatch
 
 logger = logging.getLogger(__name__)
+
+
+class IngestResult(NamedTuple):
+    # "inserted" = new game; "updated" = same game, a more complete recording
+    # replaced the stored one; "duplicate" = same-or-worse recording, ignored.
+    status: str
+    match_id: int | None
 
 DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "monobot.db")
 
@@ -26,6 +34,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
     id INTEGER PRIMARY KEY,
     file_hash TEXT NOT NULL UNIQUE,
+    content_key TEXT NOT NULL UNIQUE,
     file_name TEXT NOT NULL,
     map_name TEXT NOT NULL,
     played_at TEXT NOT NULL,
@@ -72,6 +81,16 @@ def hash_replay(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def content_key(match: MonobattleMatch) -> str:
+    """Identity of the actual game, invariant across who recorded it. Two
+    players' recordings of the same game differ in bytes and length (they may
+    leave at different times) but share the start time and full roster.
+    Minute precision absorbs sub-second clock differences between clients."""
+    minute = match.played_at.replace(second=0, microsecond=0)
+    names = "|".join(sorted(p.name for p in match.players))
+    return hashlib.sha256(f"{minute.isoformat()}|{names}".encode()).hexdigest()
+
+
 class MatchStore:
     def __init__(self, db_path: str = DEFAULT_DB_PATH):
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
@@ -80,43 +99,96 @@ class MatchStore:
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        self._migrate_content_key()
         # Bumped on every write so callers (e.g. the leaderboard cog) can
         # cache derived data like rating books and know when it's stale.
         self.change_count = 0
+
+    def _migrate_content_key(self) -> None:
+        """Backfill content_key on DBs created before it existed."""
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(matches)")}
+        if "content_key" in cols:
+            return
+        logger.info("Migrating matches table: adding content_key")
+        self._conn.execute("ALTER TABLE matches ADD COLUMN content_key TEXT")
+        for match_id, match in self.all_matches():
+            self._conn.execute(
+                "UPDATE matches SET content_key = ? WHERE id = ?", (content_key(match), match_id)
+            )
+        self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_matches_content_key ON matches(content_key)")
+        self._conn.commit()
 
     def close(self):
         self._conn.close()
 
     # -- writes ----------------------------------------------------------
 
-    def ingest(self, match: MonobattleMatch, file_hash: str, uploaded_by: str | None = None) -> int | None:
-        """Store a parsed match; returns its id, or None if already stored."""
+    def ingest(self, match: MonobattleMatch, file_hash: str, uploaded_by: str | None = None) -> IngestResult:
+        """Store a parsed match. If the same game (by content_key) is already
+        stored, keep whichever recording is more complete — a higher winner
+        confidence, or a longer duration at equal confidence — so a teammate
+        who stayed to the end can supply a winner the early-leaver's replay
+        lacked. Manually confirmed results are never overwritten."""
+        key = content_key(match)
+        existing = self._conn.execute(
+            "SELECT id, file_hash, duration_seconds, winner_confidence, winner_method FROM matches WHERE content_key = ?",
+            (key,),
+        ).fetchone()
+
+        if existing is not None:
+            if existing["file_hash"] == file_hash:
+                return IngestResult("duplicate", existing["id"])
+            if not self._is_more_complete(match, existing):
+                logger.info("Same game already stored, keeping better recording: %s", match.file_name)
+                return IngestResult("duplicate", existing["id"])
+            self._replace_match(existing["id"], match, file_hash, key, uploaded_by)
+            self.change_count += 1
+            return IngestResult("updated", existing["id"])
+
         try:
             cur = self._conn.execute(
                 """INSERT INTO matches
-                   (file_hash, file_name, map_name, played_at, duration_seconds,
+                   (file_hash, content_key, file_name, map_name, played_at, duration_seconds,
                     game_type, pick_mode, pick_phase_seconds, winning_team,
                     winner_confidence, winner_method, uploaded_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    file_hash,
-                    match.file_name,
-                    match.map_name,
-                    match.played_at.isoformat(),
-                    match.duration_seconds,
-                    match.game_type,
-                    match.pick_mode,
-                    match.pick_phase_seconds,
-                    match.winning_team,
-                    match.winner_confidence,
-                    match.winner_method,
-                    uploaded_by,
-                ),
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (file_hash, key, *self._match_columns(match), uploaded_by),
             )
         except sqlite3.IntegrityError:
+            # Exact file already stored under a different game (shouldn't happen).
             logger.info("Duplicate replay ignored: %s", match.file_name)
-            return None
+            return IngestResult("duplicate", None)
         match_id = cur.lastrowid
+        self._insert_players(match_id, match)
+        self._conn.commit()
+        self.change_count += 1
+        return IngestResult("inserted", match_id)
+
+    @staticmethod
+    def _is_more_complete(match: MonobattleMatch, existing: sqlite3.Row) -> bool:
+        if existing["winner_method"] == "confirmed":
+            return False  # manual confirmation is authoritative
+        return (match.winner_confidence, match.duration_seconds) > (
+            existing["winner_confidence"],
+            existing["duration_seconds"],
+        )
+
+    @staticmethod
+    def _match_columns(match: MonobattleMatch) -> tuple:
+        return (
+            match.file_name,
+            match.map_name,
+            match.played_at.isoformat(),
+            match.duration_seconds,
+            match.game_type,
+            match.pick_mode,
+            match.pick_phase_seconds,
+            match.winning_team,
+            match.winner_confidence,
+            match.winner_method,
+        )
+
+    def _insert_players(self, match_id: int, match: MonobattleMatch) -> None:
         self._conn.executemany(
             """INSERT INTO match_players
                (match_id, name, team, race, pick, repick_used, unit_counts)
@@ -134,9 +206,21 @@ class MatchStore:
                 for p in match.players
             ],
         )
+
+    def _replace_match(
+        self, match_id: int, match: MonobattleMatch, file_hash: str, key: str, uploaded_by: str | None
+    ) -> None:
+        self._conn.execute(
+            """UPDATE matches SET
+                 file_hash = ?, content_key = ?, file_name = ?, map_name = ?, played_at = ?,
+                 duration_seconds = ?, game_type = ?, pick_mode = ?, pick_phase_seconds = ?,
+                 winning_team = ?, winner_confidence = ?, winner_method = ?, uploaded_by = ?
+               WHERE id = ?""",
+            (file_hash, key, *self._match_columns(match), uploaded_by, match_id),
+        )
+        self._conn.execute("DELETE FROM match_players WHERE match_id = ?", (match_id,))
+        self._insert_players(match_id, match)
         self._conn.commit()
-        self.change_count += 1
-        return match_id
 
     def link_player(self, discord_id: str, sc2_name: str) -> str | None:
         """Claim an SC2 name for a Discord user. Returns the owning discord_id

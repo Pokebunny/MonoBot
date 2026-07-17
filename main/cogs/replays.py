@@ -98,18 +98,22 @@ class Replays(commands.Cog):
             await channel.send(embed=match_embeds.parse_failure(attachment.filename, str(e)))
             return
 
-        match_id = self.store.ingest(match, file_hash, uploaded_by=uploader)
-        if match_id is None:
+        result = self.store.ingest(match, file_hash, uploaded_by=uploader)
+        if result.status == "duplicate":
+            # Same game already stored (this file, or a recording at least as
+            # complete from another player).
             await channel.send(embed=match_embeds.duplicate_notice(attachment.filename))
             return
 
-        embed = match_embeds.match_summary(match, match_id)
+        embed = match_embeds.match_summary(match, result.match_id)
+        if result.status == "updated":
+            embed.set_footer(text=f"Match #{result.match_id} · refined from a more complete recording")
         needs_confirmation = (
             match.duration_seconds >= MIN_DURATION_SECONDS
             and (match.winning_team is None or match.winner_confidence < MIN_WINNER_CONFIDENCE)
         )
         if needs_confirmation:
-            await channel.send(embed=embed, view=ConfirmWinnerView(self.store, match_id))
+            await channel.send(embed=embed, view=ConfirmWinnerView(self.store, result.match_id))
         else:
             await channel.send(embed=embed)
 

@@ -34,24 +34,28 @@ def main() -> None:
     print(f"{len(paths)} replays to ingest")
 
     store = MatchStore()
-    ingested = skipped = failed = 0
+    counts = {"inserted": 0, "updated": 0, "duplicate": 0}
+    failed = 0
     for i, path in enumerate(paths):
         try:
             with open(path, "rb") as f:
                 file_hash = storage.hash_replay(f.read())
             if store.has_replay(file_hash):
-                skipped += 1
+                counts["duplicate"] += 1
                 continue
             match = replay_parser.parse_replay(path)
-            store.ingest(match, file_hash, uploaded_by="backfill")
-            ingested += 1
+            result = store.ingest(match, file_hash, uploaded_by="backfill")
+            counts[result.status] += 1
         except Exception as e:
             failed += 1
             print(f"  FAILED {os.path.basename(path)}: {type(e).__name__}: {e}")
         if (i + 1) % 50 == 0:
             print(f"  ...{i + 1}/{len(paths)}")
 
-    print(f"done: {ingested} ingested, {skipped} already stored, {failed} failed")
+    print(
+        f"done: {counts['inserted']} new, {counts['updated']} refined, "
+        f"{counts['duplicate']} already stored, {failed} failed"
+    )
     print(f"database now holds {store.match_count()} matches")
 
 

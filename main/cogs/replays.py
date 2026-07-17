@@ -27,13 +27,13 @@ class ConfirmWinnerView(discord.ui.View):
         self.match_id = match_id
 
     def _is_participant(self, discord_id: str) -> bool:
-        names = set(self.store.sc2_names_for(discord_id))
-        if not names:
+        handles = set(self.store.handles_for(discord_id))
+        if not handles:
             return False
         match = self.store.get_match(self.match_id)
         if match is None:
             return False
-        return any(p.name in names for p in match.players)
+        return any(p.toon_handle in handles for p in match.players)
 
     async def _confirm(self, interaction: discord.Interaction, team: int):
         if not self._is_participant(str(interaction.user.id)):

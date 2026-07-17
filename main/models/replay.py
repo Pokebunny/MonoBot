@@ -4,7 +4,8 @@ from pydantic import BaseModel
 
 
 class MatchPlayer(BaseModel):
-    name: str
+    name: str  # display name; NOT unique across SC2 accounts
+    toon_handle: str  # SC2's unique account id, e.g. "1-S2-1-539205"
     team: int
     race: str  # race actually played in-game (from worker births)
     pick: str | None  # detected monobattle unit pick, None if undetectable

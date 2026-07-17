@@ -50,12 +50,13 @@ class Matchmaking(commands.Cog):
     # -- rating lookup ---------------------------------------------------
 
     def _queued_player(self, user: discord.abc.User) -> QueuedPlayer:
-        """Build a QueuedPlayer, rating the user by their linked SC2 name with
-        the most games. Unlinked users get the new-player default rating."""
+        """Build a QueuedPlayer, rated by the user's bound SC2 account with the
+        most games. Users who are linked but haven't played yet (no bound
+        handle) get the new-player default rating."""
         book = self.ratings.book()
         best = None
-        for name in self.store.sc2_names_for(str(user.id)):
-            rating = book.ratings.get(name)
+        for handle in self.store.handles_for(str(user.id)):
+            rating = book.ratings.get(handle)
             if rating is not None and (best is None or rating.games > best.games):
                 best = rating
         if best is not None:
@@ -89,6 +90,12 @@ class Matchmaking(commands.Cog):
 
     async def handle_join(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
+        if not self.store.sc2_names_for(uid):
+            await interaction.response.send_message(
+                "You need to link your SC2 name before you can queue. Run `!link <your SC2 name>` first.",
+                ephemeral=True,
+            )
+            return
         if uid in self.queue:
             await interaction.response.send_message("You're already in the queue.", ephemeral=True)
             return

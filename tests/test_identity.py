@@ -12,10 +12,13 @@ def store(tmp_path):
     s.close()
 
 
-def _match(names, winning_team=None):
+def _match(names, winning_team=None, handles=None):
+    # names may be display names; handles overrides the toon_handle per slot
+    # (defaults to "H-<name>") so we can model two accounts sharing a name.
+    handles = handles or [f"H-{n}" for n in names]
     players = [
-        MatchPlayer(name=n, team=(1 if i < 4 else 2), race="Zerg", pick="Zergling", unit_counts={})
-        for i, n in enumerate(names)
+        MatchPlayer(name=n, toon_handle=h, team=(1 if i < 4 else 2), race="Zerg", pick="Zergling", unit_counts={})
+        for i, (n, h) in enumerate(zip(names, handles))
     ]
     return MonobattleMatch(
         file_name="m.SC2Replay",
@@ -33,7 +36,7 @@ def _match(names, winning_team=None):
 
 
 def test_link_and_lookup(store):
-    assert store.link_player("disc123", "Pokebunny") is None
+    assert store.link_player("disc123", "Pokebunny").status == "linked"
     assert store.sc2_names_for("disc123") == ["Pokebunny"]
     assert store.discord_id_for("Pokebunny") == "disc123"
 
@@ -46,14 +49,15 @@ def test_link_multiple_names(store):
 
 def test_name_claimed_by_other_is_rejected(store):
     store.link_player("disc123", "Pokebunny")
-    owner = store.link_player("disc999", "Pokebunny")
-    assert owner == "disc123"
+    result = store.link_player("disc999", "Pokebunny")
+    assert result.status == "taken"
+    assert result.owner == "disc123"
     assert store.discord_id_for("Pokebunny") == "disc123"
 
 
 def test_reclaim_own_name_is_noop_success(store):
-    assert store.link_player("disc123", "Pokebunny") is None
-    assert store.link_player("disc123", "Pokebunny") is None
+    assert store.link_player("disc123", "Pokebunny").status == "linked"
+    assert store.link_player("disc123", "Pokebunny").status == "linked"
     assert store.sc2_names_for("disc123") == ["Pokebunny"]
 
 
@@ -80,3 +84,70 @@ def test_link_change_count(store):
     assert store.change_count == 1
     store.unlink_player("disc123", "Pokebunny")
     assert store.change_count == 2
+
+
+# --- handle binding: names claimed pre-play, handles bound on first game ---
+
+_ROSTER = ["Pokebunny", "A2", "A3", "A4", "B1", "B2", "B3", "B4"]
+
+
+def test_handle_unbound_until_played(store):
+    store.link_player("disc123", "Pokebunny")
+    # Linked but never played: a name claim, no bound handle yet.
+    assert store.sc2_names_for("disc123") == ["Pokebunny"]
+    assert store.handles_for("disc123") == []
+
+
+def test_link_binds_from_existing_history(store):
+    # The common case: player already has games, then links.
+    store.ingest(_match(_ROSTER, winning_team=1), hash_replay(b"g1"))
+    result = store.link_player("disc123", "Pokebunny")
+    assert result.status == "linked"
+    assert result.handle == "H-Pokebunny"
+    assert store.handles_for("disc123") == ["H-Pokebunny"]
+
+
+def test_handle_bound_on_first_game_after_linking(store):
+    # Linked before any history, then plays: binds on ingest.
+    store.link_player("disc123", "Pokebunny")
+    assert store.handles_for("disc123") == []
+    store.ingest(_match(_ROSTER, winning_team=1), hash_replay(b"g1"))
+    assert store.handles_for("disc123") == ["H-Pokebunny"]
+
+
+def test_ambiguous_name_not_bound(store):
+    # Two "Rain" accounts have played (in different games).
+    r1 = _match(
+        ["Rain", "A2", "A3", "A4", "B1", "B2", "B3", "B4"],
+        winning_team=1,
+        handles=["H-rain1", "H-A2", "H-A3", "H-A4", "H-B1", "H-B2", "H-B3", "H-B4"],
+    )
+    r2 = _match(
+        ["Rain", "C2", "C3", "C4", "D1", "D2", "D3", "D4"],
+        winning_team=1,
+        handles=["H-rain2", "H-C2", "H-C3", "H-C4", "H-D1", "H-D2", "H-D3", "H-D4"],
+    )
+    r2 = r2.model_copy(update={"played_at": r2.played_at + datetime.timedelta(minutes=30)})
+    store.ingest(r1, hash_replay(b"r1"))
+    store.ingest(r2, hash_replay(b"r2"))
+    result = store.link_player("disc123", "Rain")
+    assert result.status == "ambiguous"
+    assert result.candidates == 2
+    assert store.handles_for("disc123") == []  # not auto-bound
+
+
+def test_same_name_different_accounts_dont_merge(store):
+    from services.rating import RatingBook
+
+    # Two different "Rain" accounts, each in their own game.
+    g1 = _match(["Rain"] + _ROSTER[1:], winning_team=1, handles=["H-rain1"] + [f"H-{n}" for n in _ROSTER[1:]])
+    g2_names = ["Rain", "C2", "C3", "C4", "D1", "D2", "D3", "D4"]
+    g2 = _match(g2_names, winning_team=2, handles=["H-rain2"] + [f"H-{n}" for n in g2_names[1:]])
+    g2 = g2.model_copy(update={"played_at": g1.played_at + datetime.timedelta(minutes=30)})
+    store.ingest(g1, hash_replay(b"g1"))
+    store.ingest(g2, hash_replay(b"g2"))
+    book = RatingBook.from_matches(m for _, m in store.all_matches())
+    # Separate ratings despite the shared display name.
+    assert "H-rain1" in book.ratings and "H-rain2" in book.ratings
+    assert book.ratings["H-rain1"].wins == 1 and book.ratings["H-rain1"].losses == 0
+    assert book.ratings["H-rain2"].wins == 0 and book.ratings["H-rain2"].losses == 1

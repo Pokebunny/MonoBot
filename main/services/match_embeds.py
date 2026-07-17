@@ -91,7 +91,8 @@ def leaderboard(ratings: list[PlayerRating], min_games: int, limit: int = 20) ->
         lines.append(f"`{i:>2}` **{r.name}** — {r.ordinal:.1f} ({r.wins}W-{r.losses}L, {100 * r.wins / r.games:.0f}%)")
     embed = discord.Embed(title="Monobattle Leaderboard", color=ACCENT)
     embed.description = "\n".join(lines) or "*No rated players yet.*"
-    embed.set_footer(text=f"min {min_games} games · rating = conservative skill estimate (μ−3σ)")
+    prefix = f"min {min_games} games · " if min_games > 1 else ""
+    embed.set_footer(text=f"{prefix}rating = conservative skill estimate (μ−3σ)")
     return embed
 
 
@@ -151,5 +152,6 @@ def unit_stats(records: dict[str, list[int]], min_games: int = 10) -> discord.Em
         lines.append(f"{pick:<14} {wins:>4} {losses:>4}  {100 * wins / (wins + losses):>4.1f}%")
     embed = discord.Embed(title="Unit Win Rates", color=ACCENT)
     embed.description = "```\n" + "\n".join(lines) + "\n```"
-    embed.set_footer(text=f"decided matches only · min {min_games} games per unit")
+    suffix = f" · min {min_games} games per unit" if min_games > 1 else ""
+    embed.set_footer(text=f"decided matches only{suffix}")
     return embed

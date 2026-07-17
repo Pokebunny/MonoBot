@@ -30,8 +30,8 @@ class Identity(commands.Cog):
             await ctx.send("Usage: `!link <your SC2 name>`")
             return
 
-        owner = self.store.link_player(str(ctx.author.id), sc2_name)
-        if owner is not None:
+        result = self.store.link_player(str(ctx.author.id), sc2_name)
+        if result.status == "taken":
             embed = discord.Embed(
                 title="Name already claimed",
                 description=f"**{sc2_name}** is already linked to another Discord user. "
@@ -41,19 +41,31 @@ class Identity(commands.Cog):
             await ctx.send(embed=embed)
             return
 
-        names = self.store.sc2_names_for(str(ctx.author.id))
+        if result.status == "ambiguous":
+            embed = discord.Embed(
+                title="Name needs disambiguation",
+                description=f"**{result.candidates} different accounts** have played as **{sc2_name}**, "
+                "so I can't tell which one is you. Your claim is saved, but an admin will need to "
+                "bind it to the right account.",
+                color=WARNING,
+            )
+            await ctx.send(embed=embed)
+            return
+
         embed = discord.Embed(
             title="Linked",
             description=f"You're now linked to **{sc2_name}**.",
             color=ACCENT,
         )
-        if not self.store.known_player(sc2_name):
+        if result.handle is None:
             embed.add_field(
                 name="Heads up",
                 value="That name hasn't appeared in any stored match yet — double-check the spelling "
-                "(it must match your in-game name exactly).",
+                "(it must match your in-game name exactly). It'll bind to your account the first time "
+                "you play.",
                 inline=False,
             )
+        names = self.store.sc2_names_for(str(ctx.author.id))
         if len(names) > 1:
             embed.set_footer(text="Your names: " + ", ".join(names))
         await ctx.send(embed=embed)

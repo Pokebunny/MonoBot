@@ -7,8 +7,10 @@ from services.rating import RatingBook
 def _match(winning_team, confidence=1.0, duration=900, team1=None, team2=None):
     team1 = team1 or ["A1", "A2", "A3", "A4"]
     team2 = team2 or ["B1", "B2", "B3", "B4"]
+    # toon_handle = name here so tests can key book.ratings on the name; the
+    # name/handle distinction is exercised in test_identity.
     players = [
-        MatchPlayer(name=n, team=t, race="Zerg", pick="Zergling", repick_used=False, unit_counts={})
+        MatchPlayer(name=n, toon_handle=n, team=t, race="Zerg", pick="Zergling", repick_used=False, unit_counts={})
         for t, names in ((1, team1), (2, team2))
         for n in names
     ]

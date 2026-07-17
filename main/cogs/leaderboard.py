@@ -9,7 +9,10 @@ from services.storage import MatchStore
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MIN_GAMES = 10
+# No minimum by default: the conservative rating (mu - 3*sigma) already sinks
+# low-game players, and the embed only shows the top 20. Pass !leaderboard <N>
+# to filter to players with at least N games.
+DEFAULT_MIN_GAMES = 1
 
 
 class Leaderboard(commands.Cog):
@@ -32,21 +35,23 @@ class Leaderboard(commands.Cog):
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def rank(self, ctx, *, player: str):
         book = self.ratings.book()
-        rating = book.ratings.get(player)
-        if rating is None:
-            # Case-insensitive fallback so !rank pokebunny works.
-            matches = [r for name, r in book.ratings.items() if name.lower() == player.lower()]
-            rating = matches[0] if matches else None
-        if rating is None or rating.games == 0:
+        # Names aren't unique; resolve to the account with the most games.
+        candidates = book.by_name(player)
+        if not candidates:
             await ctx.send(f"No rated games found for **{player}**.")
             return
+        rating = candidates[0]
         board = book.leaderboard(min_games=1)
-        rank = next(i for i, r in enumerate(board, 1) if r.name == rating.name)
+        rank = next(i for i, r in enumerate(board, 1) if r.handle == rating.handle)
         await ctx.send(embed=match_embeds.player_rank(rating, rank, len(board)))
+        if len(candidates) > 1:
+            await ctx.send(
+                f"*(Note: {len(candidates)} different accounts have played as **{player}**; showing the most active.)*"
+            )
 
     @commands.hybrid_command(help="show win rates by unit pick")
     @commands.cooldown(1, 5, commands.BucketType.channel)
-    async def unitstats(self, ctx, min_games: int = 10):
+    async def unitstats(self, ctx, min_games: int = 1):
         records = self.store.unit_records(MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
         if not records:
             await ctx.send("No decided matches stored yet.")

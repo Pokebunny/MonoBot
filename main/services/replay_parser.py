@@ -406,6 +406,7 @@ def parse_replay(path: str) -> MonobattleMatch:
             players.append(
                 MatchPlayer(
                     name=p.name,
+                    toon_handle=getattr(p, "toon_handle", "") or "",
                     team=team.number,
                     race=race,
                     pick=_detect_pick(tally, race),

@@ -21,6 +21,7 @@ def _match(
     players = [
         MatchPlayer(
             name=n,
+            toon_handle=f"h-{n}",
             team=(1 if i < 4 else 2),
             race="Zerg",
             pick="Zergling" if i < 4 else "Marine",
@@ -190,8 +191,8 @@ def test_ratings_from_store(store):
         store.ingest(_match(played_at=_at(i * 30)), hash_replay(f"game{i}".encode()))
     book = RatingBook.from_matches(m for _, m in store.all_matches())
     assert book.rated_matches == 5
-    assert book.ratings["A0"].wins == 5
-    assert book.ratings["A0"].ordinal > book.ratings["B0"].ordinal
+    assert book.ratings["h-A0"].wins == 5
+    assert book.ratings["h-A0"].ordinal > book.ratings["h-B0"].ordinal
 
 
 def test_change_count_tracks_writes(store):

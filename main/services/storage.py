@@ -29,6 +29,16 @@ class IngestResult(NamedTuple):
     match_id: int | None
 
 
+class LinkResult(NamedTuple):
+    # "linked" = claimed (handle bound if the name was found unambiguously in
+    # match history); "taken" = another user owns the name; "ambiguous" = the
+    # name maps to several accounts in history, so it can't be auto-bound.
+    status: str
+    owner: str | None = None
+    handle: str | None = None
+    candidates: int = 0
+
+
 DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "monobot.db")
 
 _SCHEMA = """
@@ -53,6 +63,7 @@ CREATE TABLE IF NOT EXISTS matches (
 CREATE TABLE IF NOT EXISTS match_players (
     match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
+    toon_handle TEXT NOT NULL DEFAULT '',
     team INTEGER NOT NULL,
     race TEXT NOT NULL,
     pick TEXT,
@@ -62,18 +73,25 @@ CREATE TABLE IF NOT EXISTS match_players (
 
 CREATE INDEX IF NOT EXISTS idx_match_players_match ON match_players(match_id);
 CREATE INDEX IF NOT EXISTS idx_match_players_name ON match_players(name);
+CREATE INDEX IF NOT EXISTS idx_match_players_handle ON match_players(toon_handle);
 CREATE INDEX IF NOT EXISTS idx_matches_played_at ON matches(played_at);
 
--- Maps a Discord user to the SC2 name(s) they play under. A Discord user may
--- claim several names (smurfs/renames); each SC2 name belongs to one user.
+-- Maps a Discord user to the SC2 name(s) they claim. sc2_name is the display
+-- name they entered; toon_handle is SC2's unique account id, bound the first
+-- time that name is seen in an uploaded game (NULL until then). Rating and
+-- participant checks key on the handle, so two players who share a display
+-- name never merge.
 CREATE TABLE IF NOT EXISTS player_links (
     discord_id TEXT NOT NULL,
     sc2_name TEXT NOT NULL,
+    toon_handle TEXT,
     linked_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (sc2_name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_player_links_discord ON player_links(discord_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_player_links_handle
+    ON player_links(toon_handle) WHERE toon_handle IS NOT NULL;
 """
 
 
@@ -141,6 +159,7 @@ class MatchStore:
                 logger.info("Same game already stored, keeping better recording: %s", match.file_name)
                 return IngestResult("duplicate", existing["id"])
             self._replace_match(existing["id"], match, file_hash, key, uploaded_by)
+            self.bind_handles_from_match(match)
             self.change_count += 1
             return IngestResult("updated", existing["id"])
 
@@ -160,6 +179,7 @@ class MatchStore:
         match_id = cur.lastrowid
         self._insert_players(match_id, match)
         self._conn.commit()
+        self.bind_handles_from_match(match)
         self.change_count += 1
         return IngestResult("inserted", match_id)
 
@@ -190,12 +210,13 @@ class MatchStore:
     def _insert_players(self, match_id: int, match: MonobattleMatch) -> None:
         self._conn.executemany(
             """INSERT INTO match_players
-               (match_id, name, team, race, pick, repick_used, unit_counts)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               (match_id, name, toon_handle, team, race, pick, repick_used, unit_counts)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     match_id,
                     p.name,
+                    p.toon_handle,
                     p.team,
                     p.race,
                     p.pick,
@@ -221,20 +242,54 @@ class MatchStore:
         self._insert_players(match_id, match)
         self._conn.commit()
 
-    def link_player(self, discord_id: str, sc2_name: str) -> str | None:
-        """Claim an SC2 name for a Discord user. Returns the owning discord_id
-        if the name is already claimed by someone else (no change made),
-        otherwise None on success (including re-claiming your own name)."""
+    def link_player(self, discord_id: str, sc2_name: str) -> LinkResult:
+        """Claim an SC2 display name and bind its account handle if the name
+        maps unambiguously to one account in match history. Names with no
+        history bind later, the first time they're seen in an uploaded game."""
         owner = self.discord_id_for(sc2_name)
         if owner is not None and owner != discord_id:
-            return owner
-        self._conn.execute(
-            "INSERT OR REPLACE INTO player_links (discord_id, sc2_name) VALUES (?, ?)",
-            (discord_id, sc2_name),
-        )
+            return LinkResult("taken", owner=owner)
+        if owner is None:
+            self._conn.execute(
+                "INSERT INTO player_links (discord_id, sc2_name) VALUES (?, ?)",
+                (discord_id, sc2_name),
+            )
+            self.change_count += 1
+        handles = self._handles_for_name(sc2_name)
+        if len(handles) == 1:
+            self._try_bind(sc2_name)
         self._conn.commit()
-        self.change_count += 1
-        return None
+        if len(handles) > 1:
+            return LinkResult("ambiguous", candidates=len(handles))
+        return LinkResult("linked", handle=handles[0] if handles else None)
+
+    def bind_handles_from_match(self, match: MonobattleMatch) -> None:
+        """After storing a game, bind handles for any claimed names it reveals
+        (used when a name was linked before it had any match history)."""
+        for name in {p.name for p in match.players}:
+            self._try_bind(name)
+        self._conn.commit()
+
+    def _handles_for_name(self, sc2_name: str) -> list[str]:
+        rows = self._conn.execute(
+            "SELECT DISTINCT toon_handle FROM match_players WHERE name = ? AND toon_handle != ''",
+            (sc2_name,),
+        ).fetchall()
+        return [r["toon_handle"] for r in rows]
+
+    def _try_bind(self, sc2_name: str) -> None:
+        """Bind an unbound link for sc2_name iff the name maps to exactly one
+        account across all stored matches (else it's ambiguous — leave it)."""
+        handles = self._handles_for_name(sc2_name)
+        if len(handles) != 1:
+            return
+        try:
+            self._conn.execute(
+                "UPDATE player_links SET toon_handle = ? WHERE sc2_name = ? AND toon_handle IS NULL",
+                (handles[0], sc2_name),
+            )
+        except sqlite3.IntegrityError:
+            pass  # handle already bound to another claimed name; leave as-is
 
     def unlink_player(self, discord_id: str, sc2_name: str) -> bool:
         """Release a name the user owns; returns False if they didn't own it."""
@@ -264,6 +319,15 @@ class MatchStore:
             "SELECT sc2_name FROM player_links WHERE discord_id = ? ORDER BY sc2_name", (discord_id,)
         ).fetchall()
         return [r["sc2_name"] for r in rows]
+
+    def handles_for(self, discord_id: str) -> list[str]:
+        """The SC2 account handles bound to this user (names they've played
+        under at least once). Empty if linked-but-never-played."""
+        rows = self._conn.execute(
+            "SELECT toon_handle FROM player_links WHERE discord_id = ? AND toon_handle IS NOT NULL ORDER BY toon_handle",
+            (discord_id,),
+        ).fetchall()
+        return [r["toon_handle"] for r in rows]
 
     def discord_id_for(self, sc2_name: str) -> str | None:
         row = self._conn.execute("SELECT discord_id FROM player_links WHERE sc2_name = ?", (sc2_name,)).fetchone()
@@ -330,6 +394,7 @@ class MatchStore:
         players = [
             MatchPlayer(
                 name=p["name"],
+                toon_handle=p["toon_handle"],
                 team=p["team"],
                 race=p["race"],
                 pick=p["pick"],

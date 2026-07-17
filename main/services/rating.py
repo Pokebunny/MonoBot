@@ -51,11 +51,21 @@ class RatingBook:
             book.rate_match(match)
         return book
 
-    def _get(self, name: str) -> PlayerRating:
-        if name not in self.ratings:
-            default = _model.rating(name=name)
-            self.ratings[name] = PlayerRating(name=name, mu=default.mu, sigma=default.sigma)
-        return self.ratings[name]
+    def _get(self, handle: str, name: str) -> PlayerRating:
+        """Rating for an account, keyed by its unique handle. The display name
+        is refreshed to the latest one seen (players can rename)."""
+        if handle not in self.ratings:
+            default = _model.rating(name=handle)
+            self.ratings[handle] = PlayerRating(handle=handle, name=name, mu=default.mu, sigma=default.sigma)
+        else:
+            self.ratings[handle].name = name
+        return self.ratings[handle]
+
+    def by_name(self, name: str) -> list[PlayerRating]:
+        """All accounts that have played under a display name (case-insensitive),
+        most games first. Usually one, but names aren't unique."""
+        matches = [r for r in self.ratings.values() if r.name.lower() == name.lower()]
+        return sorted(matches, key=lambda r: r.games, reverse=True)
 
     def is_rateable(self, match: MonobattleMatch) -> bool:
         return (
@@ -72,8 +82,8 @@ class RatingBook:
             return False
 
         team_numbers = sorted({p.team for p in match.players})
-        teams = [[self._get(p.name) for p in match.team(n)] for n in team_numbers]
-        os_teams = [[_model.create_rating([r.mu, r.sigma], name=r.name) for r in team] for team in teams]
+        teams = [[self._get(p.toon_handle, p.name) for p in match.team(n)] for n in team_numbers]
+        os_teams = [[_model.create_rating([r.mu, r.sigma], name=r.handle) for r in team] for team in teams]
         # ranks: lower is better; winner gets 0.
         ranks = [0 if n == match.winning_team else 1 for n in team_numbers]
 

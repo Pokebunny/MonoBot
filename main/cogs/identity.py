@@ -78,16 +78,31 @@ class Identity(commands.Cog):
         else:
             await ctx.send(f"You don't have **{sc2_name.strip()}** linked.")
 
-    @commands.hybrid_command(help="show which SC2 names are linked to you")
+    @commands.hybrid_command(help="show which SC2 accounts are linked to you")
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def whoami(self, ctx):
-        names = self.store.sc2_names_for(str(ctx.author.id))
-        if not names:
+        uid = str(ctx.author.id)
+        handles = self.store.handles_for(uid)
+        pending = self.store.pending_names_for(uid)
+        if not handles and not pending:
             await ctx.send("You haven't linked any SC2 names yet. Use `!link <your SC2 name>`.")
             return
+
+        lines = []
+        for handle in handles:
+            aliases = self.store.aliases_for_handle(handle)
+            current = aliases[0] if aliases else "?"
+            others = aliases[1:]
+            line = f"• **{current}**"
+            if others:
+                line += f" (also: {', '.join(others)})"
+            lines.append(line)
+        for name in pending:
+            lines.append(f"• **{name}** *(not yet seen in a game)*")
+
         embed = discord.Embed(
             title=ctx.author.display_name,
-            description="Linked SC2 names:\n" + "\n".join(f"• **{n}**" for n in names),
+            description="Linked SC2 accounts:\n" + "\n".join(lines),
             color=ACCENT,
         )
         await ctx.send(embed=embed)

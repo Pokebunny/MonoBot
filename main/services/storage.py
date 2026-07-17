@@ -92,6 +92,10 @@ CREATE TABLE IF NOT EXISTS player_links (
 CREATE INDEX IF NOT EXISTS idx_player_links_discord ON player_links(discord_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_player_links_handle
     ON player_links(toon_handle) WHERE toon_handle IS NOT NULL;
+-- Name claims and lookups are case-insensitive: SC2 names have fixed casing
+-- but users won't reproduce it, and "Rain"/"rain" must not be two claims.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_player_links_name_nocase
+    ON player_links(sc2_name COLLATE NOCASE);
 """
 
 
@@ -255,7 +259,7 @@ class MatchStore:
                 (discord_id, sc2_name),
             )
             self.change_count += 1
-        handles = self._handles_for_name(sc2_name)
+        handles = self.handles_for_name(sc2_name)
         if len(handles) == 1:
             self._try_bind(sc2_name)
         self._conn.commit()
@@ -270,22 +274,36 @@ class MatchStore:
             self._try_bind(name)
         self._conn.commit()
 
-    def _handles_for_name(self, sc2_name: str) -> list[str]:
+    def handles_for_name(self, sc2_name: str) -> list[str]:
+        """Every account that has played under a display name — current OR
+        former, since match_players keeps each game's name. Case-insensitive."""
         rows = self._conn.execute(
-            "SELECT DISTINCT toon_handle FROM match_players WHERE name = ? AND toon_handle != ''",
+            "SELECT DISTINCT toon_handle FROM match_players WHERE name = ? COLLATE NOCASE AND toon_handle != ''",
             (sc2_name,),
         ).fetchall()
         return [r["toon_handle"] for r in rows]
 
+    def aliases_for_handle(self, toon_handle: str) -> list[str]:
+        """Every display name an account has played under, most recent first."""
+        rows = self._conn.execute(
+            """SELECT mp.name AS name, MAX(m.played_at) AS last
+               FROM match_players mp JOIN matches m ON m.id = mp.match_id
+               WHERE mp.toon_handle = ?
+               GROUP BY mp.name COLLATE NOCASE
+               ORDER BY last DESC""",
+            (toon_handle,),
+        ).fetchall()
+        return [r["name"] for r in rows]
+
     def _try_bind(self, sc2_name: str) -> None:
         """Bind an unbound link for sc2_name iff the name maps to exactly one
         account across all stored matches (else it's ambiguous — leave it)."""
-        handles = self._handles_for_name(sc2_name)
+        handles = self.handles_for_name(sc2_name)
         if len(handles) != 1:
             return
         try:
             self._conn.execute(
-                "UPDATE player_links SET toon_handle = ? WHERE sc2_name = ? AND toon_handle IS NULL",
+                "UPDATE player_links SET toon_handle = ? WHERE sc2_name = ? COLLATE NOCASE AND toon_handle IS NULL",
                 (handles[0], sc2_name),
             )
         except sqlite3.IntegrityError:
@@ -294,7 +312,7 @@ class MatchStore:
     def unlink_player(self, discord_id: str, sc2_name: str) -> bool:
         """Release a name the user owns; returns False if they didn't own it."""
         cur = self._conn.execute(
-            "DELETE FROM player_links WHERE sc2_name = ? AND discord_id = ?",
+            "DELETE FROM player_links WHERE sc2_name = ? COLLATE NOCASE AND discord_id = ?",
             (sc2_name, discord_id),
         )
         self._conn.commit()
@@ -329,8 +347,19 @@ class MatchStore:
         ).fetchall()
         return [r["toon_handle"] for r in rows]
 
+    def pending_names_for(self, discord_id: str) -> list[str]:
+        """Names this user has claimed that aren't bound to an account yet
+        (never seen in a game, or ambiguous)."""
+        rows = self._conn.execute(
+            "SELECT sc2_name FROM player_links WHERE discord_id = ? AND toon_handle IS NULL ORDER BY sc2_name",
+            (discord_id,),
+        ).fetchall()
+        return [r["sc2_name"] for r in rows]
+
     def discord_id_for(self, sc2_name: str) -> str | None:
-        row = self._conn.execute("SELECT discord_id FROM player_links WHERE sc2_name = ?", (sc2_name,)).fetchone()
+        row = self._conn.execute(
+            "SELECT discord_id FROM player_links WHERE sc2_name = ? COLLATE NOCASE", (sc2_name,)
+        ).fetchone()
         return row["discord_id"] if row else None
 
     def has_replay(self, file_hash: str) -> bool:
@@ -364,7 +393,9 @@ class MatchStore:
 
     def known_player(self, sc2_name: str) -> bool:
         """Whether this SC2 name appears in any stored match (typo guard)."""
-        row = self._conn.execute("SELECT 1 FROM match_players WHERE name = ? LIMIT 1", (sc2_name,)).fetchone()
+        row = self._conn.execute(
+            "SELECT 1 FROM match_players WHERE name = ? COLLATE NOCASE LIMIT 1", (sc2_name,)
+        ).fetchone()
         return row is not None
 
     def unit_records(self, confidence_gate: float, min_duration: int) -> dict[str, list[int]]:

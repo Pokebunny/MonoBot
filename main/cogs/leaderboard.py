@@ -35,18 +35,21 @@ class Leaderboard(commands.Cog):
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def rank(self, ctx, *, player: str):
         book = self.ratings.book()
-        # Names aren't unique; resolve to the account with the most games.
-        candidates = book.by_name(player)
-        if not candidates:
+        # Resolve via match history so former names still find the account;
+        # a name can map to several accounts (not unique), so pick the most active.
+        rated = [book.ratings[h] for h in self.store.handles_for_name(player) if h in book.ratings]
+        if not rated:
             await ctx.send(f"No rated games found for **{player}**.")
             return
-        rating = candidates[0]
+        rated.sort(key=lambda r: r.games, reverse=True)
+        rating = rated[0]
         board = book.leaderboard(min_games=1)
         rank = next(i for i, r in enumerate(board, 1) if r.handle == rating.handle)
-        await ctx.send(embed=match_embeds.player_rank(rating, rank, len(board)))
-        if len(candidates) > 1:
+        aliases = self.store.aliases_for_handle(rating.handle)
+        await ctx.send(embed=match_embeds.player_rank(rating, rank, len(board), aliases))
+        if len(rated) > 1:
             await ctx.send(
-                f"*(Note: {len(candidates)} different accounts have played as **{player}**; showing the most active.)*"
+                f"*(Note: {len(rated)} different accounts have played as **{player}**; showing the most active.)*"
             )
 
     @commands.hybrid_command(help="show win rates by unit pick")

@@ -91,6 +91,22 @@ def test_link_change_count(store):
 _ROSTER = ["Pokebunny", "A2", "A3", "A4", "B1", "B2", "B3", "B4"]
 
 
+def test_link_is_case_insensitive(store):
+    store.ingest(_match(_ROSTER, winning_team=1), hash_replay(b"g1"))  # has "Pokebunny"
+    result = store.link_player("disc123", "pokebunny")  # typed lowercase
+    assert result.status == "linked"
+    assert result.handle == "H-Pokebunny"
+    assert store.handles_for("disc123") == ["H-Pokebunny"]
+
+
+def test_case_variant_name_is_same_claim(store):
+    assert store.link_player("disc123", "Pokebunny").status == "linked"
+    # Another user can't claim a different casing of the same name.
+    assert store.link_player("disc999", "POKEBUNNY").status == "taken"
+    # The owner re-linking any casing is a no-op success.
+    assert store.link_player("disc123", "pokeBunny").status == "linked"
+
+
 def test_handle_unbound_until_played(store):
     store.link_player("disc123", "Pokebunny")
     # Linked but never played: a name claim, no bound handle yet.
@@ -134,6 +150,25 @@ def test_ambiguous_name_not_bound(store):
     assert result.status == "ambiguous"
     assert result.candidates == 2
     assert store.handles_for("disc123") == []  # not auto-bound
+
+
+def test_aliases_and_old_name_resolution(store):
+    # One account (H-x) plays under two names across two games.
+    rest1 = ["A2", "A3", "A4", "B1", "B2", "B3", "B4"]
+    rest2 = ["C2", "C3", "C4", "D1", "D2", "D3", "D4"]
+    g1 = _match(["OldName"] + rest1, winning_team=1, handles=["H-x"] + [f"H-{n}" for n in rest1])
+    g2 = _match(["NewName"] + rest2, winning_team=1, handles=["H-x"] + [f"H-{n}" for n in rest2])
+    g2 = g2.model_copy(update={"played_at": g2.played_at + datetime.timedelta(minutes=30)})
+    store.ingest(g1, hash_replay(b"g1"))
+    store.ingest(g2, hash_replay(b"g2"))
+
+    # A former name still resolves to the account (and case-insensitively).
+    assert store.handles_for_name("OldName") == ["H-x"]
+    assert store.handles_for_name("newname") == ["H-x"]
+    # Aliases are listed most-recent first.
+    assert store.aliases_for_handle("H-x") == ["NewName", "OldName"]
+    # Linking by the old name binds to the same account.
+    assert store.link_player("disc1", "OldName").handle == "H-x"
 
 
 def test_same_name_different_accounts_dont_merge(store):

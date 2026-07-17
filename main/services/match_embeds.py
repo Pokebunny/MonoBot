@@ -96,7 +96,9 @@ def leaderboard(ratings: list[PlayerRating], min_games: int, limit: int = 20) ->
     return embed
 
 
-def player_rank(rating: PlayerRating, rank: int, total_ranked: int) -> discord.Embed:
+def player_rank(
+    rating: PlayerRating, rank: int, total_ranked: int, aliases: list[str] | None = None
+) -> discord.Embed:
     embed = discord.Embed(title=rating.name, color=ACCENT)
     embed.add_field(name="Rating", value=f"{rating.ordinal:.1f}", inline=True)
     embed.add_field(name="Rank", value=f"#{rank} of {total_ranked}", inline=True)
@@ -105,6 +107,9 @@ def player_rank(rating: PlayerRating, rank: int, total_ranked: int) -> discord.E
         value=f"{rating.wins}W-{rating.losses}L ({100 * rating.wins / rating.games:.0f}%)",
         inline=True,
     )
+    others = [a for a in (aliases or []) if a.lower() != rating.name.lower()]
+    if others:
+        embed.add_field(name="Also played as", value=", ".join(others[:12]), inline=False)
     embed.set_footer(text=f"μ={rating.mu:.1f} σ={rating.sigma:.1f}")
     return embed
 

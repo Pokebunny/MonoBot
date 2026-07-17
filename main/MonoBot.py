@@ -18,6 +18,9 @@ intents.members = True
 
 cog_files = [
     "misc",
+    "identity",
+    "replays",
+    "leaderboard",
 ]
 
 

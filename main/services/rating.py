@@ -30,6 +30,14 @@ class RatingBook:
         self.rated_matches = 0
         self.skipped_matches = 0
 
+    @classmethod
+    def from_matches(cls, matches) -> "RatingBook":
+        """Build a book by replaying matches in chronological order."""
+        book = cls()
+        for match in sorted(matches, key=lambda m: m.played_at):
+            book.rate_match(match)
+        return book
+
     def _get(self, name: str) -> PlayerRating:
         if name not in self.ratings:
             default = _model.rating(name=name)

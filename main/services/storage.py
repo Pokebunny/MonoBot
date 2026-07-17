@@ -1,0 +1,274 @@
+"""SQLite persistence for parsed matches.
+
+The `matches` + `match_players` tables are the source of truth; ratings are
+derived by replaying stored matches through RatingBook (see services.rating),
+so parser/rating improvements can always be re-applied to history without
+re-parsing replay files.
+
+sqlite3 is synchronous — call MatchStore from the bot via asyncio.to_thread
+if a call ever shows up in profiling (at monobattle volumes it won't).
+"""
+
+import datetime
+import hashlib
+import json
+import logging
+import os
+import sqlite3
+
+from models.replay import MatchPlayer, MonobattleMatch
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "monobot.db")
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS matches (
+    id INTEGER PRIMARY KEY,
+    file_hash TEXT NOT NULL UNIQUE,
+    file_name TEXT NOT NULL,
+    map_name TEXT NOT NULL,
+    played_at TEXT NOT NULL,
+    duration_seconds INTEGER NOT NULL,
+    game_type TEXT NOT NULL,
+    pick_mode TEXT NOT NULL,
+    pick_phase_seconds INTEGER NOT NULL,
+    winning_team INTEGER,
+    winner_confidence REAL NOT NULL,
+    winner_method TEXT NOT NULL,
+    uploaded_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS match_players (
+    match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    team INTEGER NOT NULL,
+    race TEXT NOT NULL,
+    pick TEXT,
+    repick_used INTEGER,
+    unit_counts TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_match_players_match ON match_players(match_id);
+CREATE INDEX IF NOT EXISTS idx_match_players_name ON match_players(name);
+CREATE INDEX IF NOT EXISTS idx_matches_played_at ON matches(played_at);
+
+-- Maps a Discord user to the SC2 name(s) they play under. A Discord user may
+-- claim several names (smurfs/renames); each SC2 name belongs to one user.
+CREATE TABLE IF NOT EXISTS player_links (
+    discord_id TEXT NOT NULL,
+    sc2_name TEXT NOT NULL,
+    linked_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (sc2_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_player_links_discord ON player_links(discord_id);
+"""
+
+
+def hash_replay(data: bytes) -> str:
+    """Content hash used to deduplicate uploads of the same replay file."""
+    return hashlib.sha256(data).hexdigest()
+
+
+class MatchStore:
+    def __init__(self, db_path: str = DEFAULT_DB_PATH):
+        os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
+        self._conn = sqlite3.connect(db_path)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA foreign_keys = ON")
+        self._conn.executescript(_SCHEMA)
+        self._conn.commit()
+        # Bumped on every write so callers (e.g. the leaderboard cog) can
+        # cache derived data like rating books and know when it's stale.
+        self.change_count = 0
+
+    def close(self):
+        self._conn.close()
+
+    # -- writes ----------------------------------------------------------
+
+    def ingest(self, match: MonobattleMatch, file_hash: str, uploaded_by: str | None = None) -> int | None:
+        """Store a parsed match; returns its id, or None if already stored."""
+        try:
+            cur = self._conn.execute(
+                """INSERT INTO matches
+                   (file_hash, file_name, map_name, played_at, duration_seconds,
+                    game_type, pick_mode, pick_phase_seconds, winning_team,
+                    winner_confidence, winner_method, uploaded_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    file_hash,
+                    match.file_name,
+                    match.map_name,
+                    match.played_at.isoformat(),
+                    match.duration_seconds,
+                    match.game_type,
+                    match.pick_mode,
+                    match.pick_phase_seconds,
+                    match.winning_team,
+                    match.winner_confidence,
+                    match.winner_method,
+                    uploaded_by,
+                ),
+            )
+        except sqlite3.IntegrityError:
+            logger.info("Duplicate replay ignored: %s", match.file_name)
+            return None
+        match_id = cur.lastrowid
+        self._conn.executemany(
+            """INSERT INTO match_players
+               (match_id, name, team, race, pick, repick_used, unit_counts)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (
+                    match_id,
+                    p.name,
+                    p.team,
+                    p.race,
+                    p.pick,
+                    None if p.repick_used is None else int(p.repick_used),
+                    json.dumps(p.unit_counts),
+                )
+                for p in match.players
+            ],
+        )
+        self._conn.commit()
+        self.change_count += 1
+        return match_id
+
+    def link_player(self, discord_id: str, sc2_name: str) -> str | None:
+        """Claim an SC2 name for a Discord user. Returns the owning discord_id
+        if the name is already claimed by someone else (no change made),
+        otherwise None on success (including re-claiming your own name)."""
+        owner = self.discord_id_for(sc2_name)
+        if owner is not None and owner != discord_id:
+            return owner
+        self._conn.execute(
+            "INSERT OR REPLACE INTO player_links (discord_id, sc2_name) VALUES (?, ?)",
+            (discord_id, sc2_name),
+        )
+        self._conn.commit()
+        self.change_count += 1
+        return None
+
+    def unlink_player(self, discord_id: str, sc2_name: str) -> bool:
+        """Release a name the user owns; returns False if they didn't own it."""
+        cur = self._conn.execute(
+            "DELETE FROM player_links WHERE sc2_name = ? AND discord_id = ?",
+            (sc2_name, discord_id),
+        )
+        self._conn.commit()
+        if cur.rowcount:
+            self.change_count += 1
+            return True
+        return False
+
+    def confirm_winner(self, match_id: int, winning_team: int) -> None:
+        """Manual confirmation overrides any inferred result."""
+        self._conn.execute(
+            "UPDATE matches SET winning_team = ?, winner_confidence = 1.0, winner_method = 'confirmed' WHERE id = ?",
+            (winning_team, match_id),
+        )
+        self._conn.commit()
+        self.change_count += 1
+
+    # -- reads -----------------------------------------------------------
+
+    def sc2_names_for(self, discord_id: str) -> list[str]:
+        rows = self._conn.execute(
+            "SELECT sc2_name FROM player_links WHERE discord_id = ? ORDER BY sc2_name", (discord_id,)
+        ).fetchall()
+        return [r["sc2_name"] for r in rows]
+
+    def discord_id_for(self, sc2_name: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT discord_id FROM player_links WHERE sc2_name = ?", (sc2_name,)
+        ).fetchone()
+        return row["discord_id"] if row else None
+
+    def has_replay(self, file_hash: str) -> bool:
+        row = self._conn.execute("SELECT 1 FROM matches WHERE file_hash = ?", (file_hash,)).fetchone()
+        return row is not None
+
+    def get_match(self, match_id: int) -> MonobattleMatch | None:
+        row = self._conn.execute("SELECT * FROM matches WHERE id = ?", (match_id,)).fetchone()
+        if row is None:
+            return None
+        return self._build_match(row)
+
+    def all_matches(self) -> list[tuple[int, MonobattleMatch]]:
+        """All matches with their ids, oldest first (rating order)."""
+        rows = self._conn.execute("SELECT * FROM matches ORDER BY played_at").fetchall()
+        return [(row["id"], self._build_match(row)) for row in rows]
+
+    def pending_confirmations(self, confidence_gate: float, min_duration: int) -> list[tuple[int, MonobattleMatch]]:
+        """Real matches whose winner is unknown or below the rating gate."""
+        rows = self._conn.execute(
+            """SELECT * FROM matches
+               WHERE (winning_team IS NULL OR winner_confidence < ?)
+                 AND duration_seconds >= ?
+               ORDER BY played_at""",
+            (confidence_gate, min_duration),
+        ).fetchall()
+        return [(row["id"], self._build_match(row)) for row in rows]
+
+    def match_count(self) -> int:
+        return self._conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
+
+    def known_player(self, sc2_name: str) -> bool:
+        """Whether this SC2 name appears in any stored match (typo guard)."""
+        row = self._conn.execute(
+            "SELECT 1 FROM match_players WHERE name = ? LIMIT 1", (sc2_name,)
+        ).fetchone()
+        return row is not None
+
+    def unit_records(self, confidence_gate: float, min_duration: int) -> dict[str, list[int]]:
+        """pick -> [wins, losses] across decided matches."""
+        rows = self._conn.execute(
+            """SELECT mp.pick AS pick, (mp.team = m.winning_team) AS won, COUNT(*) AS n
+               FROM match_players mp JOIN matches m ON m.id = mp.match_id
+               WHERE m.winning_team IS NOT NULL
+                 AND m.winner_confidence >= ?
+                 AND m.duration_seconds >= ?
+                 AND mp.pick IS NOT NULL
+               GROUP BY mp.pick, won""",
+            (confidence_gate, min_duration),
+        ).fetchall()
+        records: dict[str, list[int]] = {}
+        for row in rows:
+            entry = records.setdefault(row["pick"], [0, 0])
+            entry[0 if row["won"] else 1] = row["n"]
+        return records
+
+    # -- internals -------------------------------------------------------
+
+    def _build_match(self, row: sqlite3.Row) -> MonobattleMatch:
+        player_rows = self._conn.execute(
+            "SELECT * FROM match_players WHERE match_id = ? ORDER BY team, name", (row["id"],)
+        ).fetchall()
+        players = [
+            MatchPlayer(
+                name=p["name"],
+                team=p["team"],
+                race=p["race"],
+                pick=p["pick"],
+                repick_used=None if p["repick_used"] is None else bool(p["repick_used"]),
+                unit_counts=json.loads(p["unit_counts"]),
+            )
+            for p in player_rows
+        ]
+        return MonobattleMatch(
+            file_name=row["file_name"],
+            map_name=row["map_name"],
+            played_at=datetime.datetime.fromisoformat(row["played_at"]),
+            duration_seconds=row["duration_seconds"],
+            game_type=row["game_type"],
+            pick_mode=row["pick_mode"],
+            pick_phase_seconds=row["pick_phase_seconds"],
+            players=players,
+            winning_team=row["winning_team"],
+            winner_confidence=row["winner_confidence"],
+            winner_method=row["winner_method"],
+        )

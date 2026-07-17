@@ -10,10 +10,17 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
 ## Layout
 
 - `cogs/` — discord.py `commands.Cog` modules; one feature area each. Listed in
-  `MonoBot.py`'s `cog_files` and loaded via `load_extension`.
-- `services/` — stateless helpers cogs call.
+  `MonoBot.py`'s `cog_files` and loaded via `load_extension`. `replays` ingests
+  `.SC2Replay` attachments; `leaderboard` serves ratings/stats commands.
+- `services/` — stateless helpers cogs call. Third-party engines are isolated
+  here: sc2reader behind `replay_parser`, openskill behind `rating`, sqlite
+  behind `storage`. Embed builders live in `match_embeds`.
 - `models/` — Pydantic models, grouped by feature.
-- `resources/` — config + data loaded at import.
+- `resources/` — config + data loaded at import; also holds the gitignored
+  `monobot.db` match database (source of truth = matches; ratings are always
+  derived by replaying stored matches through `RatingBook.from_matches`).
+- `scripts/` (repo root) — one-shot utilities, e.g. `backfill_archive.py` to
+  seed the database from a folder of replays (idempotent, dedupes by hash).
 
 ## Conventions
 

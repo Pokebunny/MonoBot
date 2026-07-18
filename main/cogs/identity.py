@@ -317,6 +317,41 @@ class Identity(commands.Cog):
         )
         view.message = await ctx.send(embed=embed, view=view)
 
+    @commands.hybrid_command(help="unlink a member's SC2 accounts, or one name — @member [name], or a bare name (mods)")
+    @is_bot_admin()
+    async def unlinkuser(self, ctx, target: str, *, sc2_name: str | None = None):
+        try:
+            member = await commands.MemberConverter().convert(ctx, target)
+        except commands.BadArgument:
+            member = None
+        if member is None:
+            # A bare SC2 name — release the claim whoever holds it (covers
+            # people who've left the server).
+            if sc2_name:
+                await ctx.send("Give either `@member [name]` or just an SC2 name.")
+                return
+            owner = self.store.release_name(target)
+            if owner is None:
+                await ctx.send(f"**{target}** isn't linked to anyone.")
+            else:
+                await ctx.send(f"Unlinked **{target}** (was linked to <@{owner}>).")
+            return
+        discord_id = str(member.id)
+        if sc2_name:
+            sc2_name = sc2_name.strip()
+            if self.store.unlink_player(discord_id, sc2_name):
+                await ctx.send(f"Unlinked **{sc2_name}** from {member.display_name}.")
+            else:
+                await ctx.send(f"{member.display_name} doesn't have **{sc2_name}** linked.")
+            return
+        names = self.store.sc2_names_for(discord_id)
+        if not names:
+            await ctx.send(f"{member.display_name} has no linked accounts.")
+            return
+        for name in names:
+            self.store.unlink_player(discord_id, name)
+        await ctx.send(f"Unlinked {member.display_name}'s accounts: " + ", ".join(f"**{n}**" for n in names))
+
     @commands.hybrid_command(help="declare two SC2 accounts the same player (mods)")
     @is_bot_admin()
     async def mergeaccounts(self, ctx, name1: str, name2: str):

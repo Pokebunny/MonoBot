@@ -504,6 +504,17 @@ class MatchStore:
         except sqlite3.IntegrityError:
             pass  # handle already bound to another claimed name; leave as-is
 
+    def release_name(self, sc2_name: str) -> str | None:
+        """Delete a name claim regardless of owner (admin). Returns the
+        Discord id it was linked to, or None if the name wasn't claimed."""
+        owner = self.discord_id_for(sc2_name)
+        if owner is None:
+            return None
+        self._conn.execute("DELETE FROM player_links WHERE sc2_name = ? COLLATE NOCASE", (sc2_name,))
+        self._conn.commit()
+        self.change_count += 1
+        return owner
+
     def unlink_player(self, discord_id: str, sc2_name: str) -> bool:
         """Release a name the user owns; returns False if they didn't own it."""
         cur = self._conn.execute(

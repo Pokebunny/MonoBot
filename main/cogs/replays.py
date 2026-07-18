@@ -7,6 +7,7 @@ import os
 import tempfile
 
 import discord
+from checks import is_bot_admin
 from discord.ext import commands
 from resources.config import CONFIG
 from services import match_embeds, replay_parser, storage
@@ -70,16 +71,34 @@ class Replays(commands.Cog):
             client.match_store = MatchStore()
         self.store: MatchStore = client.match_store
 
+    def _watched_channels(self) -> set[int]:
+        """Channels watched for replays: the runtime !watchreplays set plus
+        any config-file channels. Empty = watch everywhere (dev default)."""
+        return self.store.replay_channel_ids() | set(CONFIG.replays_channel_ids)
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot:
             return
-        # Only watch the configured replays channel (None = every channel).
-        if CONFIG.replays_channel_id is not None and message.channel.id != CONFIG.replays_channel_id:
+        watched = self._watched_channels()
+        if watched and message.channel.id not in watched:
             return
         for attachment in message.attachments:
             if attachment.filename.lower().endswith(".sc2replay"):
                 await self._process_attachment(message.channel, attachment, str(message.author))
+
+    @commands.hybrid_command(help="toggle watching this channel (or #channel) for replay uploads (mods)")
+    @is_bot_admin()
+    async def watchreplays(self, ctx, channel: discord.TextChannel | None = None):
+        target = channel or ctx.channel
+        if target.id in set(CONFIG.replays_channel_ids) - self.store.replay_channel_ids():
+            await ctx.send(f"{target.mention} is watched via the config file — remove it there to stop.")
+            return
+        guild_id = target.guild.id if target.guild else None
+        now_watched = self.store.toggle_replay_channel(target.id, guild_id, str(ctx.author.id))
+        verb = "Now watching" if now_watched else "Stopped watching"
+        mentions = ", ".join(f"<#{cid}>" for cid in sorted(self._watched_channels())) or "every channel"
+        await ctx.send(f"{verb} {target.mention} for replay uploads. Currently watching: {mentions}")
 
     async def _process_attachment(self, channel, attachment: discord.Attachment, uploader: str):
         data = await attachment.read()

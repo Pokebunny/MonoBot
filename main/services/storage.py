@@ -49,7 +49,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -116,6 +116,15 @@ CREATE TABLE IF NOT EXISTS account_merges (
     merged_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (handle_a, handle_b)
 );
+
+-- Channels watched for replay uploads, managed at runtime by !watchreplays.
+-- Unioned with the config-file channel list; empty overall = watch everywhere.
+CREATE TABLE IF NOT EXISTS replay_channels (
+    channel_id INTEGER PRIMARY KEY,
+    guild_id INTEGER,
+    added_by TEXT,
+    added_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -150,11 +159,23 @@ def _migration_1_content_key(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_matches_content_key ON matches(content_key)")
 
 
+def _migration_2_replay_channels(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS replay_channels (
+               channel_id INTEGER PRIMARY KEY,
+               guild_id INTEGER,
+               added_by TEXT,
+               added_at TEXT NOT NULL DEFAULT (datetime('now'))
+           )"""
+    )
+
+
 # version -> function upgrading a DB from version-1 to version. Each runs in
 # its own transaction and must leave the DB identical to a fresh _SCHEMA
 # creation at that version.
 _MIGRATIONS = {
     1: _migration_1_content_key,
+    2: _migration_2_replay_channels,
 }
 
 
@@ -426,6 +447,21 @@ class MatchStore:
             return True
         return False
 
+    def toggle_replay_channel(self, channel_id: int, guild_id: int | None, added_by: str) -> bool:
+        """Watch a channel for replay uploads, or stop if it's already
+        watched. Returns True if the channel is now watched."""
+        cur = self._conn.execute("DELETE FROM replay_channels WHERE channel_id = ?", (channel_id,))
+        if cur.rowcount == 0:
+            self._conn.execute(
+                "INSERT INTO replay_channels (channel_id, guild_id, added_by) VALUES (?, ?, ?)",
+                (channel_id, guild_id, added_by),
+            )
+        self._conn.commit()
+        return cur.rowcount == 0
+
+    def replay_channel_ids(self) -> set[int]:
+        return {r["channel_id"] for r in self._conn.execute("SELECT channel_id FROM replay_channels")}
+
     def confirm_winner(self, match_id: int, winning_team: int) -> None:
         """Manual confirmation overrides any inferred result."""
         self._conn.execute(
@@ -507,6 +543,30 @@ class MatchStore:
                     mapping[h] = root
         return mapping
 
+    def merged_handles(self, handle: str) -> list[str]:
+        """Every handle in this handle's account-merge group (itself included).
+        Stats queries must cover the whole group, not just the canonical
+        handle, since match_players rows keep each game's real account."""
+        merge_map = self.merge_map()
+        root = merge_map.get(handle, handle)
+        group = sorted(h for h, r in merge_map.items() if r == root)
+        return group or [handle]
+
+    def aliases_for_handles(self, handles: list[str]) -> list[str]:
+        """Display names across a group of accounts, most recent first."""
+        if not handles:
+            return []
+        placeholders = ",".join("?" * len(handles))
+        rows = self._conn.execute(
+            f"""SELECT mp.name AS name, MAX(m.played_at) AS last
+               FROM match_players mp JOIN matches m ON m.id = mp.match_id
+               WHERE mp.toon_handle IN ({placeholders})
+               GROUP BY mp.name COLLATE NOCASE
+               ORDER BY last DESC""",
+            handles,
+        ).fetchall()
+        return [r["name"] for r in rows]
+
     def pending_names_for(self, discord_id: str) -> list[str]:
         """Names this user has claimed that aren't bound to an account yet
         (never seen in a game, or ambiguous)."""
@@ -556,22 +616,25 @@ class MatchStore:
         return self._conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
 
     def player_records_by(
-        self, handle: str, column: str, confidence_gate: float, min_duration: int
+        self, handles: str | list[str], column: str, confidence_gate: float, min_duration: int
     ) -> dict[str, list[int]]:
-        """For one account, wins/losses grouped by 'race' or 'pick', over
-        decided matches. Returns {value: [wins, losses]}."""
+        """Wins/losses grouped by 'race' or 'pick' over decided matches, for
+        one account or a merged group of accounts. Returns {value: [wins, losses]}."""
         if column not in ("race", "pick"):
             raise ValueError(f"unsupported column: {column}")
+        if isinstance(handles, str):
+            handles = [handles]
+        placeholders = ",".join("?" * len(handles))
         rows = self._conn.execute(
             f"""SELECT mp.{column} AS val, (mp.team = m.winning_team) AS won, COUNT(*) AS n
                FROM match_players mp JOIN matches m ON m.id = mp.match_id
-               WHERE mp.toon_handle = ?
+               WHERE mp.toon_handle IN ({placeholders})
                  AND m.winning_team IS NOT NULL
                  AND m.winner_confidence >= ?
                  AND m.duration_seconds >= ?
                  AND mp.{column} IS NOT NULL
                GROUP BY mp.{column}, won""",
-            (handle, confidence_gate, min_duration),
+            (*handles, confidence_gate, min_duration),
         ).fetchall()
         records: dict[str, list[int]] = {}
         for r in rows:

@@ -300,3 +300,42 @@ class TestMigrations:
         conn.close()
         with pytest.raises(RuntimeError, match="newer than this code"):
             MatchStore(path)
+
+
+def test_replay_channel_toggle(store):
+    assert store.replay_channel_ids() == set()
+    assert store.toggle_replay_channel(123, 1, "42") is True
+    assert store.replay_channel_ids() == {123}
+    assert store.toggle_replay_channel(123, 1, "42") is False
+    assert store.replay_channel_ids() == set()
+
+
+def test_player_records_cover_merged_group(store):
+    """Race/pick records must aggregate across a player's merged accounts."""
+    store.ingest(_match(played_at=_at(0)), hash_replay(b"g1"))
+    other = ["L0", "A1", "A2", "A3", "B0", "B1", "B2", "B3"]  # L0 = same person's alt
+    store.ingest(_match(played_at=_at(10), roster=other), hash_replay(b"g2"))
+    store.merge_accounts("h-A0", "h-L0")
+
+    group = store.merged_handles("h-A0")
+    assert set(group) == {"h-A0", "h-L0"}
+    assert store.merged_handles("h-L0") == group  # same group from either end
+
+    records = store.player_records_by(group, "pick", 0.7, 120)
+    assert records["Zergling"] == [2, 0]  # one win from each account
+    solo = store.player_records_by("h-A0", "pick", 0.7, 120)
+    assert solo["Zergling"] == [1, 0]  # str form still means one account
+
+    aliases = store.aliases_for_handles(group)
+    assert aliases[0] == "L0"  # most recent name first
+    assert "A0" in aliases
+
+
+def test_legacy_config_key_folds_into_list():
+    from models.config import BotConfig
+
+    cfg = BotConfig.model_validate({"replays_channel_id": 111})
+    assert cfg.replays_channel_ids == [111]
+    cfg = BotConfig.model_validate({"replays_channel_id": 111, "replays_channel_ids": [222]})
+    assert cfg.replays_channel_ids == [222, 111]
+    assert BotConfig().replays_channel_ids == []

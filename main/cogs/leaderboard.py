@@ -136,7 +136,7 @@ class Leaderboard(commands.Cog):
         if resolved is None:
             return
         rating, rank, total, n_accounts = resolved
-        aliases = self.store.aliases_for_handle(rating.handle)
+        aliases = self.store.aliases_for_handles(self.store.merged_handles(rating.handle))
         await ctx.send(embed=match_embeds.player_rank(rating, rank, total, aliases))
         if n_accounts > 1:
             await ctx.send(
@@ -150,9 +150,10 @@ class Leaderboard(commands.Cog):
         if resolved is None:
             return
         rating, rank, total, n_accounts = resolved
-        aliases = self.store.aliases_for_handle(rating.handle)
-        races = self.store.player_records_by(rating.handle, "race", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
-        units = self.store.player_records_by(rating.handle, "pick", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
+        group = self.store.merged_handles(rating.handle)  # all merged accounts, e.g. Jay+Luigi
+        aliases = self.store.aliases_for_handles(group)
+        races = self.store.player_records_by(group, "race", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
+        units = self.store.player_records_by(group, "pick", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
         await ctx.send(embed=match_embeds.player_profile(rating, rank, total, aliases, races, units))
         if n_accounts > 1:
             await ctx.send(

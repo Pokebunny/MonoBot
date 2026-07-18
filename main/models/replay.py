@@ -11,6 +11,7 @@ class MatchPlayer(BaseModel):
     pick: str | None  # detected monobattle unit pick, None if undetectable
     repick_used: bool | None = None  # blind random only: player repicked their unit
     repick_from: str | None = None  # the unit they repicked away from, if known
+    resources_killed: int | None = None  # enemy value destroyed (final stats snapshot)
     unit_counts: dict[str, int]  # normalized army-unit production counts
 
 
@@ -29,3 +30,13 @@ class MonobattleMatch(BaseModel):
 
     def team(self, number: int) -> list[MatchPlayer]:
         return [p for p in self.players if p.team == number]
+
+    def mvp(self) -> MatchPlayer | None:
+        """The winning-team player who destroyed the most enemy value, or
+        None when there's no winner or no kill stats (pre-archive parses)."""
+        if self.winning_team is None:
+            return None
+        winners = [p for p in self.team(self.winning_team) if p.resources_killed]
+        if not winners:
+            return None
+        return max(winners, key=lambda p: p.resources_killed)

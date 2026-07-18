@@ -3,7 +3,7 @@
 import discord
 from models.matchmaking import ProposedMatch, QueuedPlayer
 from models.rating import PlayerRating
-from models.replay import MonobattleMatch
+from models.replay import MatchPlayer, MonobattleMatch
 
 ACCENT = 0x2ECC71
 WARNING = 0xE67E22
@@ -20,7 +20,7 @@ def _duration(seconds: int) -> str:
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
-def _team_lines(match: MonobattleMatch, team: int) -> str:
+def _team_lines(match: MonobattleMatch, team: int, mvp: MatchPlayer | None = None) -> str:
     lines = []
     for p in match.team(team):
         pick = p.pick or "?"
@@ -28,7 +28,8 @@ def _team_lines(match: MonobattleMatch, team: int) -> str:
         if p.repick_used:
             was = f" (was {p.repick_from})" if p.repick_from and p.repick_from != p.pick else ""
             repick = f" ↻{was}"
-        lines.append(f"**{p.name}** — {pick}{repick}")
+        star = " ⭐" if p is mvp else ""
+        lines.append(f"**{p.name}** — {pick}{repick}{star}")
     return "\n".join(lines) or "*empty*"
 
 
@@ -47,11 +48,12 @@ def match_summary(match: MonobattleMatch, match_id: int | None = None) -> discor
         f" · <t:{int(match.played_at.timestamp())}:d>"
     )
 
+    mvp = match.mvp()
     for team_number in sorted({p.team for p in match.players}):
         trophy = " 🏆" if match.winning_team == team_number else ""
         embed.add_field(
             name=f"Team {team_number}{trophy}",
-            value=_team_lines(match, team_number),
+            value=_team_lines(match, team_number, mvp),
             inline=True,
         )
 
@@ -65,8 +67,12 @@ def match_summary(match: MonobattleMatch, match_id: int | None = None) -> discor
         result = f"Team {match.winning_team} (inferred, {match.winner_confidence:.0%} confidence)"
     embed.add_field(name="Result", value=result, inline=False)
 
-    if match_id is not None:
-        embed.set_footer(text=f"Match #{match_id}")
+    footer = f"Match #{match_id}" if match_id is not None else ""
+    if mvp is not None:
+        legend = f"⭐ MVP: {mvp.resources_killed:,} enemy value destroyed"
+        footer = f"{footer} · {legend}" if footer else legend
+    if footer:
+        embed.set_footer(text=footer)
     return embed
 
 
@@ -156,15 +162,15 @@ def player_profile(
     aliases: list[str],
     race_records: dict[str, list[int]],
     unit_records: dict[str, list[int]],
+    mvp_count: int = 0,
 ) -> discord.Embed:
     embed = discord.Embed(title=f"{rating.name} — profile", color=ACCENT)
     embed.add_field(name="Rating", value=_rating_value(rating), inline=True)
     embed.add_field(name="Rank", value=f"#{rank} of {total_ranked}", inline=True)
-    embed.add_field(
-        name="Record",
-        value=f"{rating.wins}-{rating.losses} ({100 * rating.wins / rating.games:.0f}%)",
-        inline=True,
-    )
+    record = f"{rating.wins}-{rating.losses} ({100 * rating.wins / rating.games:.0f}%)"
+    if mvp_count:
+        record += f" · ⭐ {mvp_count} MVP{'s' if mvp_count != 1 else ''}"
+    embed.add_field(name="Record", value=record, inline=True)
     embed.add_field(name="Races", value=_record_lines(race_records, 3), inline=True)
     embed.add_field(name="Most-played units", value=_record_lines(unit_records, 10), inline=True)
     others = [a for a in aliases if a.lower() != rating.name.lower()]

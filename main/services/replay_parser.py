@@ -214,6 +214,7 @@ class _PlayerTally:
         self.previews: list[str] = []  # pick-phase preview units, in order
         self.preview_times: list[int] = []  # seconds, parallel to previews
         self.last_pick_dialog: int | None = None  # last repick/keep button pressed
+        self.resources_killed: int | None = None  # from the last stats snapshot
         self.units = Counter()  # post-pick-phase army production
         self.hatcheries = 0
         self.auto_turrets = 0
@@ -293,6 +294,10 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
     tallies: dict[str, _PlayerTally] = defaultdict(_PlayerTally)
     for event in replay.events:
         event_name = type(event).__name__
+        if event_name == "PlayerStatsEvent":
+            if getattr(event, "player", None) is not None:
+                tallies[event.player.name].resources_killed = event.resources_killed
+            continue
         if event_name == "DialogControlEvent":
             if (
                 event.control_id in (_REPICK_BUTTON_CONTROL_ID, _KEEP_BUTTON_CONTROL_ID)
@@ -453,6 +458,7 @@ def parse_replay(path: str) -> MonobattleMatch:
                     pick=_detect_pick(tally, race),
                     repick_used=repick_used,
                     repick_from=repick_from,
+                    resources_killed=tally.resources_killed,
                     unit_counts=dict(tally.units),
                 )
             )

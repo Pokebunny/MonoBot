@@ -115,3 +115,14 @@ def test_last_second_repick_detected(matches):
     slug = next(p for p in m.players if p.name == "Slug")
     assert slug.repick_used is False
     assert slug.repick_from is None
+
+
+def test_mvp_from_kill_stats(matches):
+    """Replay 721: Pokebunny's Carriers destroyed by far the most value on
+    the winning team."""
+    m = _match(matches, 721)
+    for p in m.players:
+        assert p.resources_killed is not None and p.resources_killed >= 0
+    mvp = m.mvp()
+    assert mvp.name == "Pokebunny"
+    assert mvp.resources_killed > 30000

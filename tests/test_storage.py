@@ -380,3 +380,24 @@ def test_refresh_parse_updates_in_place(store):
     assert repicker.repick_from == "SiegeTank"  # new parsed field landed
     assert store.match_count() == 1
     assert store.refresh_parse(better, hash_replay(b"unknown")) is False
+
+
+def test_mvp_and_counts(store):
+    """MVP = winning-team player with the most enemy value destroyed."""
+    m = _match(played_at=_at(0))
+    kills = {"A0": 5000, "A1": 9000, "A2": 100, "A3": 0, "B0": 12000, "B1": 0, "B2": 0, "B3": 0}
+    for p in m.players:
+        p.resources_killed = kills[p.name]
+    store.ingest(m, hash_replay(b"m1"))
+
+    _mid, stored = store.all_matches()[0]
+    mvp = stored.mvp()
+    assert mvp.name == "A1"  # team 1 won; B0's 12000 doesn't count
+    assert store.mvp_count(["h-A1"], 0.7, 120) == 1
+    assert store.mvp_count(["h-B0"], 0.7, 120) == 0
+
+    # no kill stats (pre-archive parse) -> no MVP rather than an arbitrary one
+    m2 = _match(played_at=_at(10))
+    store.ingest(m2, hash_replay(b"m2"))
+    _mid2, stored2 = store.all_matches()[1]
+    assert stored2.mvp() is None

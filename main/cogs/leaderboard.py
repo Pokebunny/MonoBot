@@ -154,7 +154,8 @@ class Leaderboard(commands.Cog):
         aliases = self.store.aliases_for_handles(group)
         races = self.store.player_records_by(group, "race", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
         units = self.store.player_records_by(group, "pick", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
-        await ctx.send(embed=match_embeds.player_profile(rating, rank, total, aliases, races, units))
+        mvps = self.store.mvp_count(group, MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
+        await ctx.send(embed=match_embeds.player_profile(rating, rank, total, aliases, races, units, mvps))
         if n_accounts > 1:
             await ctx.send(
                 f"*(Note: {n_accounts} different accounts have played as **{player}**; showing the most active.)*"

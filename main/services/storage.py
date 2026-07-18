@@ -49,7 +49,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS match_players (
     pick TEXT,
     repick_used INTEGER,
     repick_from TEXT,
+    resources_killed INTEGER,
     unit_counts TEXT NOT NULL
 );
 
@@ -180,10 +181,17 @@ def _migration_3_repick_from(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE match_players ADD COLUMN repick_from TEXT")
 
 
+def _migration_4_resources_killed(conn: sqlite3.Connection) -> None:
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(match_players)")}
+    if "resources_killed" not in cols:
+        conn.execute("ALTER TABLE match_players ADD COLUMN resources_killed INTEGER")
+
+
 _MIGRATIONS = {
     1: _migration_1_content_key,
     2: _migration_2_replay_channels,
     3: _migration_3_repick_from,
+    4: _migration_4_resources_killed,
 }
 
 
@@ -295,8 +303,8 @@ class MatchStore:
     def _insert_players(self, match_id: int, match: MonobattleMatch) -> None:
         self._conn.executemany(
             """INSERT INTO match_players
-               (match_id, name, toon_handle, team, race, pick, repick_used, repick_from, unit_counts)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (match_id, name, toon_handle, team, race, pick, repick_used, repick_from, resources_killed, unit_counts)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     match_id,
@@ -307,6 +315,7 @@ class MatchStore:
                     p.pick,
                     None if p.repick_used is None else int(p.repick_used),
                     p.repick_from,
+                    p.resources_killed,
                     json.dumps(p.unit_counts),
                 )
                 for p in match.players
@@ -665,6 +674,18 @@ class MatchStore:
                 opposed.append((match_id, match))
         return vs, together, opposed
 
+    def mvp_count(self, handles: list[str], confidence_gate: float, min_duration: int) -> int:
+        """How many decided games any of these accounts was the MVP of."""
+        group = set(handles)
+        count = 0
+        for _match_id, match in self.all_matches():
+            if match.winner_confidence < confidence_gate or match.duration_seconds < min_duration:
+                continue
+            mvp = match.mvp()
+            if mvp is not None and mvp.toon_handle in group:
+                count += 1
+        return count
+
     def match_count(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
 
@@ -735,6 +756,7 @@ class MatchStore:
                 pick=p["pick"],
                 repick_used=None if p["repick_used"] is None else bool(p["repick_used"]),
                 repick_from=p["repick_from"],
+                resources_killed=p["resources_killed"],
                 unit_counts=json.loads(p["unit_counts"]),
             )
             for p in player_rows

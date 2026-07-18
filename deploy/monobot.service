@@ -1,0 +1,16 @@
+# systemd unit for MonoBot. Install: sudo cp deploy/monobot.service /etc/systemd/system/
+# then: sudo systemctl daemon-reload && sudo systemctl enable --now monobot
+[Unit]
+Description=MonoBot Discord bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=monobot
+WorkingDirectory=/opt/monobot/MonoBot/main
+ExecStart=/home/monobot/.local/bin/uv run MonoBot.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

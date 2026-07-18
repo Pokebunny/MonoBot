@@ -1,0 +1,41 @@
+name: CI & Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+      - name: Tests
+        run: uv run pytest tests -q
+      - name: Lint
+        run: |
+          uvx ruff check main scripts tests
+          uvx ruff format --check main scripts tests
+
+  deploy:
+    # Deploys only on a push to main (merges included), never on PRs, and
+    # only after tests pass. Requires the DEPLOY_* repo secrets (deploy/README.md).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency: deploy-production
+    env:
+      DEPLOY_CONFIGURED: ${{ secrets.DEPLOY_HOST != '' }}
+    steps:
+      - name: Update and restart the bot over SSH
+        if: env.DEPLOY_CONFIGURED == 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: /opt/monobot/MonoBot/deploy/update.sh

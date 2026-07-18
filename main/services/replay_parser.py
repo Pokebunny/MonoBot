@@ -213,6 +213,7 @@ class _PlayerTally:
     def __init__(self):
         self.previews: list[str] = []  # pick-phase preview units, in order
         self.preview_times: list[int] = []  # seconds, parallel to previews
+        self.last_pick_dialog: int | None = None  # last repick/keep button pressed
         self.units = Counter()  # post-pick-phase army production
         self.hatcheries = 0
         self.auto_turrets = 0
@@ -279,10 +280,27 @@ def _classify_pick_mode(tallies: dict[str, _PlayerTally], game_start: int) -> st
     return "tier_draft"
 
 
+# The pick dialog's repick (107) and keep (108) buttons. A click of 107 alone
+# is NOT a repick — it opens a confirmation the player can decline with 108
+# (seen live: 8x 107 then 108, unit kept). What matters is the LAST of the
+# two pressed: a player whose final action was 107 went through with it. This
+# also catches last-second repicks whose new preview unit never spawns.
+_REPICK_BUTTON_CONTROL_ID = 107
+_KEEP_BUTTON_CONTROL_ID = 108
+
+
 def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
     tallies: dict[str, _PlayerTally] = defaultdict(_PlayerTally)
     for event in replay.events:
         event_name = type(event).__name__
+        if event_name == "DialogControlEvent":
+            if (
+                event.control_id in (_REPICK_BUTTON_CONTROL_ID, _KEEP_BUTTON_CONTROL_ID)
+                and event.second < game_start
+                and getattr(event, "player", None) is not None
+            ):
+                tallies[event.player.name].last_pick_dialog = event.control_id
+            continue
         # UnitBornEvent: instantly-created units. UnitDoneEvent: gradually
         # created ones (warp-ins, morph cocoons, archon merges, buildings).
         if event_name == "UnitBornEvent":
@@ -412,9 +430,20 @@ def parse_replay(path: str) -> MonobattleMatch:
         for p in team.players:
             tally = tallies[p.name]
             race = tally.race(fallback=p.play_race)
-            # In blind random a second preview unit means the player used
-            # their repick; in drafts previews are just browsing.
-            repick_used = len(tally.previews) > 1 if pick_mode == "blind_random" else None
+            # Blind-random repick evidence, any of: a second preview unit; the
+            # player's final repick/keep dialog action being "repick" (covers
+            # last-second repicks with no new preview); or the last preview's
+            # race contradicting the played race, which in blind random can
+            # only mean the unit changed after that preview. Draft previews
+            # are just browsing — no repicks there.
+            repick_used = repick_from = None
+            if pick_mode == "blind_random":
+                race_mismatch = bool(tally.previews) and _UNIT_RACE.get(tally.previews[-1], race) != race
+                repick_used = (
+                    len(tally.previews) > 1 or tally.last_pick_dialog == _REPICK_BUTTON_CONTROL_ID or race_mismatch
+                )
+                if repick_used and tally.previews:
+                    repick_from = tally.previews[0]  # the unit they gave up
             players.append(
                 MatchPlayer(
                     name=p.name,
@@ -423,6 +452,7 @@ def parse_replay(path: str) -> MonobattleMatch:
                     race=race,
                     pick=_detect_pick(tally, race),
                     repick_used=repick_used,
+                    repick_from=repick_from,
                     unit_counts=dict(tally.units),
                 )
             )

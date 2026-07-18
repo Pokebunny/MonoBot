@@ -49,7 +49,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS match_players (
     race TEXT NOT NULL,
     pick TEXT,
     repick_used INTEGER,
+    repick_from TEXT,
     unit_counts TEXT NOT NULL
 );
 
@@ -173,9 +174,16 @@ def _migration_2_replay_channels(conn: sqlite3.Connection) -> None:
 # version -> function upgrading a DB from version-1 to version. Each runs in
 # its own transaction and must leave the DB identical to a fresh _SCHEMA
 # creation at that version.
+def _migration_3_repick_from(conn: sqlite3.Connection) -> None:
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(match_players)")}
+    if "repick_from" not in cols:
+        conn.execute("ALTER TABLE match_players ADD COLUMN repick_from TEXT")
+
+
 _MIGRATIONS = {
     1: _migration_1_content_key,
     2: _migration_2_replay_channels,
+    3: _migration_3_repick_from,
 }
 
 
@@ -287,8 +295,8 @@ class MatchStore:
     def _insert_players(self, match_id: int, match: MonobattleMatch) -> None:
         self._conn.executemany(
             """INSERT INTO match_players
-               (match_id, name, toon_handle, team, race, pick, repick_used, unit_counts)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (match_id, name, toon_handle, team, race, pick, repick_used, repick_from, unit_counts)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     match_id,
@@ -298,6 +306,7 @@ class MatchStore:
                     p.race,
                     p.pick,
                     None if p.repick_used is None else int(p.repick_used),
+                    p.repick_from,
                     json.dumps(p.unit_counts),
                 )
                 for p in match.players
@@ -318,6 +327,24 @@ class MatchStore:
         self._conn.execute("DELETE FROM match_players WHERE match_id = ?", (match_id,))
         self._insert_players(match_id, match)
         self._conn.commit()
+
+    def refresh_parse(self, match: MonobattleMatch, file_hash: str) -> bool:
+        """Overwrite a stored game with a fresh parse of the SAME replay file
+        (after parser improvements), keeping a manually confirmed winner and
+        the original uploader. False if this exact file isn't stored."""
+        row = self._conn.execute(
+            "SELECT id, content_key, winning_team, winner_method, uploaded_by FROM matches WHERE file_hash = ?",
+            (file_hash,),
+        ).fetchone()
+        if row is None:
+            return False
+        if row["winner_method"] == "confirmed":
+            match = match.model_copy(
+                update={"winning_team": row["winning_team"], "winner_confidence": 1.0, "winner_method": "confirmed"}
+            )
+        self._replace_match(row["id"], match, file_hash, row["content_key"], row["uploaded_by"])
+        self.change_count += 1
+        return True
 
     def link_player(self, discord_id: str, sc2_name: str) -> LinkResult:
         """Claim an SC2 display name and bind its account handle if the name
@@ -707,6 +734,7 @@ class MatchStore:
                 race=p["race"],
                 pick=p["pick"],
                 repick_used=None if p["repick_used"] is None else bool(p["repick_used"]),
+                repick_from=p["repick_from"],
                 unit_counts=json.loads(p["unit_counts"]),
             )
             for p in player_rows

@@ -24,7 +24,10 @@ def _team_lines(match: MonobattleMatch, team: int) -> str:
     lines = []
     for p in match.team(team):
         pick = p.pick or "?"
-        repick = " ↻" if p.repick_used else ""
+        repick = ""
+        if p.repick_used:
+            was = f" (was {p.repick_from})" if p.repick_from and p.repick_from != p.pick else ""
+            repick = f" ↻{was}"
         lines.append(f"**{p.name}** — {pick}{repick}")
     return "\n".join(lines) or "*empty*"
 

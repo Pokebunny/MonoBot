@@ -359,3 +359,24 @@ def test_h2h_records(store):
     # perspective flips with argument order
     vs_flipped, _, _ = store.h2h_records(["h-B0"], ["h-A0"], 0.7, 120)
     assert vs_flipped == [0, 1]
+
+
+def test_refresh_parse_updates_in_place(store):
+    """Re-parsing the same file updates parsed fields but keeps a manually
+    confirmed winner and doesn't duplicate the match."""
+    first = _match(winning_team=None, confidence=0.0, method="unknown")
+    result = store.ingest(first, hash_replay(b"r1"), uploaded_by="uploader")
+    store.confirm_winner(result.match_id, 2)
+
+    better = _match(winning_team=1, confidence=0.8, method="inferred:army")
+    for p in better.players:
+        p.repick_from = "SiegeTank" if p.repick_used else None
+    assert store.refresh_parse(better, hash_replay(b"r1")) is True
+
+    m = store.get_match(result.match_id)
+    assert m.winning_team == 2  # confirmation preserved over the fresh parse
+    assert m.winner_method == "confirmed"
+    repicker = next(p for p in m.players if p.repick_used)
+    assert repicker.repick_from == "SiegeTank"  # new parsed field landed
+    assert store.match_count() == 1
+    assert store.refresh_parse(better, hash_replay(b"unknown")) is False

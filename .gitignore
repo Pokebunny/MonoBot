@@ -6,6 +6,7 @@ venv/
 main/.env
 main/resources/*.db
 main/resources/config.json
+main/resources/replays/
 /scratch/
 /test_replays/
 /.claude/settings.local.json

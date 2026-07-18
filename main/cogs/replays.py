@@ -5,6 +5,7 @@ import asyncio
 import logging
 import os
 import tempfile
+from collections import Counter
 
 import discord
 from checks import is_bot_admin
@@ -16,6 +17,18 @@ from services.storage import MatchStore
 from views import ExpiringView
 
 logger = logging.getLogger(__name__)
+
+# Raw uploads are archived here (gitignored) so future parser improvements
+# can re-process history instead of only applying to new games.
+REPLAY_ARCHIVE_DIR = os.path.join(os.path.dirname(__file__), "..", "resources", "replays")
+
+
+def archive_replay(data: bytes, file_hash: str) -> None:
+    os.makedirs(REPLAY_ARCHIVE_DIR, exist_ok=True)
+    path = os.path.join(REPLAY_ARCHIVE_DIR, f"{file_hash}.SC2Replay")
+    if not os.path.exists(path):
+        with open(path, "wb") as f:
+            f.write(data)
 
 
 class ConfirmWinnerView(ExpiringView):
@@ -119,6 +132,7 @@ class Replays(commands.Cog):
             await channel.send(embed=match_embeds.parse_failure(attachment.filename, str(e)))
             return
 
+        archive_replay(data, file_hash)
         result = self.store.ingest(match, file_hash, uploaded_by=uploader)
         if result.status == "duplicate":
             # Same game already stored (this file, or a recording at least as
@@ -137,6 +151,44 @@ class Replays(commands.Cog):
             view.message = await channel.send(embed=embed, view=view)
         else:
             await channel.send(embed=embed)
+
+    @commands.hybrid_command(help="re-scan a channel's history for replays, refreshing stored games (mods)")
+    @is_bot_admin()
+    async def backfillchannel(self, ctx, channel: discord.TextChannel | None = None, limit: int = 2000):
+        """Downloads every .SC2Replay ever posted in the channel, archives the
+        raw files, re-parses already-stored games in place (so new parser
+        fields apply retroactively), and ingests any games we missed."""
+        target = channel or ctx.channel
+        await ctx.send(f"Scanning the last {limit} messages of {target.mention} for replays…")
+        stats = Counter()
+        async for message in target.history(limit=limit, oldest_first=True):
+            for attachment in message.attachments:
+                if not attachment.filename.lower().endswith(".sc2replay"):
+                    continue
+                try:
+                    data = await attachment.read()
+                except discord.HTTPException:
+                    stats["download failed"] += 1
+                    continue
+                file_hash = storage.hash_replay(data)
+                try:
+                    with tempfile.TemporaryDirectory() as tmp:
+                        path = os.path.join(tmp, attachment.filename)
+                        with open(path, "wb") as f:
+                            f.write(data)
+                        match = await asyncio.to_thread(replay_parser.parse_replay, path)
+                except Exception:
+                    logger.exception("Backfill: failed to parse %s", attachment.filename)
+                    stats["parse failed"] += 1
+                    continue
+                archive_replay(data, file_hash)
+                if self.store.refresh_parse(match, file_hash):
+                    stats["refreshed"] += 1
+                else:
+                    result = self.store.ingest(match, file_hash, uploaded_by=str(message.author))
+                    stats[result.status] += 1
+        summary = ", ".join(f"{k}: {n}" for k, n in stats.most_common()) or "no replays found"
+        await ctx.send(f"Backfill of {target.mention} done — {summary}.")
 
     @commands.hybrid_command(help="list stored matches that still need a winner confirmed")
     @commands.cooldown(1, 5, commands.BucketType.channel)

@@ -10,6 +10,7 @@ class MatchPlayer(BaseModel):
     race: str  # race actually played in-game (from worker births)
     pick: str | None  # detected monobattle unit pick, None if undetectable
     repick_used: bool | None = None  # blind random only: player repicked their unit
+    repick_from: str | None = None  # the unit they repicked away from, if known
     unit_counts: dict[str, int]  # normalized army-unit production counts
 
 

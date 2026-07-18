@@ -95,3 +95,23 @@ def test_morph_variants_normalized(matches):
     # 716: Lurker player (morph from Hydralisk, born as LurkerBurrowed)
     picks = {p.name: p.pick for p in _match(matches, 716).players}
     assert picks["BenZenZ"] == "Lurker"
+
+
+def test_last_second_repick_detected(matches):
+    """Replay 721: NecesaryPapr hit the repick button at ~61s of a 70s pick
+    phase, so the new preview unit never spawned. The button click itself
+    must count as the repick, and the abandoned unit is recorded."""
+    m = _match(matches, 721)
+    papr = next(p for p in m.players if p.name == "NecesaryPapr")
+    assert papr.repick_used is True
+    assert papr.repick_from == "Battlecruiser"
+    assert papr.pick == "Sentry"
+    # ordinary two-preview repicks record their original unit too
+    pokebunny = next(p for p in m.players if p.name == "Pokebunny")
+    assert pokebunny.repick_used is True
+    assert pokebunny.repick_from == "Corruptor"
+    assert pokebunny.pick == "Carrier"
+    # and non-repickers stay untouched
+    slug = next(p for p in m.players if p.name == "Slug")
+    assert slug.repick_used is False
+    assert slug.repick_from is None

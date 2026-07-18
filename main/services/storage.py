@@ -96,6 +96,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_player_links_handle
 -- but users won't reproduce it, and "Rain"/"rain" must not be two claims.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_player_links_name_nocase
     ON player_links(sc2_name COLLATE NOCASE);
+
+-- Admin-declared account merges: two handles that are the same player even
+-- when no Discord link connects them. Combined with link groups (union-find)
+-- to build the rating merge map. Stored a<b to dedupe.
+CREATE TABLE IF NOT EXISTS account_merges (
+    handle_a TEXT NOT NULL,
+    handle_b TEXT NOT NULL,
+    merged_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (handle_a, handle_b)
+);
 """
 
 
@@ -400,19 +410,59 @@ class MatchStore:
         ).fetchall()
         return [r["toon_handle"] for r in rows]
 
+    def merge_accounts(self, handle_a: str, handle_b: str) -> None:
+        """Declare two accounts the same player (admin merge)."""
+        a, b = sorted((handle_a, handle_b))
+        self._conn.execute("INSERT OR IGNORE INTO account_merges (handle_a, handle_b) VALUES (?, ?)", (a, b))
+        self._conn.commit()
+        self.change_count += 1
+
+    def unmerge_accounts(self, handle_a: str, handle_b: str) -> bool:
+        a, b = sorted((handle_a, handle_b))
+        cur = self._conn.execute("DELETE FROM account_merges WHERE handle_a = ? AND handle_b = ?", (a, b))
+        self._conn.commit()
+        if cur.rowcount:
+            self.change_count += 1
+        return cur.rowcount > 0
+
     def merge_map(self) -> dict[str, str]:
-        """Handles linked to the same Discord user collapse to one canonical
-        handle, so a person's multiple accounts (cross-region, alt) share a
-        single rating. Solo accounts are omitted (they map to themselves)."""
+        """A person's multiple accounts collapse to one canonical handle so
+        they share a single rating. Combines two sources via union-find:
+        handles linked to the same Discord user, and admin-declared merges.
+        Solo accounts are omitted (they map to themselves)."""
+        parent: dict[str, str] = {}
+
+        def find(x: str) -> str:
+            parent.setdefault(x, x)
+            root = x
+            while parent[root] != root:
+                root = parent[root]
+            while parent[x] != root:  # path compression
+                parent[x], x = root, parent[x]
+            return root
+
+        def union(a: str, b: str) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[max(ra, rb)] = min(ra, rb)  # min handle stays canonical
+
         groups: dict[str, list[str]] = {}
         for r in self._conn.execute("SELECT discord_id, toon_handle FROM player_links WHERE toon_handle IS NOT NULL"):
             groups.setdefault(r["discord_id"], []).append(r["toon_handle"])
-        mapping: dict[str, str] = {}
         for handles in groups.values():
-            if len(handles) > 1:
-                canon = min(handles)
-                for h in handles:
-                    mapping[h] = canon
+            for h in handles[1:]:
+                union(handles[0], h)
+        for r in self._conn.execute("SELECT handle_a, handle_b FROM account_merges"):
+            union(r["handle_a"], r["handle_b"])
+
+        members: dict[str, list[str]] = {}
+        for h in list(parent):
+            members.setdefault(find(h), []).append(h)
+        mapping: dict[str, str] = {}
+        for root, hs in members.items():
+            if len(hs) > 1:
+                for h in hs:
+                    mapping[h] = root
         return mapping
 
     def pending_names_for(self, discord_id: str) -> list[str]:

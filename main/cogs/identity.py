@@ -193,6 +193,37 @@ class Identity(commands.Cog):
             embed.set_footer(text="Your names: " + ", ".join(names))
         await ctx.send(embed=embed)
 
+    @commands.hybrid_command(help="declare two SC2 accounts the same player (mods)")
+    @commands.has_permissions(manage_guild=True)
+    async def mergeaccounts(self, ctx, name1: str, name2: str):
+        c1 = self.store.candidates_for_name(name1)
+        c2 = self.store.candidates_for_name(name2)
+        if not c1:
+            await ctx.send(f"No account has played as **{name1}** yet.")
+            return
+        if not c2:
+            await ctx.send(f"No account has played as **{name2}** yet.")
+            return
+        if c1[0][0] == c2[0][0]:
+            await ctx.send("Those already resolve to the same account.")
+            return
+        self.store.merge_accounts(c1[0][0], c2[0][0])
+        extra = " (each name matched several accounts — used the most active)" if len(c1) > 1 or len(c2) > 1 else ""
+        await ctx.send(f"Merged **{name1}** and **{name2}** — their games now share one rating.{extra}")
+
+    @commands.hybrid_command(help="undo an account merge (mods)")
+    @commands.has_permissions(manage_guild=True)
+    async def unmergeaccounts(self, ctx, name1: str, name2: str):
+        c1 = self.store.candidates_for_name(name1)
+        c2 = self.store.candidates_for_name(name2)
+        if not c1 or not c2:
+            await ctx.send("One of those names has no account on record.")
+            return
+        if self.store.unmerge_accounts(c1[0][0], c2[0][0]):
+            await ctx.send(f"Un-merged **{name1}** and **{name2}**.")
+        else:
+            await ctx.send("Those two weren't merged by an admin (a shared Discord link can't be un-merged here).")
+
     @commands.hybrid_command(help="unlink one of your SC2 names")
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def unlink(self, ctx, *, sc2_name: str):

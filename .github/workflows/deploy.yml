@@ -38,4 +38,4 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: /opt/monobot/MonoBot/deploy/update.sh
+          script: bash /opt/monobot/MonoBot/deploy/update.sh

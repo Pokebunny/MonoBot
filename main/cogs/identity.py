@@ -57,12 +57,77 @@ class DisambiguationView(discord.ui.View):
         self.add_item(_AccountSelect(store, discord_id, sc2_name, candidates, add_mode))
 
 
+class ConfirmAddView(discord.ui.View):
+    """Shown when someone links a name while already having an account linked —
+    confirms they mean to add a second (merged) account, not replace."""
+
+    def __init__(self, cog: "Identity", discord_id: str, sc2_name: str):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.discord_id = discord_id
+        self.sc2_name = sc2_name
+
+    async def _mine(self, interaction: discord.Interaction) -> bool:
+        if str(interaction.user.id) != self.discord_id:
+            await interaction.response.send_message("Only you can confirm your own link.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Add account", style=discord.ButtonStyle.success)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if await self._mine(interaction):
+            await self.cog.resolve_additional(interaction, self.discord_id, self.sc2_name)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if await self._mine(interaction):
+            await interaction.response.edit_message(content="Cancelled — no account added.", embed=None, view=None)
+
+
 class Identity(commands.Cog):
     def __init__(self, client):
         self.client = client
         if not hasattr(client, "match_store"):
             client.match_store = MatchStore()
         self.store: MatchStore = client.match_store
+
+    def _account_summary(self, discord_id: str) -> str:
+        parts = []
+        for h in self.store.handles_for(discord_id):
+            aliases = self.store.aliases_for_handle(h)
+            parts.append(aliases[0] if aliases else h)
+        parts += self.store.pending_names_for(discord_id)
+        return ", ".join(f"**{p}**" for p in parts) or "an account"
+
+    async def resolve_additional(self, interaction: discord.Interaction, discord_id: str, sc2_name: str):
+        """Add a second account after the user confirms. Direct if the name is
+        unambiguous, otherwise show the account picker."""
+        candidates = self.store.candidates_for_name(sc2_name)
+        if not candidates:
+            result = self.store.link_player(discord_id, sc2_name)
+            content = (
+                f"**{sc2_name}** is linked to someone else."
+                if result.status == "taken"
+                else f"Added **{sc2_name}** — it'll bind to your account the first time it's seen in a game."
+            )
+            await interaction.response.edit_message(content=content, embed=None, view=None)
+        elif len(candidates) == 1:
+            ok = self.store.add_account(discord_id, candidates[0][0])
+            content = (
+                "Added that account — all your accounts now share one rating."
+                if ok
+                else "That account is already linked to someone else."
+            )
+            await interaction.response.edit_message(content=content, embed=None, view=None)
+        else:
+            embed = discord.Embed(
+                title="Add which account?",
+                description=f"**{sc2_name}** matches {len(candidates)} accounts — pick the one to add.",
+                color=ACCENT,
+            )
+            await interaction.response.edit_message(
+                embed=embed, view=DisambiguationView(self.store, discord_id, sc2_name, candidates, add_mode=True)
+            )
 
     @commands.hybrid_command(help="link your Discord account to your in-game SC2 name")
     @commands.cooldown(1, 3, commands.BucketType.user)
@@ -72,7 +137,20 @@ class Identity(commands.Cog):
             await ctx.send("Usage: `!link <your SC2 name>`")
             return
 
-        result = self.store.link_player(str(ctx.author.id), sc2_name)
+        discord_id = str(ctx.author.id)
+        # Already have an account? Adding another is a merge — confirm first.
+        if self.store.sc2_names_for(discord_id):
+            embed = discord.Embed(
+                title="Add another account?",
+                description=f"You already have {self._account_summary(discord_id)} linked. "
+                f"Linking **{sc2_name}** adds it as another of *your* accounts — they'll share one "
+                "combined rating. Continue?",
+                color=WARNING,
+            )
+            await ctx.send(embed=embed, view=ConfirmAddView(self, discord_id, sc2_name))
+            return
+
+        result = self.store.link_player(discord_id, sc2_name)
         if result.status == "taken":
             embed = discord.Embed(
                 title="Name already claimed",
@@ -114,24 +192,6 @@ class Identity(commands.Cog):
         if len(names) > 1:
             embed.set_footer(text="Your names: " + ", ".join(names))
         await ctx.send(embed=embed)
-
-    @commands.hybrid_command(help="link an additional SC2 account to yourself (e.g. a different region)")
-    @commands.cooldown(1, 3, commands.BucketType.user)
-    async def addaccount(self, ctx, *, sc2_name: str):
-        sc2_name = sc2_name.strip()
-        candidates = self.store.candidates_for_name(sc2_name)
-        if not candidates:
-            await ctx.send(f"No account has played as **{sc2_name}** in the match history yet.")
-            return
-        embed = discord.Embed(
-            title="Add which account?",
-            description=f"Pick the **{sc2_name}** account to add to your profile — all your accounts share one rating.",
-            color=ACCENT,
-        )
-        await ctx.send(
-            embed=embed,
-            view=DisambiguationView(self.store, str(ctx.author.id), sc2_name, candidates, add_mode=True),
-        )
 
     @commands.hybrid_command(help="unlink one of your SC2 names")
     @commands.cooldown(1, 3, commands.BucketType.user)

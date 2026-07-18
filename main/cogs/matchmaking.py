@@ -10,6 +10,7 @@ import logging
 import discord
 from discord.ext import commands
 from models.matchmaking import QueuedPlayer
+from resources.config import CONFIG
 from services import match_embeds
 from services.matchmaking import balance_teams
 from services.rating import DEFAULT_MU, DEFAULT_SIGMA, RatingCache
@@ -46,6 +47,7 @@ class Matchmaking(commands.Cog):
         self.store: MatchStore = client.match_store
         self.ratings: RatingCache = client.rating_cache
         self.queue: dict[str, discord.abc.User] = {}
+        self.queue_message: discord.Message | None = None  # the live queue embed
 
     # -- rating lookup ---------------------------------------------------
 
@@ -81,12 +83,44 @@ class Matchmaking(commands.Cog):
     def _status_embed(self) -> discord.Embed:
         return match_embeds.queue_status(self._players(), QUEUE_TARGET)
 
+    async def _refresh_message(self):
+        """Update the tracked queue message after a command changes the queue."""
+        if self.queue_message is not None:
+            try:
+                await self.queue_message.edit(embed=self._status_embed(), view=QueueView(self))
+            except discord.HTTPException:
+                self.queue_message = None
+
     # -- commands & interactions -----------------------------------------
 
-    @commands.hybrid_command(help="open the matchmaking queue")
-    @commands.cooldown(1, 5, commands.BucketType.channel)
+    @commands.hybrid_command(help="open the matchmaking queue and ping the community")
+    @commands.cooldown(1, 30, commands.BucketType.channel)
     async def queue(self, ctx):
-        await ctx.send(embed=self._status_embed(), view=QueueView(self))
+        content = None
+        if CONFIG.queue_ping_role_id is not None:
+            content = f"<@&{CONFIG.queue_ping_role_id}> a monobattle queue is forming — click **Join** to get in!"
+        self.queue_message = await ctx.send(
+            content=content,
+            embed=self._status_embed(),
+            view=QueueView(self),
+            allowed_mentions=discord.AllowedMentions(roles=True),
+        )
+
+    @commands.hybrid_command(help="remove a player from the queue (e.g. a no-show)")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def bump(self, ctx, member: discord.Member):
+        if self.queue.pop(str(member.id), None) is None:
+            await ctx.send(f"{member.display_name} isn't in the queue.")
+            return
+        await self._refresh_message()
+        await ctx.send(f"Removed **{member.display_name}** from the queue.")
+
+    @commands.hybrid_command(help="clear the matchmaking queue (mods)")
+    @commands.has_permissions(manage_messages=True)
+    async def clearqueue(self, ctx):
+        self.queue.clear()
+        await self._refresh_message()
+        await ctx.send("Queue cleared.")
 
     async def handle_join(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)

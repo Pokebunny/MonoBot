@@ -383,7 +383,7 @@ def test_refresh_parse_updates_in_place(store):
 
 
 def test_mvp_and_counts(store):
-    """MVP = winning-team player with the most enemy value destroyed."""
+    """MVP = the player with the most enemy value destroyed, either team."""
     m = _match(played_at=_at(0))
     kills = {"A0": 5000, "A1": 9000, "A2": 100, "A3": 0, "B0": 12000, "B1": 0, "B2": 0, "B3": 0}
     for p in m.players:
@@ -392,9 +392,9 @@ def test_mvp_and_counts(store):
 
     _mid, stored = store.all_matches()[0]
     mvp = stored.mvp()
-    assert mvp.name == "A1"  # team 1 won; B0's 12000 doesn't count
-    assert store.mvp_count(["h-A1"], 0.7, 120) == 1
-    assert store.mvp_count(["h-B0"], 0.7, 120) == 0
+    assert mvp.name == "B0"  # top killer wins MVP even though team 2 lost
+    assert store.mvp_count(["h-B0"], 0.7, 120) == 1
+    assert store.mvp_count(["h-A1"], 0.7, 120) == 0
 
     # no kill stats (pre-archive parse) -> no MVP rather than an arbitrary one
     m2 = _match(played_at=_at(10))

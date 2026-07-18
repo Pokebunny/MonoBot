@@ -32,11 +32,11 @@ class MonobattleMatch(BaseModel):
         return [p for p in self.players if p.team == number]
 
     def mvp(self) -> MatchPlayer | None:
-        """The winning-team player who destroyed the most enemy value, or
-        None when there's no winner or no kill stats (pre-archive parses)."""
-        if self.winning_team is None:
+        """The player who destroyed the most enemy value, either team — a
+        dominant losing performance still earns it (community choice; the
+        lobby's top killer is on the losing team in ~24% of games). None when
+        there are no kill stats (pre-archive parses)."""
+        scored = [p for p in self.players if p.resources_killed]
+        if not scored:
             return None
-        winners = [p for p in self.team(self.winning_team) if p.resources_killed]
-        if not winners:
-            return None
-        return max(winners, key=lambda p: p.resources_killed)
+        return max(scored, key=lambda p: p.resources_killed)

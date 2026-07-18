@@ -193,6 +193,25 @@ class Identity(commands.Cog):
             embed.set_footer(text="Your names: " + ", ".join(names))
         await ctx.send(embed=embed)
 
+    @commands.hybrid_command(help="link another member to an SC2 account (mods)")
+    @commands.has_permissions(manage_guild=True)
+    async def linkuser(self, ctx, member: discord.Member, *, sc2_name: str):
+        sc2_name = sc2_name.strip()
+        discord_id = str(member.id)
+        candidates = self.store.candidates_for_name(sc2_name)
+        if not candidates:
+            result = self.store.link_player(discord_id, sc2_name)
+            if result.status == "taken":
+                await ctx.send(f"**{sc2_name}** is already linked to another member.")
+            else:
+                await ctx.send(f"Linked **{member.display_name}** to **{sc2_name}** — it'll bind on their next game.")
+            return
+        if not self.store.bind_specific(discord_id, sc2_name, candidates[0][0]):
+            await ctx.send(f"**{sc2_name}** (or that account) is already linked to another member.")
+            return
+        extra = f" (matched {len(candidates)} accounts — used the most active)" if len(candidates) > 1 else ""
+        await ctx.send(f"Linked **{member.display_name}** to **{sc2_name}**.{extra}")
+
     @commands.hybrid_command(help="declare two SC2 accounts the same player (mods)")
     @commands.has_permissions(manage_guild=True)
     async def mergeaccounts(self, ctx, name1: str, name2: str):

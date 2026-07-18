@@ -18,6 +18,7 @@ blind-validated against replays with recorded winners.
 import logging
 import os
 import re
+import statistics
 from collections import Counter, defaultdict
 
 import sc2reader
@@ -219,7 +220,10 @@ class _PlayerTally:
         self.econ_killed: int | None = None  # enemy economy value destroyed
         self.tech_killed: int | None = None  # enemy tech/building value destroyed
         self.resources_lost: int | None = None  # own value lost
-        self.resources_floated: int | None = None  # unspent bank at the end
+        # Bank per snapshot: hoarding is judged by the MEDIAN, not the final
+        # value — leavers donate their bank to teammates, so an end-of-game
+        # snapshot would credit the recipient of a donation as a hoarder.
+        self.floated_samples: list[int] = []
         self.units = Counter()  # post-pick-phase army production
         self.hatcheries = 0
         self.auto_turrets = 0
@@ -306,7 +310,8 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
                 tally.econ_killed = event.minerals_killed_economy + event.vespene_killed_economy
                 tally.tech_killed = event.minerals_killed_technology + event.vespene_killed_technology
                 tally.resources_lost = event.resources_lost
-                tally.resources_floated = event.minerals_current + event.vespene_current
+                if event.second >= game_start:
+                    tally.floated_samples.append(event.minerals_current + event.vespene_current)
             continue
         if event_name == "DialogControlEvent":
             if (
@@ -472,7 +477,9 @@ def parse_replay(path: str) -> MonobattleMatch:
                     econ_killed=tally.econ_killed,
                     tech_killed=tally.tech_killed,
                     resources_lost=tally.resources_lost,
-                    resources_floated=tally.resources_floated,
+                    resources_floated=(
+                        int(statistics.median(tally.floated_samples)) if tally.floated_samples else None
+                    ),
                     unit_counts=dict(tally.units),
                 )
             )

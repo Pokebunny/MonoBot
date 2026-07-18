@@ -15,7 +15,7 @@ class MatchPlayer(BaseModel):
     econ_killed: int | None = None  # enemy economy value destroyed
     tech_killed: int | None = None  # enemy tech/building value destroyed
     resources_lost: int | None = None  # own value lost
-    resources_floated: int | None = None  # unspent bank at game end
+    resources_floated: int | None = None  # median unspent bank over the game
     unit_counts: dict[str, int]  # normalized army-unit production counts
 
 

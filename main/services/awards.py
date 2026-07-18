@@ -67,9 +67,11 @@ SPECS = [
         "banker",
         "💰",
         "The Banker",
+        # Median bank over the game, not the final snapshot — leavers donate
+        # their resources to teammates, which would frame the recipient.
         lambda p: p.resources_floated,
-        8000,  # someone always floats *relatively* more; only true hoards count
-        lambda v: f"{v:,.0f} resources unspent",
+        2000,
+        lambda v: f"~{v:,.0f} unspent all game",
     ),
 ]
 

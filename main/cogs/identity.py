@@ -19,93 +19,60 @@ logger = logging.getLogger(__name__)
 
 class _AccountSelect(discord.ui.Select):
     """Dropdown to pick which account a shared name belongs to. In add_mode it
-    attaches an ADDITIONAL account to the user (multi-account merge)."""
+    attaches an ADDITIONAL account (multi-account player). operator_id is who
+    may click — the person themself, or the admin running !linkuser."""
 
-    def __init__(self, store: MatchStore, discord_id: str, sc2_name: str, candidates, add_mode: bool = False):
+    def __init__(
+        self,
+        store: MatchStore,
+        discord_id: str,
+        sc2_name: str,
+        candidates,
+        add_mode: bool = False,
+        operator_id: str | None = None,
+        target_label: str = "your account",
+    ):
         self.store = store
         self.discord_id = discord_id
         self.sc2_name = sc2_name
         self.add_mode = add_mode
+        self.operator_id = operator_id or discord_id
+        self.target_label = target_label
         options = [
             discord.SelectOption(label=name[:100], description=f"{games} games · …{handle[-6:]}", value=handle)
             for handle, name, games in candidates[:25]
         ]
-        super().__init__(placeholder="Which account is yours?", options=options)
+        super().__init__(placeholder="Which account?", options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        if str(interaction.user.id) != self.discord_id:
-            await interaction.response.send_message("Only the person linking can choose here.", ephemeral=True)
+        if str(interaction.user.id) != self.operator_id:
+            await interaction.response.send_message("Only the person who ran this command can choose.", ephemeral=True)
             return
         if self.add_mode:
             ok = self.store.add_account(self.discord_id, self.values[0])
-            msg = (
-                "Added that account — all your accounts now share one rating."
-                if ok
-                else "That account is already linked to someone else — ask an admin."
-            )
         else:
             ok = self.store.bind_specific(self.discord_id, self.sc2_name, self.values[0])
-            msg = (
-                f"Linked **{self.sc2_name}** to your account."
-                if ok
-                else "That account is already linked to someone else — ask an admin."
-            )
+        if ok:
+            msg = f"Linked **{self.sc2_name}** to {self.target_label} — their games count toward one rating."
+        else:
+            msg = "That account is already linked to someone else — use `!unlinkuser` first if that's wrong."
         await interaction.response.edit_message(content=msg, embed=None, view=None)
         self.view.stop()
 
 
 class DisambiguationView(ExpiringView):
-    def __init__(self, store: MatchStore, discord_id: str, sc2_name: str, candidates, add_mode: bool = False):
+    def __init__(
+        self,
+        store: MatchStore,
+        discord_id: str,
+        sc2_name: str,
+        candidates,
+        add_mode: bool = False,
+        operator_id: str | None = None,
+        target_label: str = "your account",
+    ):
         super().__init__()
-        self.add_item(_AccountSelect(store, discord_id, sc2_name, candidates, add_mode))
-
-
-class _PairPickSelect(discord.ui.Select):
-    """One dropdown of a PairPickView — picks which account a name means."""
-
-    def __init__(self, parent: "PairPickView", slot: int, sc2_name: str, candidates):
-        self.parent_view = parent
-        self.slot = slot
-        options = [
-            discord.SelectOption(label=name[:100], description=f"{games} games · …{handle[-6:]}", value=handle)
-            for handle, name, games in candidates[:25]
-        ]
-        super().__init__(placeholder=f"Which account is '{sc2_name}'?", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        if str(interaction.user.id) != self.parent_view.admin_id:
-            await interaction.response.send_message("Only the person who ran the command can choose.", ephemeral=True)
-            return
-        self.parent_view.picks[self.slot] = self.values[0]
-        for option in self.options:
-            option.default = option.value == self.values[0]
-        await self.parent_view.maybe_finish(interaction)
-
-
-class PairPickView(ExpiringView):
-    """Account pickers for (un)merge when a name matches several accounts.
-    Once every ambiguous name is resolved, the chosen handle pair goes to the
-    finisher, which performs the action and returns the reply text."""
-
-    def __init__(self, admin_id: str, names, candidate_lists, finisher):
-        super().__init__()
-        self.admin_id = admin_id
-        self.names = names
-        self.finisher = finisher  # (h1, h2, tag1, tag2) -> reply text
-        self.picks = [cands[0][0] if len(cands) == 1 else None for cands in candidate_lists]
-        for slot, (name, cands) in enumerate(zip(names, candidate_lists)):
-            if len(cands) > 1:
-                self.add_item(_PairPickSelect(self, slot, name, cands))
-
-    async def maybe_finish(self, interaction: discord.Interaction):
-        if None in self.picks:
-            await interaction.response.edit_message(view=self)
-            return
-        h1, h2 = self.picks
-        name1, name2 = self.names
-        content = self.finisher(h1, h2, f"**{name1}** (…{h1[-6:]})", f"**{name2}** (…{h2[-6:]})")
-        await interaction.response.edit_message(content=content, embed=None, view=None)
-        self.stop()
+        self.add_item(_AccountSelect(store, discord_id, sc2_name, candidates, add_mode, operator_id, target_label))
 
 
 class ConfirmAddView(ExpiringView):
@@ -245,7 +212,7 @@ class Identity(commands.Cog):
             embed.set_footer(text="Your names: " + ", ".join(names))
         await ctx.send(embed=embed)
 
-    @commands.hybrid_command(help="link another member to an SC2 account (mods)")
+    @commands.hybrid_command(help="link a member to an SC2 account (mods) — repeat to attach a player's alt accounts")
     @is_bot_admin()
     async def linkuser(self, ctx, member: discord.Member, *, sc2_name: str):
         sc2_name = sc2_name.strip()
@@ -254,90 +221,62 @@ class Identity(commands.Cog):
         if not candidates:
             result = self.store.link_player(discord_id, sc2_name)
             if result.status == "taken":
-                await ctx.send(f"**{sc2_name}** is already linked to another member.")
+                await ctx.send(
+                    f"**{sc2_name}** is already claimed by <@{result.owner}> — `!unlinkuser` it first.",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
             else:
                 await ctx.send(f"Linked **{member.display_name}** to **{sc2_name}** — it'll bind on their next game.")
             return
-        if not self.store.bind_specific(discord_id, sc2_name, candidates[0][0]):
-            await ctx.send(f"**{sc2_name}** (or that account) is already linked to another member.")
-            return
-        extra = f" (matched {len(candidates)} accounts — used the most active)" if len(candidates) > 1 else ""
-        await ctx.send(f"Linked **{member.display_name}** to **{sc2_name}**.{extra}")
 
-    def _merge_finish(self, member: discord.Member | None):
-        """Build a merge finisher. The Discord account is the source of truth
-        for identity, so merging = making both SC2 accounts linked to one
-        member: refuse across two members, adopt the linked side's owner when
-        one is linked, and require an explicit @member when neither is."""
-
-        def finish(h1: str, h2: str, tag1: str, tag2: str) -> str:
-            if h1 == h2:
-                return "You picked the same account twice — nothing to merge."
-            owner1 = self.store.discord_id_for_handle(h1)
-            owner2 = self.store.discord_id_for_handle(h2)
-            if owner1 and owner2 and owner1 != owner2:
-                return (
-                    f"Refusing: {tag1} is linked to <@{owner1}> but {tag2} is linked to <@{owner2}> — "
-                    "two different people. If one link is wrong, fix it with `!unlinkuser` first."
-                )
-            if owner1 and owner2:
-                return f"{tag1} and {tag2} are already the same player (both linked to <@{owner1}>)."
-            target = owner1 or owner2
-            if member is not None:
-                if target is not None and str(member.id) != target:
-                    return (
-                        f"Refusing: these accounts already belong to <@{target}>, not {member.display_name}. "
-                        "Fix the existing link with `!unlinkuser` first."
-                    )
-                target = str(member.id)
-            if target is None:
-                return (
-                    "Neither account is linked to a Discord member yet, and the member is the source of truth "
-                    "for identity — rerun with one: `!mergeaccounts <name1> <name2> @member`."
-                )
-            for handle, owner in ((h1, owner1), (h2, owner2)):
-                if owner is None and not self.store.add_account(target, handle):
-                    return f"Couldn't link …{handle[-6:]} to <@{target}> — it's already claimed by someone else."
-            return f"Merged: {tag1} and {tag2} are both linked to <@{target}> now and share one rating."
-
-        return finish
-
-    def _unmerge_finish(self, h1: str, h2: str, tag1: str, tag2: str) -> str:
-        if self.store.unmerge_accounts(h1, h2):
-            return f"Un-merged {tag1} and {tag2}."
-        return (
-            f"{tag1} and {tag2} aren't joined by an admin merge — if they share a Discord link, "
-            "detach one with `!unlinkuser`."
+        # A claim on this name that can't simply be bound (already bound, or
+        # held by someone else) means the account attaches by handle instead.
+        claim_owner = self.store.discord_id_for(sc2_name)
+        claim_pending = claim_owner is not None and any(
+            n.lower() == sc2_name.lower() for n in self.store.pending_names_for(claim_owner)
         )
+        add_mode = claim_owner is not None and not (claim_owner == discord_id and claim_pending)
 
-    async def _merge_pair(self, ctx, name1: str, name2: str, finisher):
-        """Shared (un)merge flow: resolve both names, asking with dropdowns
-        when a name matches several accounts."""
-        c1 = self.store.candidates_for_name(name1)
-        c2 = self.store.candidates_for_name(name2)
-        if not c1:
-            await ctx.send(f"No account has played as **{name1}** yet.")
+        if len(candidates) > 1:
+            embed = discord.Embed(
+                title="Which account?",
+                description=f"**{sc2_name}** matches {len(candidates)} accounts — pick the one to link to "
+                f"**{member.display_name}** (by game count / account id).",
+                color=WARNING,
+            )
+            view = DisambiguationView(
+                self.store,
+                discord_id,
+                sc2_name,
+                candidates,
+                add_mode=add_mode,
+                operator_id=str(ctx.author.id),
+                target_label=f"**{member.display_name}**",
+            )
+            view.message = await ctx.send(embed=embed, view=view)
             return
-        if not c2:
-            await ctx.send(f"No account has played as **{name2}** yet.")
+
+        handle = candidates[0][0]
+        owner = self.store.discord_id_for_handle(handle)
+        if owner == discord_id:
+            await ctx.send(f"{member.display_name} already has **{sc2_name}** linked.")
             return
-        view = PairPickView(str(ctx.author.id), (name1, name2), (c1, c2), finisher)
-        if None not in view.picks:  # both names unambiguous — no picker needed
-            h1, h2 = view.picks
+        if owner is not None:
             await ctx.send(
-                finisher(h1, h2, f"**{name1}** (…{h1[-6:]})", f"**{name2}** (…{h2[-6:]})"),
+                f"Refusing: that account is linked to <@{owner}> — two different people can't share an "
+                "account. `!unlinkuser` it first if the old link is wrong.",
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             return
-        ambiguous = [n for n, c in ((name1, c1), (name2, c2)) if len(c) > 1]
-        embed = discord.Embed(
-            title="Which accounts?",
-            description=", ".join(f"**{n}**" for n in dict.fromkeys(ambiguous))
-            + " matches several accounts — pick the ones you mean (by game count / account id). "
-            "To merge two accounts that share a name, use the same name twice and pick a different one in each menu.",
-            color=WARNING,
+        ok = (
+            self.store.add_account(discord_id, handle)
+            if add_mode
+            else self.store.bind_specific(discord_id, sc2_name, handle)
         )
-        view.message = await ctx.send(embed=embed, view=view)
+        if ok:
+            await ctx.send(f"Linked **{member.display_name}** to **{sc2_name}** — their games count toward one rating.")
+        else:
+            await ctx.send(f"Couldn't link **{sc2_name}** — its claim conflicts; try `!unlinkuser` first.")
 
     @commands.hybrid_command(help="unlink a member's SC2 accounts, or one name — @member [name], or a bare name (mods)")
     @is_bot_admin()
@@ -373,16 +312,6 @@ class Identity(commands.Cog):
         for name in names:
             self.store.unlink_player(discord_id, name)
         await ctx.send(f"Unlinked {member.display_name}'s accounts: " + ", ".join(f"**{n}**" for n in names))
-
-    @commands.hybrid_command(help="declare two SC2 accounts the same player — links both to their member (mods)")
-    @is_bot_admin()
-    async def mergeaccounts(self, ctx, name1: str, name2: str, member: discord.Member | None = None):
-        await self._merge_pair(ctx, name1, name2, self._merge_finish(member))
-
-    @commands.hybrid_command(help="undo an old-style account merge (mods)")
-    @is_bot_admin()
-    async def unmergeaccounts(self, ctx, name1: str, name2: str):
-        await self._merge_pair(ctx, name1, name2, self._unmerge_finish)
 
     @commands.hybrid_command(help="unlink one of your SC2 names")
     @commands.cooldown(1, 3, commands.BucketType.user)

@@ -292,3 +292,58 @@ def test_same_name_different_accounts_dont_merge(store):
     assert "H-rain1" in book.ratings and "H-rain2" in book.ratings
     assert book.ratings["H-rain1"].wins == 1 and book.ratings["H-rain1"].losses == 0
     assert book.ratings["H-rain2"].wins == 0 and book.ratings["H-rain2"].losses == 1
+
+
+def _two_rains(store):
+    r1 = _match(
+        ["Rain", "A2", "A3", "A4", "B1", "B2", "B3", "B4"],
+        winning_team=1,
+        handles=["H-rain1", "H-A2", "H-A3", "H-A4", "H-B1", "H-B2", "H-B3", "H-B4"],
+    )
+    r2 = _match(
+        ["Rain", "C2", "C3", "C4", "D1", "D2", "D3", "D4"],
+        winning_team=1,
+        handles=["H-rain2", "H-C2", "H-C3", "H-C4", "H-D1", "H-D2", "H-D3", "H-D4"],
+    )
+    r2 = r2.model_copy(update={"played_at": r2.played_at + datetime.timedelta(minutes=30)})
+    store.ingest(r1, hash_replay(b"r1"))
+    store.ingest(r2, hash_replay(b"r2"))
+
+
+def test_unlink_second_account_by_alias(store):
+    """add_account claim rows store the handle as the name; unlinking by the
+    in-game alias must still find them."""
+    _two_rains(store)
+    store.bind_specific("disc1", "Rain", "H-rain1")
+    store.add_account("disc1", "H-rain2")  # placeholder claim row, name = handle
+    assert store.unlink_player("disc1", "Rain") is True  # removes the named claim
+    assert store.unlink_player("disc1", "Rain") is True  # alias fallback hits the placeholder
+    assert store.handles_for("disc1") == []
+    assert store.unlink_player("disc1", "Rain") is False
+
+
+def test_release_name_reaches_placeholder_rows(store):
+    _two_rains(store)
+    store.add_account("disc9", "H-rain2")  # only a placeholder row exists
+    assert store.release_name("Rain") == "disc9"
+    assert store.handles_for("disc9") == []
+    assert store.release_name("Rain") is None
+
+
+def test_free_candidates_filter(store):
+    from types import SimpleNamespace
+
+    from cogs.identity import Identity
+
+    cog = Identity(SimpleNamespace(match_store=store))
+    _two_rains(store)
+    candidates, free = cog._free_candidates("Rain")
+    assert len(candidates) == 2 and len(free) == 2
+    store.bind_specific("disc1", "Rain", "H-rain1")  # first Rain claims the name
+    candidates, free = cog._free_candidates("Rain")
+    assert len(candidates) == 2
+    assert [h for h, _n, _g in free] == ["H-rain2"]  # only the unclaimed account offered
+    # the second Rain player can attach the free account despite the taken name
+    assert store.add_account("disc2", "H-rain2") is True
+    _candidates, free = cog._free_candidates("Rain")
+    assert free == []

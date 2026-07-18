@@ -54,8 +54,10 @@ class _AccountSelect(discord.ui.Select):
             ok = self.store.bind_specific(self.discord_id, self.sc2_name, self.values[0])
         if ok:
             msg = f"Linked **{self.sc2_name}** to {self.target_label} — their games count toward one rating."
-        else:
+        elif self.operator_id != self.discord_id:  # a mod is doing the linking
             msg = "That account is already linked to someone else — use `!unlinkuser` first if that's wrong."
+        else:
+            msg = "That account is already linked to someone else — ask a mod to fix it if that's wrong."
         await interaction.response.edit_message(content=msg, embed=None, view=None)
         self.view.stop()
 
@@ -111,6 +113,17 @@ class Identity(commands.Cog):
             client.match_store = MatchStore()
         self.store: MatchStore = client.match_store
 
+    def _free_candidates(self, sc2_name: str):
+        """(all accounts under a name, the subset not linked to anyone).
+        Pickers only offer the free subset — claimed accounts can't be taken."""
+        candidates = self.store.candidates_for_name(sc2_name)
+        free = [c for c in candidates if self.store.discord_id_for_handle(c[0]) is None]
+        return candidates, free
+
+    def _picker_note(self, candidates, free) -> str:
+        taken = len(candidates) - len(free)
+        return f" ({taken} other account{'s' if taken != 1 else ''} with this name already linked)" if taken else ""
+
     def _account_summary(self, discord_id: str) -> str:
         parts = []
         for h in self.store.handles_for(discord_id):
@@ -120,9 +133,9 @@ class Identity(commands.Cog):
         return ", ".join(f"**{p}**" for p in parts) or "an account"
 
     async def resolve_additional(self, interaction: discord.Interaction, discord_id: str, sc2_name: str):
-        """Add a second account after the user confirms. Direct if the name is
-        unambiguous, otherwise show the account picker."""
-        candidates = self.store.candidates_for_name(sc2_name)
+        """Add a second account after the user confirms. Direct if there's one
+        free account under the name, otherwise show the account picker."""
+        candidates, free = self._free_candidates(sc2_name)
         if not candidates:
             result = self.store.link_player(discord_id, sc2_name)
             content = (
@@ -131,8 +144,15 @@ class Identity(commands.Cog):
                 else f"Added **{sc2_name}** — it'll bind to your account the first time it's seen in a game."
             )
             await interaction.response.edit_message(content=content, embed=None, view=None)
-        elif len(candidates) == 1:
-            ok = self.store.add_account(discord_id, candidates[0][0])
+        elif not free:
+            await interaction.response.edit_message(
+                content=f"Every account that plays as **{sc2_name}** is already linked to someone — "
+                "ask a mod if one of them is yours.",
+                embed=None,
+                view=None,
+            )
+        elif len(free) == 1:
+            ok = self.store.add_account(discord_id, free[0][0])
             content = (
                 "Added that account — all your accounts now share one rating."
                 if ok
@@ -142,10 +162,11 @@ class Identity(commands.Cog):
         else:
             embed = discord.Embed(
                 title="Add which account?",
-                description=f"**{sc2_name}** matches {len(candidates)} accounts — pick the one to add.",
+                description=f"**{sc2_name}** matches {len(free)} unclaimed accounts — pick the one to add."
+                + self._picker_note(candidates, free),
                 color=ACCENT,
             )
-            view = DisambiguationView(self.store, discord_id, sc2_name, candidates, add_mode=True)
+            view = DisambiguationView(self.store, discord_id, sc2_name, free, add_mode=True)
             view.message = interaction.message
             await interaction.response.edit_message(embed=embed, view=view)
 
@@ -173,24 +194,44 @@ class Identity(commands.Cog):
 
         result = self.store.link_player(discord_id, sc2_name)
         if result.status == "taken":
+            # The NAME is claimed, but unclaimed accounts may still play under
+            # it (players sharing a name) — offer those instead of dead-ending.
+            candidates, free = self._free_candidates(sc2_name)
+            if not free:
+                embed = discord.Embed(
+                    title="Name already claimed",
+                    description=f"**{sc2_name}** is already linked to another Discord user. "
+                    "If that's wrong, a mod can sort it out.",
+                    color=WARNING,
+                )
+                await ctx.send(embed=embed)
+                return
             embed = discord.Embed(
-                title="Name already claimed",
-                description=f"**{sc2_name}** is already linked to another Discord user. "
-                "If that's wrong, an admin can help sort it out.",
+                title="Which account is yours?",
+                description=f"Someone else has claimed the name **{sc2_name}**, but "
+                f"{len(free)} unclaimed account{'s' if len(free) != 1 else ''} also play under it — "
+                "pick yours (by game count / account id).",
                 color=WARNING,
             )
-            await ctx.send(embed=embed)
+            view = DisambiguationView(self.store, discord_id, sc2_name, free, add_mode=True)
+            view.message = await ctx.send(embed=embed, view=view)
             return
 
         if result.status == "ambiguous":
-            candidates = self.store.candidates_for_name(sc2_name)
+            candidates, free = self._free_candidates(sc2_name)
+            if not free:
+                await ctx.send(
+                    f"Every account that plays as **{sc2_name}** is already linked to someone — "
+                    "ask a mod if one of them is yours."
+                )
+                return
             embed = discord.Embed(
                 title="Which account is yours?",
-                description=f"**{result.candidates} different accounts** have played as **{sc2_name}**. "
-                "Pick yours from the menu below (by game count / account id).",
+                description=f"**{len(free)} accounts** have played as **{sc2_name}**. "
+                "Pick yours from the menu below (by game count / account id)." + self._picker_note(candidates, free),
                 color=WARNING,
             )
-            view = DisambiguationView(self.store, str(ctx.author.id), sc2_name, candidates)
+            view = DisambiguationView(self.store, discord_id, sc2_name, free)
             view.message = await ctx.send(embed=embed, view=view)
             return
 
@@ -217,7 +258,7 @@ class Identity(commands.Cog):
     async def linkuser(self, ctx, member: discord.Member, *, sc2_name: str):
         sc2_name = sc2_name.strip()
         discord_id = str(member.id)
-        candidates = self.store.candidates_for_name(sc2_name)
+        candidates, free = self._free_candidates(sc2_name)
         if not candidates:
             result = self.store.link_player(discord_id, sc2_name)
             if result.status == "taken":
@@ -238,17 +279,26 @@ class Identity(commands.Cog):
         add_mode = claim_owner is not None and not (claim_owner == discord_id and claim_pending)
 
         if len(candidates) > 1:
+            if not free:
+                owners = {self.store.discord_id_for_handle(c[0]) for c in candidates}
+                await ctx.send(
+                    f"Every account playing as **{sc2_name}** is already linked ("
+                    + ", ".join(f"<@{o}>" for o in owners if o)
+                    + f") — `!unlinkuser` one first if it belongs to {member.display_name}.",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
             embed = discord.Embed(
                 title="Which account?",
-                description=f"**{sc2_name}** matches {len(candidates)} accounts — pick the one to link to "
-                f"**{member.display_name}** (by game count / account id).",
+                description=f"**{sc2_name}** matches {len(free)} unclaimed accounts — pick the one to link to "
+                f"**{member.display_name}** (by game count / account id)." + self._picker_note(candidates, free),
                 color=WARNING,
             )
             view = DisambiguationView(
                 self.store,
                 discord_id,
                 sc2_name,
-                candidates,
+                free,
                 add_mode=add_mode,
                 operator_id=str(ctx.author.id),
                 target_label=f"**{member.display_name}**",

@@ -505,22 +505,41 @@ class MatchStore:
             pass  # handle already bound to another claimed name; leave as-is
 
     def release_name(self, sc2_name: str) -> str | None:
-        """Delete a name claim regardless of owner (admin). Returns the
-        Discord id it was linked to, or None if the name wasn't claimed."""
+        """Delete a link by name regardless of owner (admin). Falls back to
+        matching bound accounts by their in-game aliases, since second-account
+        claim rows store the handle, not the display name. Returns the Discord
+        id it was linked to, or None if nothing matched."""
         owner = self.discord_id_for(sc2_name)
-        if owner is None:
-            return None
-        self._conn.execute("DELETE FROM player_links WHERE sc2_name = ? COLLATE NOCASE", (sc2_name,))
-        self._conn.commit()
-        self.change_count += 1
-        return owner
+        if owner is not None:
+            self._conn.execute("DELETE FROM player_links WHERE sc2_name = ? COLLATE NOCASE", (sc2_name,))
+            self._conn.commit()
+            self.change_count += 1
+            return owner
+        for handle in self.handles_for_name(sc2_name):
+            handle_owner = self.discord_id_for_handle(handle)
+            if handle_owner is not None:
+                self._conn.execute("DELETE FROM player_links WHERE toon_handle = ?", (handle,))
+                self._conn.commit()
+                self.change_count += 1
+                return handle_owner
+        return None
 
     def unlink_player(self, discord_id: str, sc2_name: str) -> bool:
-        """Release a name the user owns; returns False if they didn't own it."""
+        """Release one of the user's links by name; returns False if none
+        matched. Falls back to matching their bound accounts by in-game alias
+        (second-account claim rows store the handle, not the display name)."""
         cur = self._conn.execute(
             "DELETE FROM player_links WHERE sc2_name = ? COLLATE NOCASE AND discord_id = ?",
             (sc2_name, discord_id),
         )
+        if cur.rowcount == 0:
+            handles = self.handles_for_name(sc2_name)
+            if handles:
+                placeholders = ",".join("?" * len(handles))
+                cur = self._conn.execute(
+                    f"DELETE FROM player_links WHERE discord_id = ? AND toon_handle IN ({placeholders})",
+                    (discord_id, *handles),
+                )
         self._conn.commit()
         if cur.rowcount:
             self.change_count += 1

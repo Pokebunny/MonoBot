@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 MIN_DURATION_SECONDS = 120
 MIN_WINNER_CONFIDENCE = 0.7
 
+# Games needed to appear on the leaderboard and hold a rank; players below it
+# still have a rating, shown as unranked.
+MIN_RANKED_GAMES = 5
+
 _model = PlackettLuce()
 
 # Rating a brand-new/unlinked player starts with, from the model's prior.

@@ -5,7 +5,7 @@ import logging
 import discord
 from discord.ext import commands
 from services import match_embeds
-from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, RatingCache
+from services.rating import MIN_DURATION_SECONDS, MIN_RANKED_GAMES, MIN_WINNER_CONFIDENCE, RatingCache
 from services.storage import MatchStore
 from views import ExpiringView
 
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # Default minimum games to appear on the board: trims one-off historical
 # accounts now that the ladder is in real use. !leaderboard 1 shows everyone.
-DEFAULT_MIN_GAMES = 5
+DEFAULT_MIN_GAMES = MIN_RANKED_GAMES
 
 
 class LeaderboardView(ExpiringView):
@@ -165,9 +165,15 @@ class Leaderboard(commands.Cog):
             return None
         rated.sort(key=lambda r: r.games, reverse=True)
         rating = rated[0]
-        board = book.leaderboard(min_games=1)
-        rank = next(i for i, r in enumerate(board, 1) if r.handle == rating.handle)
-        return rating, rank, len(board), len(rated)
+        rank, ranked_total = self._rank_of(book, rating)
+        return rating, rank, ranked_total, len(rated)
+
+    def _rank_of(self, book, rating) -> tuple[int | None, int]:
+        """(rank among ranked players, size of the ranked board). Players
+        under MIN_RANKED_GAMES are unranked (None)."""
+        ranked = book.leaderboard(min_games=MIN_RANKED_GAMES)
+        rank = next((i for i, r in enumerate(ranked, 1) if r.handle == rating.handle), None)
+        return rank, len(ranked)
 
     def _resolve_self(self, author):
         """The command author's own most-active rated account, or None."""
@@ -179,9 +185,8 @@ class Leaderboard(commands.Cog):
                 best = r
         if best is None:
             return None
-        board = book.leaderboard(min_games=1)
-        rank = next((i for i, r in enumerate(board, 1) if r.handle == best.handle), len(board))
-        return best, rank, len(board), 1
+        rank, ranked_total = self._rank_of(book, best)
+        return best, rank, ranked_total, 1
 
     async def _resolve_or_reply(self, ctx, player: str | None):
         if player is None:

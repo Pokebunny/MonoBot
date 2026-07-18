@@ -5,6 +5,7 @@ from models.matchmaking import ProposedMatch, QueuedPlayer
 from models.rating import PlayerRating
 from models.replay import MatchPlayer, MonobattleMatch
 from services.awards import SPECS, game_awards, match_awards, mvp_outkilled_team
+from services.rating import MIN_RANKED_GAMES
 
 ACCENT = 0x2ECC71
 WARNING = 0xE67E22
@@ -142,6 +143,12 @@ def _rating_value(rating: PlayerRating) -> str:
     return f"**{rating.display_rating}**" + ("  *(provisional)*" if rating.provisional else "")
 
 
+def _rank_value(rating: PlayerRating, rank: int | None, total_ranked: int) -> str:
+    if rank is None:
+        return f"Unranked ({rating.games}/{MIN_RANKED_GAMES} games)"
+    return f"#{rank} of {total_ranked}"
+
+
 def _rating_footer(rating: PlayerRating) -> str:
     if rating.provisional:
         return "Provisional — rating will settle as more games come in."
@@ -150,7 +157,7 @@ def _rating_footer(rating: PlayerRating) -> str:
 
 def player_rank(
     rating: PlayerRating,
-    rank: int,
+    rank: int | None,
     total_ranked: int,
     aliases: list[str] | None = None,
     display_name: str | None = None,
@@ -158,7 +165,7 @@ def player_rank(
     shown = display_name or rating.name
     embed = discord.Embed(title=shown, color=ACCENT)
     embed.add_field(name="Rating", value=_rating_value(rating), inline=True)
-    embed.add_field(name="Rank", value=f"#{rank} of {total_ranked}", inline=True)
+    embed.add_field(name="Rank", value=_rank_value(rating, rank, total_ranked), inline=True)
     embed.add_field(
         name="Record",
         value=f"{rating.wins}-{rating.losses} ({100 * rating.wins / rating.games:.0f}%)",
@@ -183,7 +190,7 @@ def _record_lines(records: dict[str, list[int]], limit: int) -> str:
 
 def player_profile(
     rating: PlayerRating,
-    rank: int,
+    rank: int | None,
     total_ranked: int,
     aliases: list[str],
     race_records: dict[str, list[int]],
@@ -195,7 +202,7 @@ def player_profile(
     shown = display_name or rating.name
     embed = discord.Embed(title=f"{shown} — profile", color=ACCENT)
     embed.add_field(name="Rating", value=_rating_value(rating), inline=True)
-    embed.add_field(name="Rank", value=f"#{rank} of {total_ranked}", inline=True)
+    embed.add_field(name="Rank", value=_rank_value(rating, rank, total_ranked), inline=True)
     record = f"{rating.wins}-{rating.losses} ({100 * rating.wins / rating.games:.0f}%)"
     if mvp_count:
         record += f" · ⭐ {mvp_count} MVP{'s' if mvp_count != 1 else ''}"

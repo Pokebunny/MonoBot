@@ -315,7 +315,8 @@ def test_player_records_cover_merged_group(store):
     store.ingest(_match(played_at=_at(0)), hash_replay(b"g1"))
     other = ["L0", "A1", "A2", "A3", "B0", "B1", "B2", "B3"]  # L0 = same person's alt
     store.ingest(_match(played_at=_at(10), roster=other), hash_replay(b"g2"))
-    store.merge_accounts("h-A0", "h-L0")
+    store.bind_specific("disc1", "A0", "h-A0")
+    store.add_account("disc1", "h-L0")  # same person's alt, via Discord link
 
     group = store.merged_handles("h-A0")
     assert set(group) == {"h-A0", "h-L0"}

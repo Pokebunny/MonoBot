@@ -217,39 +217,6 @@ def test_add_account_merges_same_named_accounts(store):
     assert not store.add_account("disc2", "H-rain2")  # can't grab someone's account
 
 
-def test_admin_merge_union_find(store):
-    store.merge_accounts("H-b", "H-a")  # {H-a, H-b}
-    store.merge_accounts("H-b", "H-c")  # overlaps -> {H-a, H-b, H-c}
-    mm = store.merge_map()
-    assert mm["H-a"] == mm["H-b"] == mm["H-c"] == "H-a"  # min stays canonical
-    assert store.unmerge_accounts("H-a", "H-b")
-    mm = store.merge_map()
-    assert "H-a" not in mm  # solo again
-    assert mm["H-b"] == mm["H-c"]
-
-
-def test_admin_merged_accounts_share_rating(store):
-    from services.rating import RatingBook
-
-    g1 = _match(
-        ["Main", "A2", "A3", "A4", "B1", "B2", "B3", "B4"],
-        winning_team=1,
-        handles=["H-main", "H-A2", "H-A3", "H-A4", "H-B1", "H-B2", "H-B3", "H-B4"],
-    )
-    g2 = _match(
-        ["Other", "C2", "C3", "C4", "D1", "D2", "D3", "D4"],
-        winning_team=1,
-        handles=["H-other", "H-C2", "H-C3", "H-C4", "H-D1", "H-D2", "H-D3", "H-D4"],
-    )
-    g2 = g2.model_copy(update={"played_at": g2.played_at + datetime.timedelta(minutes=30)})
-    store.ingest(g1, hash_replay(b"g1"))
-    store.ingest(g2, hash_replay(b"g2"))
-    store.merge_accounts("H-main", "H-other")  # admin merge, no Discord link
-    book = RatingBook.from_matches((m for _, m in store.all_matches()), store.merge_map())
-    assert book.rating_for("H-main") is book.rating_for("H-other")
-    assert book.rating_for("H-main").wins == 2
-
-
 def test_linked_accounts_merge_into_one_rating(store):
     from services.rating import RatingBook
 

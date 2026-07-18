@@ -12,6 +12,10 @@ class MatchPlayer(BaseModel):
     repick_used: bool | None = None  # blind random only: player repicked their unit
     repick_from: str | None = None  # the unit they repicked away from, if known
     resources_killed: int | None = None  # enemy value destroyed (final stats snapshot)
+    econ_killed: int | None = None  # enemy economy value destroyed
+    tech_killed: int | None = None  # enemy tech/building value destroyed
+    resources_lost: int | None = None  # own value lost
+    resources_floated: int | None = None  # unspent bank at game end
     unit_counts: dict[str, int]  # normalized army-unit production counts
 
 

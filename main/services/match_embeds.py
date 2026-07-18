@@ -4,6 +4,7 @@ import discord
 from models.matchmaking import ProposedMatch, QueuedPlayer
 from models.rating import PlayerRating
 from models.replay import MatchPlayer, MonobattleMatch
+from services.awards import SPECS, match_awards
 
 ACCENT = 0x2ECC71
 WARNING = 0xE67E22
@@ -56,6 +57,11 @@ def match_summary(match: MonobattleMatch, match_id: int | None = None) -> discor
             value=_team_lines(match, team_number, mvp),
             inline=True,
         )
+
+    awards = match_awards(match)
+    if awards:
+        lines = [f"{a.emoji} **{a.title}**: {a.player.name} ({a.detail})" for a in awards]
+        embed.add_field(name="Awards", value="\n".join(lines), inline=False)
 
     if match.winning_team is None:
         result = "Unknown — needs confirmation"
@@ -163,6 +169,7 @@ def player_profile(
     race_records: dict[str, list[int]],
     unit_records: dict[str, list[int]],
     mvp_count: int = 0,
+    award_counts: dict[str, int] | None = None,
 ) -> discord.Embed:
     embed = discord.Embed(title=f"{rating.name} — profile", color=ACCENT)
     embed.add_field(name="Rating", value=_rating_value(rating), inline=True)
@@ -171,6 +178,10 @@ def player_profile(
     if mvp_count:
         record += f" · ⭐ {mvp_count} MVP{'s' if mvp_count != 1 else ''}"
     embed.add_field(name="Record", value=record, inline=True)
+    if award_counts:
+        parts = [f"{spec.emoji} {spec.title} ×{award_counts[spec.key]}" for spec in SPECS if award_counts.get(spec.key)]
+        if parts:
+            embed.add_field(name="Awards", value="  ·  ".join(parts), inline=False)
     embed.add_field(name="Races", value=_record_lines(race_records, 3), inline=True)
     embed.add_field(name="Most-played units", value=_record_lines(unit_records, 10), inline=True)
     others = [a for a in aliases if a.lower() != rating.name.lower()]

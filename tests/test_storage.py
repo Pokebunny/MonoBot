@@ -401,3 +401,32 @@ def test_mvp_and_counts(store):
     store.ingest(m2, hash_replay(b"m2"))
     _mid2, stored2 = store.all_matches()[1]
     assert stored2.mvp() is None
+
+
+def test_awards_pick_outliers_only(store):
+    """Awards go to statistical outliers within the game, capped at two."""
+    from services.awards import match_awards
+
+    m = _match(played_at=_at(0))
+    for i, p in enumerate(m.players):
+        p.resources_killed = 5000
+        p.resources_lost = 9000  # everyone equal -> no Martyr despite the floor
+        p.econ_killed = 500
+        p.tech_killed = 400
+        p.resources_floated = 900
+    m.players[0].econ_killed = 6000  # clear Worker Slayer outlier
+    m.players[1].resources_floated = 15000  # clear Banker outlier
+    awards = match_awards(m)
+    assert {a.key for a in awards} == {"worker_slayer", "banker"}
+    assert {a.player.name for a in awards} == {"A0", "A1"}
+
+    # outlier below the absolute floor -> no award
+    m2 = _match(played_at=_at(10))
+    for p in m2.players:
+        p.econ_killed = 10
+    m2.players[0].econ_killed = 800  # huge z, tiny value
+    assert match_awards(m2) == []
+
+    store.ingest(m, hash_replay(b"a1"))
+    counts = store.award_counts(store.merged_handles("h-A0"), 0.7, 120)
+    assert counts == {"worker_slayer": 1}

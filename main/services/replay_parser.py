@@ -214,7 +214,12 @@ class _PlayerTally:
         self.previews: list[str] = []  # pick-phase preview units, in order
         self.preview_times: list[int] = []  # seconds, parallel to previews
         self.last_pick_dialog: int | None = None  # last repick/keep button pressed
-        self.resources_killed: int | None = None  # from the last stats snapshot
+        # From each player's last stats snapshot (None = no snapshot seen):
+        self.resources_killed: int | None = None  # total enemy value destroyed
+        self.econ_killed: int | None = None  # enemy economy value destroyed
+        self.tech_killed: int | None = None  # enemy tech/building value destroyed
+        self.resources_lost: int | None = None  # own value lost
+        self.resources_floated: int | None = None  # unspent bank at the end
         self.units = Counter()  # post-pick-phase army production
         self.hatcheries = 0
         self.auto_turrets = 0
@@ -296,7 +301,12 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
         event_name = type(event).__name__
         if event_name == "PlayerStatsEvent":
             if getattr(event, "player", None) is not None:
-                tallies[event.player.name].resources_killed = event.resources_killed
+                tally = tallies[event.player.name]
+                tally.resources_killed = event.resources_killed
+                tally.econ_killed = event.minerals_killed_economy + event.vespene_killed_economy
+                tally.tech_killed = event.minerals_killed_technology + event.vespene_killed_technology
+                tally.resources_lost = event.resources_lost
+                tally.resources_floated = event.minerals_current + event.vespene_current
             continue
         if event_name == "DialogControlEvent":
             if (
@@ -459,6 +469,10 @@ def parse_replay(path: str) -> MonobattleMatch:
                     repick_used=repick_used,
                     repick_from=repick_from,
                     resources_killed=tally.resources_killed,
+                    econ_killed=tally.econ_killed,
+                    tech_killed=tally.tech_killed,
+                    resources_lost=tally.resources_lost,
+                    resources_floated=tally.resources_floated,
                     unit_counts=dict(tally.units),
                 )
             )

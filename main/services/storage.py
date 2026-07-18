@@ -49,7 +49,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -80,6 +80,10 @@ CREATE TABLE IF NOT EXISTS match_players (
     repick_used INTEGER,
     repick_from TEXT,
     resources_killed INTEGER,
+    econ_killed INTEGER,
+    tech_killed INTEGER,
+    resources_lost INTEGER,
+    resources_floated INTEGER,
     unit_counts TEXT NOT NULL
 );
 
@@ -187,11 +191,22 @@ def _migration_4_resources_killed(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE match_players ADD COLUMN resources_killed INTEGER")
 
 
+_AWARD_STAT_COLUMNS = ("econ_killed", "tech_killed", "resources_lost", "resources_floated")
+
+
+def _migration_5_award_stats(conn: sqlite3.Connection) -> None:
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(match_players)")}
+    for col in _AWARD_STAT_COLUMNS:
+        if col not in cols:
+            conn.execute(f"ALTER TABLE match_players ADD COLUMN {col} INTEGER")
+
+
 _MIGRATIONS = {
     1: _migration_1_content_key,
     2: _migration_2_replay_channels,
     3: _migration_3_repick_from,
     4: _migration_4_resources_killed,
+    5: _migration_5_award_stats,
 }
 
 
@@ -303,8 +318,9 @@ class MatchStore:
     def _insert_players(self, match_id: int, match: MonobattleMatch) -> None:
         self._conn.executemany(
             """INSERT INTO match_players
-               (match_id, name, toon_handle, team, race, pick, repick_used, repick_from, resources_killed, unit_counts)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (match_id, name, toon_handle, team, race, pick, repick_used, repick_from, resources_killed,
+                econ_killed, tech_killed, resources_lost, resources_floated, unit_counts)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     match_id,
@@ -316,6 +332,10 @@ class MatchStore:
                     None if p.repick_used is None else int(p.repick_used),
                     p.repick_from,
                     p.resources_killed,
+                    p.econ_killed,
+                    p.tech_killed,
+                    p.resources_lost,
+                    p.resources_floated,
                     json.dumps(p.unit_counts),
                 )
                 for p in match.players
@@ -686,6 +706,21 @@ class MatchStore:
                 count += 1
         return count
 
+    def award_counts(self, handles: list[str], confidence_gate: float, min_duration: int) -> dict[str, int]:
+        """Career tally of stat awards (award key -> times won) for a merged
+        account group, over rating-eligible games."""
+        from services.awards import match_awards  # local import: awards also imports models
+
+        group = set(handles)
+        counts: dict[str, int] = {}
+        for _match_id, match in self.all_matches():
+            if match.winner_confidence < confidence_gate or match.duration_seconds < min_duration:
+                continue
+            for award in match_awards(match):
+                if award.player.toon_handle in group:
+                    counts[award.key] = counts.get(award.key, 0) + 1
+        return counts
+
     def match_count(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
 
@@ -757,6 +792,10 @@ class MatchStore:
                 repick_used=None if p["repick_used"] is None else bool(p["repick_used"]),
                 repick_from=p["repick_from"],
                 resources_killed=p["resources_killed"],
+                econ_killed=p["econ_killed"],
+                tech_killed=p["tech_killed"],
+                resources_lost=p["resources_lost"],
+                resources_floated=p["resources_floated"],
                 unit_counts=json.loads(p["unit_counts"]),
             )
             for p in player_rows

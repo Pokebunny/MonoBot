@@ -339,3 +339,23 @@ def test_legacy_config_key_folds_into_list():
     cfg = BotConfig.model_validate({"replays_channel_id": 111, "replays_channel_ids": [222]})
     assert cfg.replays_channel_ids == [222, 111]
     assert BotConfig().replays_channel_ids == []
+
+
+def test_h2h_records(store):
+    """A0 vs B0 opposed in game 1 (A0's team won); teamed in game 2 (won)."""
+    store.ingest(_match(played_at=_at(0)), hash_replay(b"h1"))  # A0 team1, B0 team2, team1 wins
+    teamed = ["A0", "B0", "X", "Y", "C", "D", "E", "F"]  # both on team1
+    store.ingest(_match(played_at=_at(10), roster=teamed), hash_replay(b"h2"))
+    short = _match(played_at=_at(20), duration=60, winning_team=2)  # under duration gate
+    store.ingest(short, hash_replay(b"h3"))
+
+    vs, together, opposed = store.h2h_records(["h-A0"], ["h-B0"], 0.7, 120)
+    assert vs == [1, 0]
+    assert together == [1, 0]
+    assert len(opposed) == 1
+    match_id, match = opposed[0]
+    assert {p.name for p in match.players} >= {"A0", "B0"}
+
+    # perspective flips with argument order
+    vs_flipped, _, _ = store.h2h_records(["h-B0"], ["h-A0"], 0.7, 120)
+    assert vs_flipped == [0, 1]

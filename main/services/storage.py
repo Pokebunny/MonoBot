@@ -612,6 +612,32 @@ class MatchStore:
         ).fetchall()
         return [(row["id"], self._build_match(row)) for row in rows]
 
+    def h2h_records(
+        self, group1: list[str], group2: list[str], confidence_gate: float, min_duration: int
+    ) -> tuple[list[int], list[int], list[tuple[int, MonobattleMatch]]]:
+        """Two merged account groups' shared history over decided matches:
+        (wins [g1, g2] when opposed, [wins, losses] when teamed, and the
+        opposed matches oldest-first)."""
+        g1, g2 = set(group1), set(group2)
+        vs, together, opposed = [0, 0], [0, 0], []
+        for match_id, match in self.all_matches():
+            if (
+                match.winning_team is None
+                or match.winner_confidence < confidence_gate
+                or match.duration_seconds < min_duration
+            ):
+                continue
+            p1 = next((p for p in match.players if p.toon_handle in g1), None)
+            p2 = next((p for p in match.players if p.toon_handle in g2), None)
+            if p1 is None or p2 is None:
+                continue
+            if p1.team == p2.team:
+                together[0 if p1.team == match.winning_team else 1] += 1
+            else:
+                vs[0 if p1.team == match.winning_team else 1] += 1
+                opposed.append((match_id, match))
+        return vs, together, opposed
+
     def match_count(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
 

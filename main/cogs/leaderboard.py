@@ -160,6 +160,72 @@ class Leaderboard(commands.Cog):
                 f"*(Note: {n_accounts} different accounts have played as **{player}**; showing the most active.)*"
             )
 
+    def _group_for_name(self, player: str) -> tuple[str, list[str]]:
+        """A display name's most-active account and its full merge group."""
+        candidates = self.store.candidates_for_name(player)
+        if not candidates:
+            return player, []
+        handle, name, _games = candidates[0]
+        return name, self.store.merged_handles(handle)
+
+    def _own_group(self, author) -> list[str]:
+        group: list[str] = []
+        for handle in self.store.handles_for(str(author.id)):
+            for h in self.store.merged_handles(handle):
+                if h not in group:
+                    group.append(h)
+        return group
+
+    @commands.hybrid_command(help="show the most recent match — or a player's; !last <name> [count up to 3]")
+    @commands.cooldown(1, 5, commands.BucketType.channel)
+    async def last(self, ctx, player: str | None = None, count: commands.Range[int, 1, 3] = 1):
+        if player and player.isdigit():  # allow `!last 3` without a name
+            count, player = min(int(player), 3), None
+        matches = self.store.all_matches()  # oldest first
+        if player:
+            name, group = self._group_for_name(player)
+            if not group:
+                await ctx.send(f"No games found for **{player}**.")
+                return
+            handles = set(group)
+            matches = [(i, m) for i, m in matches if any(p.toon_handle in handles for p in m.players)]
+        if not matches:
+            await ctx.send("No matches stored yet.")
+            return
+        # Oldest of the batch first, so the newest game ends up at the bottom.
+        for match_id, match in matches[-count:]:
+            await ctx.send(embed=match_embeds.match_summary(match, match_id))
+
+    @commands.hybrid_command(help="head-to-head between two players — !h2h <name> means you vs them")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def h2h(self, ctx, player1: str, player2: str | None = None):
+        name1, group1 = self._group_for_name(player1)
+        if not group1:
+            await ctx.send(f"No games found for **{player1}**.")
+            return
+        if player2 is None:
+            group2 = self._own_group(ctx.author)
+            if not group2:
+                await ctx.send("Link your SC2 account first (`!link <name>`), or give two names.")
+                return
+            name2 = ctx.author.display_name
+        else:
+            name2, group2 = self._group_for_name(player2)
+            if not group2:
+                await ctx.send(f"No games found for **{player2}**.")
+                return
+        if set(group1) & set(group2):
+            await ctx.send(f"**{name1}** and **{name2}** are the same player.")
+            return
+        vs, together, opposed = self.store.h2h_records(group1, group2, MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
+        if not (sum(vs) + sum(together)):
+            await ctx.send(f"**{name1}** and **{name2}** haven't shared a decided game yet.")
+            return
+        await ctx.send(embed=match_embeds.h2h_summary(name1, name2, vs, together, opposed, group1, group2))
+        if opposed:
+            match_id, match = opposed[-1]  # their most recent meeting, in full
+            await ctx.send(embed=match_embeds.match_summary(match, match_id))
+
     @commands.hybrid_command(help="show win rates by unit pick")
     @commands.cooldown(1, 5, commands.BucketType.channel)
     async def unitstats(self, ctx, min_games: int = 1):

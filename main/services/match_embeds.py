@@ -171,6 +171,48 @@ def player_profile(
     return embed
 
 
+def h2h_summary(
+    name1: str,
+    name2: str,
+    vs: list[int],
+    together: list[int],
+    opposed: list[tuple[int, MonobattleMatch]],
+    group1: list[str],
+    group2: list[str],
+) -> discord.Embed:
+    embed = discord.Embed(title=f"{name1} vs {name2}", color=ACCENT)
+    total_vs = vs[0] + vs[1]
+    if total_vs:
+        embed.add_field(
+            name="Head-to-head",
+            value=f"**{name1}** {vs[0]} – {vs[1]} **{name2}** ({100 * vs[0] / total_vs:.0f}% for {name1})",
+            inline=False,
+        )
+    else:
+        embed.add_field(name="Head-to-head", value="No decided games on opposite teams yet.", inline=False)
+    total_team = together[0] + together[1]
+    if total_team:
+        embed.add_field(
+            name="As teammates",
+            value=f"{together[0]}-{together[1]} together ({100 * together[0] / total_team:.0f}%)",
+            inline=False,
+        )
+    g1, g2 = set(group1), set(group2)
+    lines = []
+    for match_id, match in opposed[-5:]:
+        p1 = next(p for p in match.players if p.toon_handle in g1)
+        p2 = next(p for p in match.players if p.toon_handle in g2)
+        winner = name1 if p1.team == match.winning_team else name2
+        lines.append(
+            f"<t:{int(match.played_at.timestamp())}:d> — **{winner}** won"
+            f" · {p1.pick or '?'} vs {p2.pick or '?'} · #{match_id}"
+        )
+    if lines:
+        embed.add_field(name="Recent meetings", value="\n".join(reversed(lines)), inline=False)
+    embed.set_footer(text="decided games only")
+    return embed
+
+
 def queue_status(players: list[QueuedPlayer], target: int) -> discord.Embed:
     embed = discord.Embed(title="Matchmaking Queue", color=ACCENT)
     if players:

@@ -15,5 +15,17 @@ class PlayerRating(BaseModel):
         return self.mu - 3 * self.sigma
 
     @property
+    def display_rating(self) -> int:
+        """A friendlier MMR-style number for players (the raw mu-3*sigma is
+        opaque). A fresh player lands near 1000; strong regulars reach ~2200+."""
+        return round(self.ordinal * 40 + 1000)
+
+    @property
+    def provisional(self) -> bool:
+        """Still calibrating — few games, so the rating will move a lot. High
+        sigma is exactly the model's 'not sure yet' signal."""
+        return self.sigma > 6.0
+
+    @property
     def games(self) -> int:
         return self.wins + self.losses

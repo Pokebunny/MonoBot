@@ -1,6 +1,8 @@
 import datetime
 
+from models.rating import PlayerRating
 from models.replay import MatchPlayer, MonobattleMatch
+from services.match_embeds import leaderboard_page_count
 from services.rating import RatingBook
 
 
@@ -70,3 +72,33 @@ def test_leaderboard_min_games():
     board = book.leaderboard(min_games=2)
     assert [r.name for r in board][:1] == ["A1"]
     assert all(r.games >= 2 for r in board)
+
+
+def test_ratings_depend_on_play_order_not_input_order():
+    # Ratings are order-dependent by PLAY time; from_matches sorts internally,
+    # so the input/upload order must not change the result.
+    base = datetime.datetime(2026, 7, 1, tzinfo=datetime.timezone.utc)
+    games = []
+    for i, wt in enumerate((1, 1, 2)):
+        g = _match(winning_team=wt).model_copy(update={"played_at": base + datetime.timedelta(days=i)})
+        games.append(g)
+    forward = RatingBook.from_matches(games)
+    reversed_input = RatingBook.from_matches(list(reversed(games)))
+    assert forward.ratings["A1"].mu == reversed_input.ratings["A1"].mu
+    assert forward.ratings["A1"].sigma == reversed_input.ratings["A1"].sigma
+
+
+def test_display_rating_and_provisional():
+    fresh = PlayerRating(handle="h", name="n", mu=25.0, sigma=25 / 3)
+    assert fresh.provisional  # high sigma = still calibrating
+    assert fresh.display_rating == round(fresh.ordinal * 40 + 1000)
+    settled = PlayerRating(handle="h", name="n", mu=30.0, sigma=4.0, wins=20, losses=5)
+    assert not settled.provisional
+    assert settled.display_rating > fresh.display_rating
+
+
+def test_leaderboard_page_count():
+    assert leaderboard_page_count([]) == 1
+    assert leaderboard_page_count(list(range(10))) == 1
+    assert leaderboard_page_count(list(range(11))) == 2
+    assert leaderboard_page_count(list(range(25))) == 3

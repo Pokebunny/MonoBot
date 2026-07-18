@@ -2,6 +2,7 @@
 
 import logging
 
+import discord
 from discord.ext import commands
 from services import match_embeds
 from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, RatingCache
@@ -9,10 +10,46 @@ from services.storage import MatchStore
 
 logger = logging.getLogger(__name__)
 
-# No minimum by default: the conservative rating (mu - 3*sigma) already sinks
-# low-game players, and the embed only shows the top 20. Pass !leaderboard <N>
-# to filter to players with at least N games.
+# No minimum by default: the conservative rating already sinks low-game players
+# and the board paginates. Pass !leaderboard <N> to require at least N games.
 DEFAULT_MIN_GAMES = 1
+
+
+class LeaderboardView(discord.ui.View):
+    """◀ ▶ pagination for the leaderboard. Snapshots the ranking so paging
+    stays consistent even if a game is uploaded mid-browse."""
+
+    def __init__(self, board, min_games: int):
+        super().__init__(timeout=300)
+        self.board = board
+        self.min_games = min_games
+        self.page = 0
+        self.pages = match_embeds.leaderboard_page_count(board)
+        self._sync()
+
+    @property
+    def multipage(self) -> bool:
+        return self.pages > 1
+
+    def _sync(self):
+        self.prev.disabled = self.page <= 0
+        self.next.disabled = self.page >= self.pages - 1
+
+    async def _show(self, interaction: discord.Interaction):
+        self._sync()
+        await interaction.response.edit_message(
+            embed=match_embeds.leaderboard(self.board, self.page, self.min_games), view=self
+        )
+
+    @discord.ui.button(emoji="◀", style=discord.ButtonStyle.secondary)
+    async def prev(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = max(0, self.page - 1)
+        await self._show(interaction)
+
+    @discord.ui.button(emoji="▶", style=discord.ButtonStyle.secondary)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = min(self.pages - 1, self.page + 1)
+        await self._show(interaction)
 
 
 class Leaderboard(commands.Cog):
@@ -29,7 +66,8 @@ class Leaderboard(commands.Cog):
     @commands.cooldown(1, 5, commands.BucketType.channel)
     async def leaderboard(self, ctx, min_games: int = DEFAULT_MIN_GAMES):
         board = self.ratings.book().leaderboard(min_games=min_games)
-        await ctx.send(embed=match_embeds.leaderboard(board, min_games))
+        view = LeaderboardView(board, min_games)
+        await ctx.send(embed=match_embeds.leaderboard(board, 0, min_games), view=view if view.multipage else None)
 
     def _resolve(self, player: str):
         """Resolve a display name (current or former) to (rating, rank, board

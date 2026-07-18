@@ -85,30 +85,54 @@ def parse_failure(file_name: str, error: str) -> discord.Embed:
     return embed
 
 
-def leaderboard(ratings: list[PlayerRating], min_games: int, limit: int = 20) -> discord.Embed:
+LEADERBOARD_PAGE_SIZE = 10
+
+
+def leaderboard_page_count(ratings: list[PlayerRating]) -> int:
+    return max(1, (len(ratings) + LEADERBOARD_PAGE_SIZE - 1) // LEADERBOARD_PAGE_SIZE)
+
+
+def leaderboard(ratings: list[PlayerRating], page: int = 0, min_games: int = 1) -> discord.Embed:
+    pages = leaderboard_page_count(ratings)
+    page = max(0, min(page, pages - 1))
+    start = page * LEADERBOARD_PAGE_SIZE
     lines = []
-    for i, r in enumerate(ratings[:limit], 1):
-        lines.append(f"`{i:>2}` **{r.name}** — {r.ordinal:.1f} ({r.wins}W-{r.losses}L, {100 * r.wins / r.games:.0f}%)")
+    for i, r in enumerate(ratings[start : start + LEADERBOARD_PAGE_SIZE], start + 1):
+        prov = " ·" if r.provisional else ""
+        lines.append(
+            f"`{i:>2}` **{r.name}** — **{r.display_rating}**{prov} ({r.wins}-{r.losses}, {100 * r.wins / r.games:.0f}%)"
+        )
     embed = discord.Embed(title="Monobattle Leaderboard", color=ACCENT)
     embed.description = "\n".join(lines) or "*No rated players yet.*"
-    prefix = f"min {min_games} games · " if min_games > 1 else ""
-    embed.set_footer(text=f"{prefix}rating = conservative skill estimate (μ−3σ)")
+    note = f"min {min_games} games · " if min_games > 1 else ""
+    tail = "  ·  = still provisional (few games)"
+    embed.set_footer(text=f"{note}Page {page + 1}/{pages} · higher rating = stronger{tail}")
     return embed
+
+
+def _rating_value(rating: PlayerRating) -> str:
+    return f"**{rating.display_rating}**" + ("  *(provisional)*" if rating.provisional else "")
+
+
+def _rating_footer(rating: PlayerRating) -> str:
+    if rating.provisional:
+        return "Provisional — rating will settle as more games come in."
+    return "Rating rises with wins; how much depends on the opponents' strength."
 
 
 def player_rank(rating: PlayerRating, rank: int, total_ranked: int, aliases: list[str] | None = None) -> discord.Embed:
     embed = discord.Embed(title=rating.name, color=ACCENT)
-    embed.add_field(name="Rating", value=f"{rating.ordinal:.1f}", inline=True)
+    embed.add_field(name="Rating", value=_rating_value(rating), inline=True)
     embed.add_field(name="Rank", value=f"#{rank} of {total_ranked}", inline=True)
     embed.add_field(
         name="Record",
-        value=f"{rating.wins}W-{rating.losses}L ({100 * rating.wins / rating.games:.0f}%)",
+        value=f"{rating.wins}-{rating.losses} ({100 * rating.wins / rating.games:.0f}%)",
         inline=True,
     )
     others = [a for a in (aliases or []) if a.lower() != rating.name.lower()]
     if others:
         embed.add_field(name="Also played as", value=", ".join(others[:12]), inline=False)
-    embed.set_footer(text=f"μ={rating.mu:.1f} σ={rating.sigma:.1f}")
+    embed.set_footer(text=_rating_footer(rating))
     return embed
 
 
@@ -131,7 +155,7 @@ def player_profile(
     unit_records: dict[str, list[int]],
 ) -> discord.Embed:
     embed = discord.Embed(title=f"{rating.name} — profile", color=ACCENT)
-    embed.add_field(name="Rating", value=f"{rating.ordinal:.1f}", inline=True)
+    embed.add_field(name="Rating", value=_rating_value(rating), inline=True)
     embed.add_field(name="Rank", value=f"#{rank} of {total_ranked}", inline=True)
     embed.add_field(
         name="Record",
@@ -143,7 +167,7 @@ def player_profile(
     others = [a for a in aliases if a.lower() != rating.name.lower()]
     if others:
         embed.add_field(name="Also played as", value=", ".join(others[:12]), inline=False)
-    embed.set_footer(text=f"μ={rating.mu:.1f} σ={rating.sigma:.1f} · decided games only")
+    embed.set_footer(text=f"{_rating_footer(rating)} · decided games only")
     return embed
 
 

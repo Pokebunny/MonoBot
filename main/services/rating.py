@@ -38,22 +38,32 @@ def predict_win_probability(team1: list[tuple[float, float]], team2: list[tuple[
 class RatingBook:
     """All player ratings, updated match by match (in chronological order)."""
 
-    def __init__(self):
+    def __init__(self, merge_map: dict[str, str] | None = None):
         self.ratings: dict[str, PlayerRating] = {}
+        # handle -> canonical handle, so one person's linked accounts share a
+        # single rating (see MatchStore.merge_map).
+        self._merge = merge_map or {}
         self.rated_matches = 0
         self.skipped_matches = 0
 
     @classmethod
-    def from_matches(cls, matches) -> "RatingBook":
+    def from_matches(cls, matches, merge_map: dict[str, str] | None = None) -> "RatingBook":
         """Build a book by replaying matches in chronological order."""
-        book = cls()
+        book = cls(merge_map)
         for match in sorted(matches, key=lambda m: m.played_at):
             book.rate_match(match)
         return book
 
+    def canonical(self, handle: str) -> str:
+        return self._merge.get(handle, handle)
+
+    def rating_for(self, handle: str) -> PlayerRating | None:
+        """Rating for an account, following any account merge."""
+        return self.ratings.get(self.canonical(handle))
+
     def _get(self, handle: str, name: str) -> PlayerRating:
-        """Rating for an account, keyed by its unique handle. The display name
-        is refreshed to the latest one seen (players can rename)."""
+        """Rating for a (canonical) account. The display name is refreshed to
+        the latest one seen (players can rename)."""
         if handle not in self.ratings:
             default = _model.rating(name=handle)
             self.ratings[handle] = PlayerRating(handle=handle, name=name, mu=default.mu, sigma=default.sigma)
@@ -82,7 +92,7 @@ class RatingBook:
             return False
 
         team_numbers = sorted({p.team for p in match.players})
-        teams = [[self._get(p.toon_handle, p.name) for p in match.team(n)] for n in team_numbers]
+        teams = [[self._get(self.canonical(p.toon_handle), p.name) for p in match.team(n)] for n in team_numbers]
         os_teams = [[_model.create_rating([r.mu, r.sigma], name=r.handle) for r in team] for team in teams]
         # ranks: lower is better; winner gets 0.
         ranks = [0 if n == match.winning_team else 1 for n in team_numbers]
@@ -119,6 +129,7 @@ class RatingCache:
 
     def book(self) -> RatingBook:
         if self._book is None or self._version != self._store.change_count:
-            self._book = RatingBook.from_matches(m for _, m in self._store.all_matches())
+            merge_map = self._store.merge_map() if hasattr(self._store, "merge_map") else None
+            self._book = RatingBook.from_matches((m for _, m in self._store.all_matches()), merge_map)
             self._version = self._store.change_count
         return self._book

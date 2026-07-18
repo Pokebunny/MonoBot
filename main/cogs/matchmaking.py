@@ -58,7 +58,7 @@ class Matchmaking(commands.Cog):
         book = self.ratings.book()
         best = None
         for handle in self.store.handles_for(str(user.id)):
-            rating = book.ratings.get(handle)
+            rating = book.rating_for(handle)  # follows account merges
             if rating is not None and (best is None or rating.games > best.games):
                 best = rating
         if best is not None:

@@ -195,6 +195,55 @@ def test_candidates_and_bind_specific(store):
     assert not store.bind_specific("disc2", "Rain", "H-rain1")
 
 
+def test_add_account_merges_same_named_accounts(store):
+    # Cross-region: two accounts share the display name "Rain".
+    r1 = _match(
+        ["Rain", "A2", "A3", "A4", "B1", "B2", "B3", "B4"],
+        winning_team=1,
+        handles=["H-rain1", "H-A2", "H-A3", "H-A4", "H-B1", "H-B2", "H-B3", "H-B4"],
+    )
+    r2 = _match(
+        ["Rain", "C2", "C3", "C4", "D1", "D2", "D3", "D4"],
+        winning_team=1,
+        handles=["H-rain2", "H-C2", "H-C3", "H-C4", "H-D1", "H-D2", "H-D3", "H-D4"],
+    )
+    r2 = r2.model_copy(update={"played_at": r2.played_at + datetime.timedelta(minutes=30)})
+    store.ingest(r1, hash_replay(b"r1"))
+    store.ingest(r2, hash_replay(b"r2"))
+    store.bind_specific("disc1", "Rain", "H-rain1")  # first account via picker
+    assert store.add_account("disc1", "H-rain2")  # second, same name, via !addaccount
+    assert set(store.handles_for("disc1")) == {"H-rain1", "H-rain2"}
+    assert store.merge_map()["H-rain1"] == store.merge_map()["H-rain2"]
+    assert not store.add_account("disc2", "H-rain2")  # can't grab someone's account
+
+
+def test_linked_accounts_merge_into_one_rating(store):
+    from services.rating import RatingBook
+
+    # One person plays two accounts (different names) in two games.
+    g1 = _match(
+        ["MainAcct", "A2", "A3", "A4", "B1", "B2", "B3", "B4"],
+        winning_team=1,
+        handles=["H-main", "H-A2", "H-A3", "H-A4", "H-B1", "H-B2", "H-B3", "H-B4"],
+    )
+    g2 = _match(
+        ["SmurfAcct", "C2", "C3", "C4", "D1", "D2", "D3", "D4"],
+        winning_team=1,
+        handles=["H-smurf", "H-C2", "H-C3", "H-C4", "H-D1", "H-D2", "H-D3", "H-D4"],
+    )
+    g2 = g2.model_copy(update={"played_at": g2.played_at + datetime.timedelta(minutes=30)})
+    store.ingest(g1, hash_replay(b"g1"))
+    store.ingest(g2, hash_replay(b"g2"))
+    store.link_player("disc1", "MainAcct")
+    store.link_player("disc1", "SmurfAcct")
+    assert set(store.handles_for("disc1")) == {"H-main", "H-smurf"}
+
+    book = RatingBook.from_matches((m for _, m in store.all_matches()), store.merge_map())
+    # both accounts' games fall under a single rating
+    assert book.rating_for("H-main") is book.rating_for("H-smurf")
+    assert book.rating_for("H-main").wins == 2
+
+
 def test_same_name_different_accounts_dont_merge(store):
     from services.rating import RatingBook
 

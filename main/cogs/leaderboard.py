@@ -74,7 +74,12 @@ class Leaderboard(commands.Cog):
         size, number of same-named accounts), or None if no rated games.
         Names aren't unique, so pick the most-active matching account."""
         book = self.ratings.book()
-        rated = [book.ratings[h] for h in self.store.handles_for_name(player) if h in book.ratings]
+        rated, seen = [], set()
+        for h in self.store.handles_for_name(player):
+            r = book.rating_for(h)  # follows account merges
+            if r is not None and r.handle not in seen:
+                seen.add(r.handle)
+                rated.append(r)
         if not rated:
             return None
         rated.sort(key=lambda r: r.games, reverse=True)

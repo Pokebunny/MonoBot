@@ -16,12 +16,14 @@ logger = logging.getLogger(__name__)
 
 
 class _AccountSelect(discord.ui.Select):
-    """Dropdown to pick which account a shared name belongs to."""
+    """Dropdown to pick which account a shared name belongs to. In add_mode it
+    attaches an ADDITIONAL account to the user (multi-account merge)."""
 
-    def __init__(self, store: MatchStore, discord_id: str, sc2_name: str, candidates):
+    def __init__(self, store: MatchStore, discord_id: str, sc2_name: str, candidates, add_mode: bool = False):
         self.store = store
         self.discord_id = discord_id
         self.sc2_name = sc2_name
+        self.add_mode = add_mode
         options = [
             discord.SelectOption(label=name[:100], description=f"{games} games · …{handle[-6:]}", value=handle)
             for handle, name, games in candidates[:25]
@@ -32,19 +34,27 @@ class _AccountSelect(discord.ui.Select):
         if str(interaction.user.id) != self.discord_id:
             await interaction.response.send_message("Only the person linking can choose here.", ephemeral=True)
             return
-        ok = self.store.bind_specific(self.discord_id, self.sc2_name, self.values[0])
-        msg = (
-            f"Linked **{self.sc2_name}** to your account."
-            if ok
-            else "That account is already linked to someone else — ask an admin."
-        )
+        if self.add_mode:
+            ok = self.store.add_account(self.discord_id, self.values[0])
+            msg = (
+                "Added that account — all your accounts now share one rating."
+                if ok
+                else "That account is already linked to someone else — ask an admin."
+            )
+        else:
+            ok = self.store.bind_specific(self.discord_id, self.sc2_name, self.values[0])
+            msg = (
+                f"Linked **{self.sc2_name}** to your account."
+                if ok
+                else "That account is already linked to someone else — ask an admin."
+            )
         await interaction.response.edit_message(content=msg, embed=None, view=None)
 
 
 class DisambiguationView(discord.ui.View):
-    def __init__(self, store: MatchStore, discord_id: str, sc2_name: str, candidates):
+    def __init__(self, store: MatchStore, discord_id: str, sc2_name: str, candidates, add_mode: bool = False):
         super().__init__(timeout=120)
-        self.add_item(_AccountSelect(store, discord_id, sc2_name, candidates))
+        self.add_item(_AccountSelect(store, discord_id, sc2_name, candidates, add_mode))
 
 
 class Identity(commands.Cog):
@@ -104,6 +114,24 @@ class Identity(commands.Cog):
         if len(names) > 1:
             embed.set_footer(text="Your names: " + ", ".join(names))
         await ctx.send(embed=embed)
+
+    @commands.hybrid_command(help="link an additional SC2 account to yourself (e.g. a different region)")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def addaccount(self, ctx, *, sc2_name: str):
+        sc2_name = sc2_name.strip()
+        candidates = self.store.candidates_for_name(sc2_name)
+        if not candidates:
+            await ctx.send(f"No account has played as **{sc2_name}** in the match history yet.")
+            return
+        embed = discord.Embed(
+            title="Add which account?",
+            description=f"Pick the **{sc2_name}** account to add to your profile — all your accounts share one rating.",
+            color=ACCENT,
+        )
+        await ctx.send(
+            embed=embed,
+            view=DisambiguationView(self.store, str(ctx.author.id), sc2_name, candidates, add_mode=True),
+        )
 
     @commands.hybrid_command(help="unlink one of your SC2 names")
     @commands.cooldown(1, 3, commands.BucketType.user)

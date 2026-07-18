@@ -317,6 +317,25 @@ class MatchStore:
         self.change_count += 1
         return True
 
+    def add_account(self, discord_id: str, handle: str) -> bool:
+        """Bind an ADDITIONAL account (by handle) to a user, e.g. a cross-region
+        copy that shares a display name with one they've already linked. Uses
+        the handle as a placeholder claim name to avoid the one-row-per-name
+        constraint. False if the account is already linked to someone else."""
+        rows = self._conn.execute("SELECT discord_id FROM player_links WHERE toon_handle = ?", (handle,)).fetchall()
+        if rows:
+            return all(r["discord_id"] == discord_id for r in rows)
+        try:
+            self._conn.execute(
+                "INSERT INTO player_links (discord_id, sc2_name, toon_handle) VALUES (?, ?, ?)",
+                (discord_id, handle, handle),
+            )
+        except sqlite3.IntegrityError:
+            return False
+        self._conn.commit()
+        self.change_count += 1
+        return True
+
     def aliases_for_handle(self, toon_handle: str) -> list[str]:
         """Every display name an account has played under, most recent first."""
         rows = self._conn.execute(
@@ -380,6 +399,21 @@ class MatchStore:
             (discord_id,),
         ).fetchall()
         return [r["toon_handle"] for r in rows]
+
+    def merge_map(self) -> dict[str, str]:
+        """Handles linked to the same Discord user collapse to one canonical
+        handle, so a person's multiple accounts (cross-region, alt) share a
+        single rating. Solo accounts are omitted (they map to themselves)."""
+        groups: dict[str, list[str]] = {}
+        for r in self._conn.execute("SELECT discord_id, toon_handle FROM player_links WHERE toon_handle IS NOT NULL"):
+            groups.setdefault(r["discord_id"], []).append(r["toon_handle"])
+        mapping: dict[str, str] = {}
+        for handles in groups.values():
+            if len(handles) > 1:
+                canon = min(handles)
+                for h in handles:
+                    mapping[h] = canon
+        return mapping
 
     def pending_names_for(self, discord_id: str) -> list[str]:
         """Names this user has claimed that aren't bound to an account yet

@@ -125,17 +125,15 @@ def leaderboard(
     start = page * LEADERBOARD_PAGE_SIZE
     lines = []
     for i, r in enumerate(ratings[start : start + LEADERBOARD_PAGE_SIZE], start + 1):
-        prov = " ·" if r.provisional else ""
         shown = display_names.get(r.handle, r.name)
         lines.append(
-            f"`{i:>2}` **{shown}** — **{r.display_rating}**{prov} ({r.wins}-{r.losses}, {100 * r.wins / r.games:.0f}%)"
+            f"`{i:>2}` **{shown}** — **{r.display_rating}** ({r.wins}-{r.losses}, {100 * r.wins / r.games:.0f}%)"
         )
     embed = discord.Embed(title="Monobattle Leaderboard", color=ACCENT)
     embed.description = "\n".join(lines) or "*No rated players yet.*"
     note = f"min {min_games} games · " if min_games > 1 else ""
     more = f" · {hidden} more below the minimum (!leaderboard 1 shows all)" if hidden else ""
-    tail = "  ·  = still provisional (few games)"
-    embed.set_footer(text=f"{note}Page {page + 1}/{pages} · higher rating = stronger{tail}{more}")
+    embed.set_footer(text=f"{note}Page {page + 1}/{pages}{more}")
     return embed
 
 

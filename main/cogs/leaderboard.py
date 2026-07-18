@@ -125,7 +125,7 @@ class Leaderboard(commands.Cog):
         self.store: MatchStore = client.match_store
         self.ratings: RatingCache = client.rating_cache
 
-    @commands.hybrid_command(help="show the rating leaderboard")
+    @commands.hybrid_command(aliases=["ladder"], help="show the rating leaderboard")
     @commands.cooldown(1, 5, commands.BucketType.channel)
     async def leaderboard(self, ctx, min_games: int = DEFAULT_MIN_GAMES):
         everyone = self.ratings.book().leaderboard(min_games=1)

@@ -283,6 +283,40 @@ class MatchStore:
         ).fetchall()
         return [r["toon_handle"] for r in rows]
 
+    def candidates_for_name(self, sc2_name: str) -> list[tuple[str, str, int]]:
+        """Accounts that have played under a name — (handle, current name,
+        game count), most-active first. Used to disambiguate a shared name."""
+        rows = self._conn.execute(
+            """SELECT toon_handle AS h, COUNT(*) AS games
+               FROM match_players WHERE name = ? COLLATE NOCASE AND toon_handle != ''
+               GROUP BY toon_handle ORDER BY games DESC""",
+            (sc2_name,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            aliases = self.aliases_for_handle(r["h"])
+            out.append((r["h"], aliases[0] if aliases else r["h"], r["games"]))
+        return out
+
+    def bind_specific(self, discord_id: str, sc2_name: str, handle: str) -> bool:
+        """Claim a name and bind it to a specific chosen account (resolves an
+        ambiguous link). False if the name or account is already taken."""
+        owner = self.discord_id_for(sc2_name)
+        if owner is not None and owner != discord_id:
+            return False
+        if owner is None:
+            self._conn.execute("INSERT INTO player_links (discord_id, sc2_name) VALUES (?, ?)", (discord_id, sc2_name))
+        try:
+            self._conn.execute(
+                "UPDATE player_links SET toon_handle = ? WHERE sc2_name = ? COLLATE NOCASE", (handle, sc2_name)
+            )
+        except sqlite3.IntegrityError:
+            self._conn.commit()
+            return False  # that account is already bound to someone else
+        self._conn.commit()
+        self.change_count += 1
+        return True
+
     def aliases_for_handle(self, toon_handle: str) -> list[str]:
         """Every display name an account has played under, most recent first."""
         rows = self._conn.execute(

@@ -15,6 +15,38 @@ from services.storage import MatchStore
 logger = logging.getLogger(__name__)
 
 
+class _AccountSelect(discord.ui.Select):
+    """Dropdown to pick which account a shared name belongs to."""
+
+    def __init__(self, store: MatchStore, discord_id: str, sc2_name: str, candidates):
+        self.store = store
+        self.discord_id = discord_id
+        self.sc2_name = sc2_name
+        options = [
+            discord.SelectOption(label=name[:100], description=f"{games} games · …{handle[-6:]}", value=handle)
+            for handle, name, games in candidates[:25]
+        ]
+        super().__init__(placeholder="Which account is yours?", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if str(interaction.user.id) != self.discord_id:
+            await interaction.response.send_message("Only the person linking can choose here.", ephemeral=True)
+            return
+        ok = self.store.bind_specific(self.discord_id, self.sc2_name, self.values[0])
+        msg = (
+            f"Linked **{self.sc2_name}** to your account."
+            if ok
+            else "That account is already linked to someone else — ask an admin."
+        )
+        await interaction.response.edit_message(content=msg, embed=None, view=None)
+
+
+class DisambiguationView(discord.ui.View):
+    def __init__(self, store: MatchStore, discord_id: str, sc2_name: str, candidates):
+        super().__init__(timeout=120)
+        self.add_item(_AccountSelect(store, discord_id, sc2_name, candidates))
+
+
 class Identity(commands.Cog):
     def __init__(self, client):
         self.client = client
@@ -42,14 +74,17 @@ class Identity(commands.Cog):
             return
 
         if result.status == "ambiguous":
+            candidates = self.store.candidates_for_name(sc2_name)
             embed = discord.Embed(
-                title="Name needs disambiguation",
-                description=f"**{result.candidates} different accounts** have played as **{sc2_name}**, "
-                "so I can't tell which one is you. Your claim is saved, but an admin will need to "
-                "bind it to the right account.",
+                title="Which account is yours?",
+                description=f"**{result.candidates} different accounts** have played as **{sc2_name}**. "
+                "Pick yours from the menu below (by game count / account id).",
                 color=WARNING,
             )
-            await ctx.send(embed=embed)
+            await ctx.send(
+                embed=embed,
+                view=DisambiguationView(self.store, str(ctx.author.id), sc2_name, candidates),
+            )
             return
 
         embed = discord.Embed(

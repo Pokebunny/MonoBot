@@ -8,6 +8,7 @@ a game if one of their linked SC2 names is in it.
 import logging
 
 import discord
+from checks import is_bot_admin
 from discord.ext import commands
 from services.match_embeds import ACCENT, WARNING
 from services.storage import MatchStore
@@ -194,7 +195,7 @@ class Identity(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(help="link another member to an SC2 account (mods)")
-    @commands.has_permissions(manage_guild=True)
+    @is_bot_admin()
     async def linkuser(self, ctx, member: discord.Member, *, sc2_name: str):
         sc2_name = sc2_name.strip()
         discord_id = str(member.id)
@@ -213,7 +214,7 @@ class Identity(commands.Cog):
         await ctx.send(f"Linked **{member.display_name}** to **{sc2_name}**.{extra}")
 
     @commands.hybrid_command(help="declare two SC2 accounts the same player (mods)")
-    @commands.has_permissions(manage_guild=True)
+    @is_bot_admin()
     async def mergeaccounts(self, ctx, name1: str, name2: str):
         c1 = self.store.candidates_for_name(name1)
         c2 = self.store.candidates_for_name(name2)
@@ -231,7 +232,7 @@ class Identity(commands.Cog):
         await ctx.send(f"Merged **{name1}** and **{name2}** — their games now share one rating.{extra}")
 
     @commands.hybrid_command(help="undo an account merge (mods)")
-    @commands.has_permissions(manage_guild=True)
+    @is_bot_admin()
     async def unmergeaccounts(self, ctx, name1: str, name2: str):
         c1 = self.store.candidates_for_name(name1)
         c2 = self.store.candidates_for_name(name2)

@@ -8,6 +8,7 @@ runs interaction callbacks on one event-loop thread, so no locking is needed.
 import logging
 
 import discord
+from checks import is_bot_admin
 from discord.ext import commands
 from models.matchmaking import QueuedPlayer
 from resources.config import CONFIG
@@ -116,7 +117,7 @@ class Matchmaking(commands.Cog):
         await ctx.send(f"Removed **{member.display_name}** from the queue.")
 
     @commands.hybrid_command(help="clear the matchmaking queue (mods)")
-    @commands.has_permissions(manage_messages=True)
+    @is_bot_admin()
     async def clearqueue(self, ctx):
         self.queue.clear()
         await self._refresh_message()

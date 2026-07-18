@@ -5,6 +5,8 @@ The community DB drives rankings and matchmaking off a small, clean set of
 games. pubs.db instead keeps everything, so aggregate stats (unit win rates)
 draw on the much larger sample. Pub games don't move community ratings.
 
+Searches the folder recursively (subfolders included).
+
 Usage (from repo root):
     uv run python scripts/split_pubs.py "<replay folder>" [name filter]
 
@@ -33,7 +35,9 @@ def main() -> None:
 
     pubs = MatchStore(PUBS_DB)
     paths = sorted(
-        p for p in glob.glob(os.path.join(folder, "*.SC2Replay")) if name_filter in os.path.basename(p).lower()
+        p
+        for p in glob.glob(os.path.join(folder, "**", "*.SC2Replay"), recursive=True)
+        if name_filter in os.path.basename(p).lower()
     )
     counts: Counter = Counter()
     for i, path in enumerate(paths):

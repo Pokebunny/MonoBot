@@ -32,14 +32,21 @@ class LeaderboardView(discord.ui.View):
         return self.pages > 1
 
     def _sync(self):
-        self.prev.disabled = self.page <= 0
-        self.next.disabled = self.page >= self.pages - 1
+        at_start = self.page <= 0
+        at_end = self.page >= self.pages - 1
+        self.first.disabled = self.prev.disabled = at_start
+        self.next.disabled = self.last.disabled = at_end
 
     async def _show(self, interaction: discord.Interaction):
         self._sync()
         await interaction.response.edit_message(
             embed=match_embeds.leaderboard(self.board, self.page, self.min_games), view=self
         )
+
+    @discord.ui.button(emoji="⏮", style=discord.ButtonStyle.secondary)
+    async def first(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = 0
+        await self._show(interaction)
 
     @discord.ui.button(emoji="◀", style=discord.ButtonStyle.secondary)
     async def prev(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -49,6 +56,11 @@ class LeaderboardView(discord.ui.View):
     @discord.ui.button(emoji="▶", style=discord.ButtonStyle.secondary)
     async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = min(self.pages - 1, self.page + 1)
+        await self._show(interaction)
+
+    @discord.ui.button(emoji="⏭", style=discord.ButtonStyle.secondary)
+    async def last(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = self.pages - 1
         await self._show(interaction)
 
 

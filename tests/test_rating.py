@@ -99,6 +99,6 @@ def test_display_rating_and_provisional():
 
 def test_leaderboard_page_count():
     assert leaderboard_page_count([]) == 1
-    assert leaderboard_page_count(list(range(10))) == 1
-    assert leaderboard_page_count(list(range(11))) == 2
-    assert leaderboard_page_count(list(range(25))) == 3
+    assert leaderboard_page_count(list(range(20))) == 1
+    assert leaderboard_page_count(list(range(21))) == 2
+    assert leaderboard_page_count(list(range(45))) == 3

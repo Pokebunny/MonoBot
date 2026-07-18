@@ -85,7 +85,7 @@ def parse_failure(file_name: str, error: str) -> discord.Embed:
     return embed
 
 
-LEADERBOARD_PAGE_SIZE = 10
+LEADERBOARD_PAGE_SIZE = 20
 
 
 def leaderboard_page_count(ratings: list[PlayerRating]) -> int:

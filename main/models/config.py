@@ -9,3 +9,7 @@ class BotConfig(BaseModel):
     # Role pinged when a matchmaking queue opens (e.g. a @monobattlers role).
     # None means no ping.
     queue_ping_role_id: int | None = None
+
+    # Discord user IDs allowed to run bot-admin commands (merges, linking other
+    # members, clearing the queue) regardless of server permissions.
+    admin_user_ids: list[int] = []

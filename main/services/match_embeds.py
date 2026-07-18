@@ -109,15 +109,24 @@ def leaderboard_page_count(ratings: list[PlayerRating]) -> int:
     return max(1, (len(ratings) + LEADERBOARD_PAGE_SIZE - 1) // LEADERBOARD_PAGE_SIZE)
 
 
-def leaderboard(ratings: list[PlayerRating], page: int = 0, min_games: int = 1) -> discord.Embed:
+def leaderboard(
+    ratings: list[PlayerRating],
+    page: int = 0,
+    min_games: int = 1,
+    display_names: dict[str, str] | None = None,
+) -> discord.Embed:
+    """display_names maps handle -> shown name (the linked member's Discord
+    name); unmapped handles fall back to the account's SC2 name."""
+    display_names = display_names or {}
     pages = leaderboard_page_count(ratings)
     page = max(0, min(page, pages - 1))
     start = page * LEADERBOARD_PAGE_SIZE
     lines = []
     for i, r in enumerate(ratings[start : start + LEADERBOARD_PAGE_SIZE], start + 1):
         prov = " ·" if r.provisional else ""
+        shown = display_names.get(r.handle, r.name)
         lines.append(
-            f"`{i:>2}` **{r.name}** — **{r.display_rating}**{prov} ({r.wins}-{r.losses}, {100 * r.wins / r.games:.0f}%)"
+            f"`{i:>2}` **{shown}** — **{r.display_rating}**{prov} ({r.wins}-{r.losses}, {100 * r.wins / r.games:.0f}%)"
         )
     embed = discord.Embed(title="Monobattle Leaderboard", color=ACCENT)
     embed.description = "\n".join(lines) or "*No rated players yet.*"
@@ -137,8 +146,15 @@ def _rating_footer(rating: PlayerRating) -> str:
     return "Rating rises with wins; how much depends on the opponents' strength."
 
 
-def player_rank(rating: PlayerRating, rank: int, total_ranked: int, aliases: list[str] | None = None) -> discord.Embed:
-    embed = discord.Embed(title=rating.name, color=ACCENT)
+def player_rank(
+    rating: PlayerRating,
+    rank: int,
+    total_ranked: int,
+    aliases: list[str] | None = None,
+    display_name: str | None = None,
+) -> discord.Embed:
+    shown = display_name or rating.name
+    embed = discord.Embed(title=shown, color=ACCENT)
     embed.add_field(name="Rating", value=_rating_value(rating), inline=True)
     embed.add_field(name="Rank", value=f"#{rank} of {total_ranked}", inline=True)
     embed.add_field(
@@ -146,9 +162,9 @@ def player_rank(rating: PlayerRating, rank: int, total_ranked: int, aliases: lis
         value=f"{rating.wins}-{rating.losses} ({100 * rating.wins / rating.games:.0f}%)",
         inline=True,
     )
-    others = [a for a in (aliases or []) if a.lower() != rating.name.lower()]
+    others = [a for a in (aliases or []) if a.lower() != shown.lower()]
     if others:
-        embed.add_field(name="Also played as", value=", ".join(others[:12]), inline=False)
+        embed.add_field(name="Plays as", value=", ".join(others[:12]), inline=False)
     embed.set_footer(text=_rating_footer(rating))
     return embed
 
@@ -172,8 +188,10 @@ def player_profile(
     unit_records: dict[str, list[int]],
     mvp_count: int = 0,
     award_counts: dict[str, int] | None = None,
+    display_name: str | None = None,
 ) -> discord.Embed:
-    embed = discord.Embed(title=f"{rating.name} — profile", color=ACCENT)
+    shown = display_name or rating.name
+    embed = discord.Embed(title=f"{shown} — profile", color=ACCENT)
     embed.add_field(name="Rating", value=_rating_value(rating), inline=True)
     embed.add_field(name="Rank", value=f"#{rank} of {total_ranked}", inline=True)
     record = f"{rating.wins}-{rating.losses} ({100 * rating.wins / rating.games:.0f}%)"
@@ -186,9 +204,9 @@ def player_profile(
             embed.add_field(name="Awards", value="  ·  ".join(parts), inline=False)
     embed.add_field(name="Races", value=_record_lines(race_records, 3), inline=True)
     embed.add_field(name="Most-played units", value=_record_lines(unit_records, 10), inline=True)
-    others = [a for a in aliases if a.lower() != rating.name.lower()]
+    others = [a for a in aliases if a.lower() != shown.lower()]
     if others:
-        embed.add_field(name="Also played as", value=", ".join(others[:12]), inline=False)
+        embed.add_field(name="Plays as", value=", ".join(others[:12]), inline=False)
     embed.set_footer(text=f"{_rating_footer(rating)} · decided games only")
     return embed
 

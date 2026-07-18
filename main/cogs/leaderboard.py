@@ -20,10 +20,11 @@ class LeaderboardView(ExpiringView):
     """◀ ▶ pagination for the leaderboard. Snapshots the ranking so paging
     stays consistent even if a game is uploaded mid-browse."""
 
-    def __init__(self, board, min_games: int):
+    def __init__(self, board, min_games: int, display_names: dict[str, str] | None = None):
         super().__init__()
         self.board = board
         self.min_games = min_games
+        self.display_names = display_names
         self.page = 0
         self.pages = match_embeds.leaderboard_page_count(board)
         self._sync()
@@ -41,7 +42,7 @@ class LeaderboardView(ExpiringView):
     async def _show(self, interaction: discord.Interaction):
         self._sync()
         await interaction.response.edit_message(
-            embed=match_embeds.leaderboard(self.board, self.page, self.min_games), view=self
+            embed=match_embeds.leaderboard(self.board, self.page, self.min_games, self.display_names), view=self
         )
 
     @discord.ui.button(emoji="⏮", style=discord.ButtonStyle.secondary)
@@ -126,11 +127,24 @@ class Leaderboard(commands.Cog):
     @commands.cooldown(1, 5, commands.BucketType.channel)
     async def leaderboard(self, ctx, min_games: int = DEFAULT_MIN_GAMES):
         board = self.ratings.book().leaderboard(min_games=min_games)
-        view = LeaderboardView(board, min_games)
+        names = {r.handle: self._shown_name(ctx, r.handle, r.name) for r in board}
+        view = LeaderboardView(board, min_games, names)
         message = await ctx.send(
-            embed=match_embeds.leaderboard(board, 0, min_games), view=view if view.multipage else None
+            embed=match_embeds.leaderboard(board, 0, min_games, names), view=view if view.multipage else None
         )
         view.message = message
+
+    def _shown_name(self, ctx, handles, fallback: str) -> str:
+        """The Discord display name of whoever these accounts are linked to —
+        the member is the source of truth for identity — else the SC2 name."""
+        for handle in handles if isinstance(handles, list) else [handles]:
+            discord_id = self.store.discord_id_for_handle(handle)
+            if discord_id is None:
+                continue
+            member = ctx.guild.get_member(int(discord_id)) if ctx.guild else None
+            user = member or self.client.get_user(int(discord_id))
+            return user.display_name if user else fallback
+        return fallback
 
     def _resolve(self, player: str):
         """Resolve a display name (current or former) to (rating, rank, board
@@ -183,8 +197,10 @@ class Leaderboard(commands.Cog):
         if resolved is None:
             return
         rating, rank, total, n_accounts = resolved
-        aliases = self.store.aliases_for_handles(self.store.merged_handles(rating.handle))
-        await ctx.send(embed=match_embeds.player_rank(rating, rank, total, aliases))
+        group = self.store.merged_handles(rating.handle)
+        aliases = self.store.aliases_for_handles(group)
+        shown = self._shown_name(ctx, group, rating.name)
+        await ctx.send(embed=match_embeds.player_rank(rating, rank, total, aliases, display_name=shown))
         if n_accounts > 1:
             await ctx.send(
                 f"*(Note: {n_accounts} different accounts have played as **{player}**; showing the most active.)*"
@@ -203,7 +219,12 @@ class Leaderboard(commands.Cog):
         units = self.store.player_records_by(group, "pick", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
         mvps = self.store.mvp_count(group, MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
         awards = self.store.award_counts(group, MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
-        await ctx.send(embed=match_embeds.player_profile(rating, rank, total, aliases, races, units, mvps, awards))
+        shown = self._shown_name(ctx, group, rating.name)
+        await ctx.send(
+            embed=match_embeds.player_profile(
+                rating, rank, total, aliases, races, units, mvps, awards, display_name=shown
+            )
+        )
         if n_accounts > 1:
             await ctx.send(
                 f"*(Note: {n_accounts} different accounts have played as **{player}**; showing the most active.)*"
@@ -252,6 +273,7 @@ class Leaderboard(commands.Cog):
         if not group1:
             await ctx.send(f"No games found for **{player1}**.")
             return
+        name1 = self._shown_name(ctx, group1, name1)
         if player2 is None:
             group2 = self._own_group(ctx.author)
             if not group2:
@@ -263,6 +285,7 @@ class Leaderboard(commands.Cog):
             if not group2:
                 await ctx.send(f"No games found for **{player2}**.")
                 return
+            name2 = self._shown_name(ctx, group2, name2)
         if set(group1) & set(group2):
             await ctx.send(f"**{name1}** and **{name2}** are the same player.")
             return

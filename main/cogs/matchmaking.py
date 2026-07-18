@@ -161,9 +161,14 @@ class Matchmaking(commands.Cog):
         players = self._players()[:QUEUE_TARGET]
         match = balance_teams(players)
         self.queue.clear()
-        # Reset the queue message, then announce the teams.
+        # Reset the queue message, then announce the teams and ping everyone in.
         await interaction.response.edit_message(embed=self._status_embed(), view=QueueView(self))
-        await interaction.followup.send(embed=match_embeds.proposed_match(match))
+        mentions = " ".join(f"<@{p.discord_id}>" for p in players)
+        await interaction.followup.send(
+            content=f"{mentions} — your match is ready!",
+            embed=match_embeds.proposed_match(match),
+            allowed_mentions=discord.AllowedMentions(users=True),
+        )
 
 
 async def setup(client):

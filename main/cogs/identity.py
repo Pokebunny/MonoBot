@@ -252,34 +252,64 @@ class Identity(commands.Cog):
         else:
             await ctx.send(f"You don't have **{sc2_name.strip()}** linked.")
 
-    @commands.hybrid_command(help="show which SC2 accounts are linked to you")
-    @commands.cooldown(1, 3, commands.BucketType.user)
-    async def whoami(self, ctx):
-        uid = str(ctx.author.id)
-        handles = self.store.handles_for(uid)
-        pending = self.store.pending_names_for(uid)
+    def _accounts_embed(self, discord_id: str, title: str) -> discord.Embed | None:
+        handles = self.store.handles_for(discord_id)
+        pending = self.store.pending_names_for(discord_id)
         if not handles and not pending:
-            await ctx.send("You haven't linked any SC2 names yet. Use `!link <your SC2 name>`.")
-            return
-
+            return None
         lines = []
         for handle in handles:
             aliases = self.store.aliases_for_handle(handle)
-            current = aliases[0] if aliases else "?"
-            others = aliases[1:]
-            line = f"• **{current}**"
-            if others:
-                line += f" (also: {', '.join(others)})"
+            line = f"• **{aliases[0] if aliases else '?'}**"
+            if aliases[1:]:
+                line += f" (also: {', '.join(aliases[1:])})"
             lines.append(line)
         for name in pending:
             lines.append(f"• **{name}** *(not yet seen in a game)*")
+        return discord.Embed(title=title, description="Linked SC2 accounts:\n" + "\n".join(lines), color=ACCENT)
 
-        embed = discord.Embed(
-            title=ctx.author.display_name,
-            description="Linked SC2 accounts:\n" + "\n".join(lines),
-            color=ACCENT,
-        )
-        await ctx.send(embed=embed)
+    @commands.hybrid_command(help="show which SC2 accounts are linked to you")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def whoami(self, ctx):
+        embed = self._accounts_embed(str(ctx.author.id), ctx.author.display_name)
+        if embed is None:
+            await ctx.send("You haven't linked any SC2 names yet. Use `!link <your SC2 name>`.")
+        else:
+            await ctx.send(embed=embed)
+
+    @commands.hybrid_command(help="look up anyone's SC2 accounts — by @member or SC2 name")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def whois(self, ctx, *, target: str):
+        target = target.strip()
+        try:
+            member = await commands.MemberConverter().convert(ctx, target)
+        except commands.BadArgument:
+            member = None
+        if member is not None:
+            embed = self._accounts_embed(str(member.id), member.display_name)
+            await ctx.send(
+                embed=embed if embed else None,
+                content=None if embed else f"{member.display_name} hasn't linked any SC2 accounts.",
+            )
+            return
+
+        candidates = self.store.candidates_for_name(target)
+        if not candidates:
+            await ctx.send(f"No account has played as **{target}**.")
+            return
+        lines = []
+        for handle, name, games in candidates:
+            aliases = self.store.aliases_for_handle(handle)
+            line = f"• **{aliases[0] if aliases else name}**"
+            if aliases[1:]:
+                line += f" (also: {', '.join(aliases[1:])})"
+            line += f" — {games} games"
+            disc = self.store.discord_id_for_handle(handle)
+            if disc:
+                line += f", linked to <@{disc}>"
+            lines.append(line)
+        embed = discord.Embed(title=f"Accounts matching '{target}'", description="\n".join(lines), color=ACCENT)
+        await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
 
 async def setup(client):

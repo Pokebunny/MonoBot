@@ -480,6 +480,10 @@ class MatchStore:
         ).fetchone()
         return row["discord_id"] if row else None
 
+    def discord_id_for_handle(self, toon_handle: str) -> str | None:
+        row = self._conn.execute("SELECT discord_id FROM player_links WHERE toon_handle = ?", (toon_handle,)).fetchone()
+        return row["discord_id"] if row else None
+
     def has_replay(self, file_hash: str) -> bool:
         row = self._conn.execute("SELECT 1 FROM matches WHERE file_hash = ?", (file_hash,)).fetchone()
         return row is not None

@@ -100,12 +100,36 @@ class Leaderboard(commands.Cog):
         rank = next(i for i, r in enumerate(board, 1) if r.handle == rating.handle)
         return rating, rank, len(board), len(rated)
 
-    @commands.hybrid_command(help="show a player's rating and record")
-    @commands.cooldown(1, 5, commands.BucketType.user)
-    async def rank(self, ctx, *, player: str):
+    def _resolve_self(self, author):
+        """The command author's own most-active rated account, or None."""
+        book = self.ratings.book()
+        best = None
+        for h in self.store.handles_for(str(author.id)):
+            r = book.rating_for(h)
+            if r is not None and (best is None or r.games > best.games):
+                best = r
+        if best is None:
+            return None
+        board = book.leaderboard(min_games=1)
+        rank = next((i for i, r in enumerate(board, 1) if r.handle == best.handle), len(board))
+        return best, rank, len(board), 1
+
+    async def _resolve_or_reply(self, ctx, player: str | None):
+        if player is None:
+            resolved = self._resolve_self(ctx.author)
+            if resolved is None:
+                await ctx.send("You haven't linked a rated SC2 account yet — use `!link <name>`, or pass a name.")
+            return resolved
         resolved = self._resolve(player)
         if resolved is None:
             await ctx.send(f"No rated games found for **{player}**.")
+        return resolved
+
+    @commands.hybrid_command(help="show a player's rating and record (yourself if no name given)")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def rank(self, ctx, *, player: str | None = None):
+        resolved = await self._resolve_or_reply(ctx, player)
+        if resolved is None:
             return
         rating, rank, total, n_accounts = resolved
         aliases = self.store.aliases_for_handle(rating.handle)
@@ -115,12 +139,11 @@ class Leaderboard(commands.Cog):
                 f"*(Note: {n_accounts} different accounts have played as **{player}**; showing the most active.)*"
             )
 
-    @commands.hybrid_command(help="show a player's full profile: rating, races, and units played")
+    @commands.hybrid_command(help="show a player's full profile (yourself if no name given)")
     @commands.cooldown(1, 5, commands.BucketType.user)
-    async def profile(self, ctx, *, player: str):
-        resolved = self._resolve(player)
+    async def profile(self, ctx, *, player: str | None = None):
+        resolved = await self._resolve_or_reply(ctx, player)
         if resolved is None:
-            await ctx.send(f"No rated games found for **{player}**.")
             return
         rating, rank, total, n_accounts = resolved
         aliases = self.store.aliases_for_handle(rating.handle)

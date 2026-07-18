@@ -114,6 +114,7 @@ def leaderboard(
     page: int = 0,
     min_games: int = 1,
     display_names: dict[str, str] | None = None,
+    hidden: int = 0,
 ) -> discord.Embed:
     """display_names maps handle -> shown name (the linked member's Discord
     name); unmapped handles fall back to the account's SC2 name."""
@@ -131,8 +132,9 @@ def leaderboard(
     embed = discord.Embed(title="Monobattle Leaderboard", color=ACCENT)
     embed.description = "\n".join(lines) or "*No rated players yet.*"
     note = f"min {min_games} games · " if min_games > 1 else ""
+    more = f" · {hidden} more below the minimum (!leaderboard 1 shows all)" if hidden else ""
     tail = "  ·  = still provisional (few games)"
-    embed.set_footer(text=f"{note}Page {page + 1}/{pages} · higher rating = stronger{tail}")
+    embed.set_footer(text=f"{note}Page {page + 1}/{pages} · higher rating = stronger{tail}{more}")
     return embed
 
 

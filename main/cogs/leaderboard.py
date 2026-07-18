@@ -11,20 +11,21 @@ from views import ExpiringView
 
 logger = logging.getLogger(__name__)
 
-# No minimum by default: the conservative rating already sinks low-game players
-# and the board paginates. Pass !leaderboard <N> to require at least N games.
-DEFAULT_MIN_GAMES = 1
+# Default minimum games to appear on the board: trims one-off historical
+# accounts now that the ladder is in real use. !leaderboard 1 shows everyone.
+DEFAULT_MIN_GAMES = 5
 
 
 class LeaderboardView(ExpiringView):
     """◀ ▶ pagination for the leaderboard. Snapshots the ranking so paging
     stays consistent even if a game is uploaded mid-browse."""
 
-    def __init__(self, board, min_games: int, display_names: dict[str, str] | None = None):
+    def __init__(self, board, min_games: int, display_names: dict[str, str] | None = None, hidden: int = 0):
         super().__init__()
         self.board = board
         self.min_games = min_games
         self.display_names = display_names
+        self.hidden = hidden
         self.page = 0
         self.pages = match_embeds.leaderboard_page_count(board)
         self._sync()
@@ -42,7 +43,8 @@ class LeaderboardView(ExpiringView):
     async def _show(self, interaction: discord.Interaction):
         self._sync()
         await interaction.response.edit_message(
-            embed=match_embeds.leaderboard(self.board, self.page, self.min_games, self.display_names), view=self
+            embed=match_embeds.leaderboard(self.board, self.page, self.min_games, self.display_names, self.hidden),
+            view=self,
         )
 
     @discord.ui.button(emoji="⏮", style=discord.ButtonStyle.secondary)
@@ -126,11 +128,13 @@ class Leaderboard(commands.Cog):
     @commands.hybrid_command(help="show the rating leaderboard")
     @commands.cooldown(1, 5, commands.BucketType.channel)
     async def leaderboard(self, ctx, min_games: int = DEFAULT_MIN_GAMES):
-        board = self.ratings.book().leaderboard(min_games=min_games)
+        everyone = self.ratings.book().leaderboard(min_games=1)
+        board = [r for r in everyone if r.games >= min_games]
+        hidden = len(everyone) - len(board)
         names = {r.handle: self._shown_name(ctx, r.handle, r.name) for r in board}
-        view = LeaderboardView(board, min_games, names)
+        view = LeaderboardView(board, min_games, names, hidden)
         message = await ctx.send(
-            embed=match_embeds.leaderboard(board, 0, min_games, names), view=view if view.multipage else None
+            embed=match_embeds.leaderboard(board, 0, min_games, names, hidden), view=view if view.multipage else None
         )
         view.message = message
 

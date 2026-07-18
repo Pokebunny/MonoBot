@@ -353,6 +353,46 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
     return tallies
 
 
+# A kill-value lead smaller than this is treated as "even" when counting
+# lead changes, so trading noise doesn't register as momentum swings.
+_LEAD_NOISE = 1000
+
+
+def _game_swings(replay, winning_team: int | None) -> tuple[int | None, int]:
+    """Momentum over the game, from each team's cumulative kill value:
+    (how far behind the winning team was at its worst — None if no winner,
+    number of meaningful lead changes)."""
+    team_of = {p.name: t.number for t in replay.teams for p in t.players}
+    latest: dict[str, tuple[int, int]] = {}  # player -> (team, resources_killed)
+    diffs = []
+    for event in replay.events:
+        if type(event).__name__ != "PlayerStatsEvent" or getattr(event, "player", None) is None:
+            continue
+        name = event.player.name
+        if name not in team_of:
+            continue
+        latest[name] = (team_of[name], event.resources_killed)
+        first_team = min(t.number for t in replay.teams)
+        lead = sum(k for tm, k in latest.values() if tm == first_team) - sum(
+            k for tm, k in latest.values() if tm != first_team
+        )
+        diffs.append(lead)
+
+    state, changes = 0, 0
+    for d in diffs:
+        sign = 1 if d > _LEAD_NOISE else (-1 if d < -_LEAD_NOISE else 0)
+        if sign != 0:
+            if state != 0 and sign != state:
+                changes += 1
+            state = sign
+    max_deficit = None
+    if winning_team is not None and diffs:
+        first_team = min(t.number for t in replay.teams)
+        winner_view = diffs if winning_team == first_team else [-d for d in diffs]
+        max_deficit = max(0, -min(winner_view))
+    return max_deficit, changes
+
+
 def _infer_winner(replay) -> tuple[int | None, float, str]:
     """Returns (winning_team, confidence, method)."""
     if replay.winner is not None:
@@ -485,6 +525,7 @@ def parse_replay(path: str) -> MonobattleMatch:
             )
 
     winning_team, confidence, method = _infer_winner(replay)
+    comeback_deficit, lead_changes = _game_swings(replay, winning_team)
     return MonobattleMatch(
         file_name=os.path.basename(path),
         map_name=replay.map_name,
@@ -497,4 +538,6 @@ def parse_replay(path: str) -> MonobattleMatch:
         winning_team=winning_team,
         winner_confidence=confidence,
         winner_method=method,
+        comeback_deficit=comeback_deficit,
+        lead_changes=lead_changes,
     )

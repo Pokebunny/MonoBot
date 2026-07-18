@@ -49,7 +49,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -66,6 +66,8 @@ CREATE TABLE IF NOT EXISTS matches (
     winning_team INTEGER,
     winner_confidence REAL NOT NULL,
     winner_method TEXT NOT NULL,
+    comeback_deficit INTEGER,
+    lead_changes INTEGER,
     uploaded_by TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -201,12 +203,20 @@ def _migration_5_award_stats(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE match_players ADD COLUMN {col} INTEGER")
 
 
+def _migration_6_game_swings(conn: sqlite3.Connection) -> None:
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(matches)")}
+    for col in ("comeback_deficit", "lead_changes"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE matches ADD COLUMN {col} INTEGER")
+
+
 _MIGRATIONS = {
     1: _migration_1_content_key,
     2: _migration_2_replay_channels,
     3: _migration_3_repick_from,
     4: _migration_4_resources_killed,
     5: _migration_5_award_stats,
+    6: _migration_6_game_swings,
 }
 
 
@@ -276,8 +286,8 @@ class MatchStore:
                 """INSERT INTO matches
                    (file_hash, content_key, file_name, map_name, played_at, duration_seconds,
                     game_type, pick_mode, pick_phase_seconds, winning_team,
-                    winner_confidence, winner_method, uploaded_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    winner_confidence, winner_method, comeback_deficit, lead_changes, uploaded_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (file_hash, key, *self._match_columns(match), uploaded_by),
             )
         except sqlite3.IntegrityError:
@@ -313,6 +323,8 @@ class MatchStore:
             match.winning_team,
             match.winner_confidence,
             match.winner_method,
+            match.comeback_deficit,
+            match.lead_changes,
         )
 
     def _insert_players(self, match_id: int, match: MonobattleMatch) -> None:
@@ -349,7 +361,8 @@ class MatchStore:
             """UPDATE matches SET
                  file_hash = ?, content_key = ?, file_name = ?, map_name = ?, played_at = ?,
                  duration_seconds = ?, game_type = ?, pick_mode = ?, pick_phase_seconds = ?,
-                 winning_team = ?, winner_confidence = ?, winner_method = ?, uploaded_by = ?
+                 winning_team = ?, winner_confidence = ?, winner_method = ?,
+                 comeback_deficit = ?, lead_changes = ?, uploaded_by = ?
                WHERE id = ?""",
             (file_hash, key, *self._match_columns(match), uploaded_by, match_id),
         )
@@ -812,4 +825,6 @@ class MatchStore:
             winning_team=row["winning_team"],
             winner_confidence=row["winner_confidence"],
             winner_method=row["winner_method"],
+            comeback_deficit=row["comeback_deficit"],
+            lead_changes=row["lead_changes"],
         )

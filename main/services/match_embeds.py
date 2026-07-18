@@ -4,7 +4,7 @@ import discord
 from models.matchmaking import ProposedMatch, QueuedPlayer
 from models.rating import PlayerRating
 from models.replay import MatchPlayer, MonobattleMatch
-from services.awards import SPECS, match_awards
+from services.awards import SPECS, game_awards, match_awards, mvp_outkilled_team
 
 ACCENT = 0x2ECC71
 WARNING = 0xE67E22
@@ -60,8 +60,12 @@ def match_summary(match: MonobattleMatch, match_id: int | None = None) -> discor
 
     lines = []
     if mvp is not None:
-        lines.append(f"⭐ **MVP**: {mvp.name} ({mvp.resources_killed:,} enemy value destroyed)")
+        detail = f"{mvp.resources_killed:,} enemy value destroyed"
+        if mvp_outkilled_team(match, mvp):
+            detail += " — more than the rest of their team combined"
+        lines.append(f"⭐ **MVP**: {mvp.name} ({detail})")
     lines += [f"{a.emoji} **{a.title}**: {a.player.name} ({a.detail})" for a in match_awards(match)]
+    lines += [f"{a.emoji} **{a.title}**: {a.detail}" for a in game_awards(match)]
     if lines:
         embed.add_field(name="Awards", value="\n".join(lines), inline=False)
 

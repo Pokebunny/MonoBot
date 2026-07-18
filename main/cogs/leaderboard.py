@@ -65,6 +65,53 @@ class LeaderboardView(ExpiringView):
         await self._show(interaction)
 
 
+class MatchBrowserView(ExpiringView):
+    """⏮ ◀ ▶ ⏭ browsing over a snapshot of match history (oldest→newest);
+    opens on the newest game, ◀ steps back in time."""
+
+    def __init__(self, matches):
+        super().__init__()
+        self.matches = matches
+        self.index = len(matches) - 1
+        self._sync()
+
+    def embed(self) -> discord.Embed:
+        match_id, match = self.matches[self.index]
+        embed = match_embeds.match_summary(match, match_id)
+        embed.set_footer(text=f"Match #{match_id} · {self.index + 1}/{len(self.matches)}")
+        return embed
+
+    def _sync(self):
+        at_oldest = self.index <= 0
+        at_newest = self.index >= len(self.matches) - 1
+        self.oldest.disabled = self.older.disabled = at_oldest
+        self.newer.disabled = self.newest.disabled = at_newest
+
+    async def _show(self, interaction: discord.Interaction):
+        self._sync()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    @discord.ui.button(emoji="⏮", style=discord.ButtonStyle.secondary)
+    async def oldest(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.index = 0
+        await self._show(interaction)
+
+    @discord.ui.button(emoji="◀", style=discord.ButtonStyle.secondary)
+    async def older(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.index = max(0, self.index - 1)
+        await self._show(interaction)
+
+    @discord.ui.button(emoji="▶", style=discord.ButtonStyle.secondary)
+    async def newer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.index = min(len(self.matches) - 1, self.index + 1)
+        await self._show(interaction)
+
+    @discord.ui.button(emoji="⏭", style=discord.ButtonStyle.secondary)
+    async def newest(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.index = len(self.matches) - 1
+        await self._show(interaction)
+
+
 class Leaderboard(commands.Cog):
     def __init__(self, client):
         self.client = client
@@ -178,11 +225,9 @@ class Leaderboard(commands.Cog):
                     group.append(h)
         return group
 
-    @commands.hybrid_command(help="show the most recent match — or a player's; !last <name> [count up to 3]")
+    @commands.hybrid_command(help="browse recent matches (◀ steps back in time) — optionally a player's")
     @commands.cooldown(1, 5, commands.BucketType.channel)
-    async def last(self, ctx, player: str | None = None, count: commands.Range[int, 1, 3] = 1):
-        if player and player.isdigit():  # allow `!last 3` without a name
-            count, player = min(int(player), 3), None
+    async def last(self, ctx, *, player: str | None = None):
         matches = self.store.all_matches()  # oldest first
         if player:
             name, group = self._group_for_name(player)
@@ -194,9 +239,11 @@ class Leaderboard(commands.Cog):
         if not matches:
             await ctx.send("No matches stored yet.")
             return
-        # Oldest of the batch first, so the newest game ends up at the bottom.
-        for match_id, match in matches[-count:]:
-            await ctx.send(embed=match_embeds.match_summary(match, match_id))
+        view = MatchBrowserView(matches)
+        if len(matches) == 1:
+            await ctx.send(embed=view.embed())
+            return
+        view.message = await ctx.send(embed=view.embed(), view=view)
 
     @commands.hybrid_command(help="head-to-head between two players — !h2h <name> means you vs them")
     @commands.cooldown(1, 5, commands.BucketType.user)

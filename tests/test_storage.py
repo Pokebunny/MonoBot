@@ -430,3 +430,29 @@ def test_awards_pick_outliers_only(store):
     store.ingest(m, hash_replay(b"a1"))
     counts = store.award_counts(store.merged_handles("h-A0"), 0.7, 120)
     assert counts == {"worker_slayer": 1}
+
+
+def test_game_awards_and_mvp_garnish(store):
+    from services.awards import game_awards, mvp_outkilled_team
+
+    m = _match(played_at=_at(0))
+    m.comeback_deficit = 9000
+    m.lead_changes = 6
+    for p in m.players:
+        p.resources_killed = 3000
+    m.players[0].resources_killed = 15000  # A0 outkills teammates' 9000 combined
+    awards = game_awards(m)
+    assert [a.key for a in awards] == ["comeback", "rollercoaster"]
+    assert "Team 1" in awards[0].detail
+    assert mvp_outkilled_team(m, m.mvp()) is True
+
+    m.comeback_deficit = 2000
+    m.lead_changes = 1
+    m.players[1].resources_killed = 7000  # now A0's 15000 < 13000? no: rest=3000+3000+7000=13000, still >
+    assert game_awards(m) == []
+
+    # roundtrip keeps the swing columns
+    store.ingest(m, hash_replay(b"sw1"))
+    _mid, stored = store.all_matches()[0]
+    assert stored.comeback_deficit == 2000
+    assert stored.lead_changes == 1

@@ -199,23 +199,7 @@ class Leaderboard(commands.Cog):
             await ctx.send(f"No rated games found for **{player}**.")
         return resolved
 
-    @commands.hybrid_command(help="show a player's rating and record (yourself if no name given)")
-    @commands.cooldown(1, 5, commands.BucketType.user)
-    async def rank(self, ctx, *, player: str | None = None):
-        resolved = await self._resolve_or_reply(ctx, player)
-        if resolved is None:
-            return
-        rating, rank, total, n_accounts = resolved
-        group = self.store.merged_handles(rating.handle)
-        aliases = self.store.aliases_for_handles(group)
-        shown = self._shown_name(ctx, group, rating.name)
-        await ctx.send(embed=match_embeds.player_rank(rating, rank, total, aliases, display_name=shown))
-        if n_accounts > 1:
-            await ctx.send(
-                f"*(Note: {n_accounts} different accounts have played as **{player}**; showing the most active.)*"
-            )
-
-    @commands.hybrid_command(help="show a player's full profile (yourself if no name given)")
+    @commands.hybrid_command(aliases=["rank"], help="show a player's full profile (yourself if no name given)")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def profile(self, ctx, *, player: str | None = None):
         resolved = await self._resolve_or_reply(ctx, player)

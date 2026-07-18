@@ -155,29 +155,6 @@ def _rating_footer(rating: PlayerRating) -> str:
     return "Rating rises with wins; how much depends on the opponents' strength."
 
 
-def player_rank(
-    rating: PlayerRating,
-    rank: int | None,
-    total_ranked: int,
-    aliases: list[str] | None = None,
-    display_name: str | None = None,
-) -> discord.Embed:
-    shown = display_name or rating.name
-    embed = discord.Embed(title=shown, color=ACCENT)
-    embed.add_field(name="Rating", value=_rating_value(rating), inline=True)
-    embed.add_field(name="Rank", value=_rank_value(rating, rank, total_ranked), inline=True)
-    embed.add_field(
-        name="Record",
-        value=f"{rating.wins}-{rating.losses} ({100 * rating.wins / rating.games:.0f}%)",
-        inline=True,
-    )
-    others = [a for a in (aliases or []) if a.lower() != shown.lower()]
-    if others:
-        embed.add_field(name="Plays as", value=", ".join(others[:12]), inline=False)
-    embed.set_footer(text=_rating_footer(rating))
-    return embed
-
-
 def _record_lines(records: dict[str, list[int]], limit: int) -> str:
     rows = [(k, w, losses) for k, (w, losses) in records.items()]
     rows.sort(key=lambda r: r[1] + r[2], reverse=True)  # by games played

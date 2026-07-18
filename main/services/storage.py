@@ -5,6 +5,12 @@ derived by replaying stored matches through RatingBook (see services.rating),
 so parser/rating improvements can always be re-applied to history without
 re-parsing replay files.
 
+Schema changes: bump SCHEMA_VERSION, add a numbered function to _MIGRATIONS,
+and update _SCHEMA to match (fresh DBs are created at the latest version and
+stamped; existing DBs replay only the missing migrations). Never change the
+schema by rebuilding the DB — player_links and account_merges are written by
+users, not derivable from replays, and a rebuild loses them.
+
 sqlite3 is synchronous — call MatchStore from the bot via asyncio.to_thread
 if a call ever shows up in profiling (at monobattle volumes it won't).
 """
@@ -40,6 +46,10 @@ class LinkResult(NamedTuple):
 
 
 DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "monobot.db")
+
+# Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
+# baseline schema below; pre-versioning DBs read as 0 and are migrated up.
+SCHEMA_VERSION = 1
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -119,35 +129,67 @@ def content_key(match: MonobattleMatch) -> str:
     players' recordings of the same game differ in bytes and length (they may
     leave at different times) but share the start time and full roster.
     Minute precision absorbs sub-second clock differences between clients."""
-    minute = match.played_at.replace(second=0, microsecond=0)
-    names = "|".join(sorted(p.name for p in match.players))
-    return hashlib.sha256(f"{minute.isoformat()}|{names}".encode()).hexdigest()
+    return _content_key_raw(match.played_at, [p.name for p in match.players])
+
+
+def _content_key_raw(played_at: datetime.datetime, names: list[str]) -> str:
+    minute = played_at.replace(second=0, microsecond=0)
+    return hashlib.sha256(f"{minute.isoformat()}|{'|'.join(sorted(names))}".encode()).hexdigest()
+
+
+def _migration_1_content_key(conn: sqlite3.Connection) -> None:
+    """Backfill content_key on DBs created before it existed. No-op on DBs
+    that already have the column (the pre-versioning baseline)."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(matches)")}
+    if "content_key" not in cols:
+        conn.execute("ALTER TABLE matches ADD COLUMN content_key TEXT")
+        for row in conn.execute("SELECT id, played_at FROM matches").fetchall():
+            names = [r["name"] for r in conn.execute("SELECT name FROM match_players WHERE match_id = ?", (row["id"],))]
+            key = _content_key_raw(datetime.datetime.fromisoformat(row["played_at"]), names)
+            conn.execute("UPDATE matches SET content_key = ? WHERE id = ?", (key, row["id"]))
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_matches_content_key ON matches(content_key)")
+
+
+# version -> function upgrading a DB from version-1 to version. Each runs in
+# its own transaction and must leave the DB identical to a fresh _SCHEMA
+# creation at that version.
+_MIGRATIONS = {
+    1: _migration_1_content_key,
+}
 
 
 class MatchStore:
     def __init__(self, db_path: str = DEFAULT_DB_PATH):
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
+        self._db_path = db_path
         self._conn = sqlite3.connect(db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
+        fresh = self._conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'matches'").fetchone()
         self._conn.executescript(_SCHEMA)
-        self._conn.commit()
-        self._migrate_content_key()
+        if fresh is None:
+            # Brand-new DB: _SCHEMA created it at the latest version already.
+            self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            self._conn.commit()
+        else:
+            self._migrate()
         # Bumped on every write so callers (e.g. the leaderboard cog) can
         # cache derived data like rating books and know when it's stale.
         self.change_count = 0
 
-    def _migrate_content_key(self) -> None:
-        """Backfill content_key on DBs created before it existed."""
-        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(matches)")}
-        if "content_key" in cols:
-            return
-        logger.info("Migrating matches table: adding content_key")
-        self._conn.execute("ALTER TABLE matches ADD COLUMN content_key TEXT")
-        for match_id, match in self.all_matches():
-            self._conn.execute("UPDATE matches SET content_key = ? WHERE id = ?", (content_key(match), match_id))
-        self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_matches_content_key ON matches(content_key)")
-        self._conn.commit()
+    def _migrate(self) -> None:
+        """Bring an existing DB up to SCHEMA_VERSION, one step at a time."""
+        version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        if version > SCHEMA_VERSION:
+            raise RuntimeError(
+                f"{self._db_path} is at schema version {version}, newer than this code ({SCHEMA_VERSION}) — "
+                "refusing to open it (running old code against a migrated DB corrupts it)."
+            )
+        for target in range(version + 1, SCHEMA_VERSION + 1):
+            logger.info("Migrating %s to schema version %d", self._db_path, target)
+            _MIGRATIONS[target](self._conn)
+            self._conn.execute(f"PRAGMA user_version = {target}")
+            self._conn.commit()
 
     def close(self):
         self._conn.close()

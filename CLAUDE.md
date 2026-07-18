@@ -19,6 +19,9 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
 - `resources/` — config + data loaded at import; also holds the gitignored
   `monobot.db` match database (source of truth = matches; ratings are always
   derived by replaying stored matches through `RatingBook.from_matches`).
+  Schema changes go through numbered migrations in `services/storage.py`
+  (bump `SCHEMA_VERSION`, add to `_MIGRATIONS`) — never a DB rebuild, which
+  would lose user-written tables (`player_links`, `account_merges`).
 - `scripts/` (repo root) — one-shot utilities, e.g. `backfill_archive.py` to
   seed the database from a folder of replays (idempotent, dedupes by hash).
 

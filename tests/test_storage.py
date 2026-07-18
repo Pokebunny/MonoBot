@@ -217,3 +217,86 @@ def test_change_count_tracks_writes(store):
     # exact re-upload is not a write
     store.ingest(_match(), hash_replay(b"cc"))
     assert store.change_count == 2
+
+
+# -- schema migrations ---------------------------------------------------
+
+
+class TestMigrations:
+    def test_fresh_db_stamped_at_latest(self, tmp_path):
+        import sqlite3
+
+        from services.storage import SCHEMA_VERSION
+
+        path = str(tmp_path / "fresh.db")
+        MatchStore(path).close()
+        version = sqlite3.connect(path).execute("PRAGMA user_version").fetchone()[0]
+        assert version == SCHEMA_VERSION
+
+    def test_preversioning_db_migrates_and_keeps_links(self, tmp_path):
+        """A version-0 DB (no content_key column) with data and player links
+        opens cleanly: content_key backfilled, links intact, version stamped."""
+        import sqlite3
+
+        from services.storage import SCHEMA_VERSION
+
+        path = str(tmp_path / "old.db")
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            """
+            CREATE TABLE matches (
+                id INTEGER PRIMARY KEY, file_hash TEXT NOT NULL UNIQUE,
+                file_name TEXT NOT NULL, map_name TEXT NOT NULL,
+                played_at TEXT NOT NULL, duration_seconds INTEGER NOT NULL,
+                game_type TEXT NOT NULL, pick_mode TEXT NOT NULL,
+                pick_phase_seconds INTEGER NOT NULL, winning_team INTEGER,
+                winner_confidence REAL NOT NULL, winner_method TEXT NOT NULL,
+                uploaded_by TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE match_players (
+                match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+                name TEXT NOT NULL, toon_handle TEXT NOT NULL DEFAULT '',
+                team INTEGER NOT NULL, race TEXT NOT NULL, pick TEXT,
+                repick_used INTEGER, unit_counts TEXT NOT NULL
+            );
+            CREATE TABLE player_links (
+                discord_id TEXT NOT NULL, sc2_name TEXT NOT NULL,
+                toon_handle TEXT, linked_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (sc2_name)
+            );
+            """
+        )
+        conn.execute(
+            """INSERT INTO matches (file_hash, file_name, map_name, played_at, duration_seconds,
+               game_type, pick_mode, pick_phase_seconds, winning_team, winner_confidence, winner_method)
+               VALUES ('abc', 'old.SC2Replay', 'Mono', ?, 900, '4v4', 'blind_random', 60, 1, 1.0, 'recorded')""",
+            (BASE.isoformat(),),
+        )
+        conn.execute(
+            "INSERT INTO match_players (match_id, name, toon_handle, team, race, pick, unit_counts)"
+            " VALUES (1, 'A0', 'h-A0', 1, 'Zerg', 'Zergling', '{}')"
+        )
+        conn.execute("INSERT INTO player_links (discord_id, sc2_name, toon_handle) VALUES ('42', 'A0', 'h-A0')")
+        conn.commit()
+        conn.close()
+
+        s = MatchStore(path)
+        assert s.handles_for("42") == ["h-A0"]  # links survived
+        assert s.match_count() == 1
+        stored_key = s._conn.execute("SELECT content_key FROM matches WHERE id = 1").fetchone()[0]
+        assert stored_key == content_key(_match(roster=["A0"]))
+        assert s._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        s.close()
+        MatchStore(path).close()  # reopening doesn't re-run migrations
+
+    def test_newer_db_refused(self, tmp_path):
+        import sqlite3
+
+        path = str(tmp_path / "future.db")
+        MatchStore(path).close()
+        conn = sqlite3.connect(path)
+        conn.execute("PRAGMA user_version = 999")
+        conn.commit()
+        conn.close()
+        with pytest.raises(RuntimeError, match="newer than this code"):
+            MatchStore(path)

@@ -23,17 +23,19 @@ QUEUE_TARGET = 8  # 4v4
 
 
 class QueueView(discord.ui.View):
-    """Join/Leave buttons attached to the queue message."""
+    """Join/Leave buttons attached to the queue message. Persistent (fixed
+    custom_ids + registered via client.add_view on cog load), so the buttons
+    keep working across bot restarts."""
 
     def __init__(self, cog: "Matchmaking"):
         super().__init__(timeout=None)
         self.cog = cog
 
-    @discord.ui.button(label="Join", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="monobot:queue:join")
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.handle_join(interaction)
 
-    @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, custom_id="monobot:queue:leave")
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.handle_leave(interaction)
 
@@ -49,6 +51,11 @@ class Matchmaking(commands.Cog):
         self.ratings: RatingCache = client.rating_cache
         self.queue: dict[str, discord.abc.User] = {}
         self.queue_message: discord.Message | None = None  # the live queue embed
+
+    async def cog_load(self):
+        # Register the persistent view so Join/Leave buttons on queue messages
+        # from before the last restart still dispatch here.
+        self.client.add_view(QueueView(self))
 
     # -- rating lookup ---------------------------------------------------
 
@@ -124,6 +131,9 @@ class Matchmaking(commands.Cog):
         await ctx.send("Queue cleared.")
 
     async def handle_join(self, interaction: discord.Interaction):
+        # Re-adopt the message the button lives on (after a restart the
+        # tracked reference is gone, but the buttons still work).
+        self.queue_message = interaction.message
         uid = str(interaction.user.id)
         if not self.store.sc2_names_for(uid):
             await interaction.response.send_message(

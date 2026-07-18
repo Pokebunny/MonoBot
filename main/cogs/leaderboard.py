@@ -7,6 +7,7 @@ from discord.ext import commands
 from services import match_embeds
 from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, RatingCache
 from services.storage import MatchStore
+from views import ExpiringView
 
 logger = logging.getLogger(__name__)
 
@@ -15,12 +16,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_MIN_GAMES = 1
 
 
-class LeaderboardView(discord.ui.View):
+class LeaderboardView(ExpiringView):
     """◀ ▶ pagination for the leaderboard. Snapshots the ranking so paging
     stays consistent even if a game is uploaded mid-browse."""
 
     def __init__(self, board, min_games: int):
-        super().__init__(timeout=300)
+        super().__init__()
         self.board = board
         self.min_games = min_games
         self.page = 0
@@ -79,7 +80,10 @@ class Leaderboard(commands.Cog):
     async def leaderboard(self, ctx, min_games: int = DEFAULT_MIN_GAMES):
         board = self.ratings.book().leaderboard(min_games=min_games)
         view = LeaderboardView(board, min_games)
-        await ctx.send(embed=match_embeds.leaderboard(board, 0, min_games), view=view if view.multipage else None)
+        message = await ctx.send(
+            embed=match_embeds.leaderboard(board, 0, min_games), view=view if view.multipage else None
+        )
+        view.message = message
 
     def _resolve(self, player: str):
         """Resolve a display name (current or former) to (rating, rank, board

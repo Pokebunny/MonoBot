@@ -12,6 +12,7 @@ from checks import is_bot_admin
 from discord.ext import commands
 from services.match_embeds import ACCENT, WARNING
 from services.storage import MatchStore
+from views import ExpiringView
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +51,12 @@ class _AccountSelect(discord.ui.Select):
                 else "That account is already linked to someone else — ask an admin."
             )
         await interaction.response.edit_message(content=msg, embed=None, view=None)
+        self.view.stop()
 
 
-class DisambiguationView(discord.ui.View):
+class DisambiguationView(ExpiringView):
     def __init__(self, store: MatchStore, discord_id: str, sc2_name: str, candidates, add_mode: bool = False):
-        super().__init__(timeout=120)
+        super().__init__()
         self.add_item(_AccountSelect(store, discord_id, sc2_name, candidates, add_mode))
 
 
@@ -80,12 +82,12 @@ class _PairPickSelect(discord.ui.Select):
         await self.parent_view.maybe_finish(interaction)
 
 
-class PairPickView(discord.ui.View):
+class PairPickView(ExpiringView):
     """Account pickers for (un)merge when a name matches several accounts.
     Runs the merge/unmerge once every ambiguous name has been resolved."""
 
     def __init__(self, store: MatchStore, admin_id: str, action: str, names, candidate_lists):
-        super().__init__(timeout=120)
+        super().__init__()
         self.store = store
         self.admin_id = admin_id
         self.action = action  # "merge" | "unmerge"
@@ -120,14 +122,15 @@ class PairPickView(discord.ui.View):
                     f"{tag1} and {tag2} weren't merged by an admin (a shared Discord link can't be un-merged here)."
                 )
         await interaction.response.edit_message(content=content, embed=None, view=None)
+        self.stop()
 
 
-class ConfirmAddView(discord.ui.View):
+class ConfirmAddView(ExpiringView):
     """Shown when someone links a name while already having an account linked —
     confirms they mean to add a second (merged) account, not replace."""
 
     def __init__(self, cog: "Identity", discord_id: str, sc2_name: str):
-        super().__init__(timeout=120)
+        super().__init__()
         self.cog = cog
         self.discord_id = discord_id
         self.sc2_name = sc2_name
@@ -142,11 +145,13 @@ class ConfirmAddView(discord.ui.View):
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if await self._mine(interaction):
             await self.cog.resolve_additional(interaction, self.discord_id, self.sc2_name)
+            self.stop()
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         if await self._mine(interaction):
             await interaction.response.edit_message(content="Cancelled — no account added.", embed=None, view=None)
+            self.stop()
 
 
 class Identity(commands.Cog):
@@ -190,9 +195,9 @@ class Identity(commands.Cog):
                 description=f"**{sc2_name}** matches {len(candidates)} accounts — pick the one to add.",
                 color=ACCENT,
             )
-            await interaction.response.edit_message(
-                embed=embed, view=DisambiguationView(self.store, discord_id, sc2_name, candidates, add_mode=True)
-            )
+            view = DisambiguationView(self.store, discord_id, sc2_name, candidates, add_mode=True)
+            view.message = interaction.message
+            await interaction.response.edit_message(embed=embed, view=view)
 
     @commands.hybrid_command(help="link your Discord account to your in-game SC2 name")
     @commands.cooldown(1, 3, commands.BucketType.user)
@@ -212,7 +217,8 @@ class Identity(commands.Cog):
                 "combined rating. Continue?",
                 color=WARNING,
             )
-            await ctx.send(embed=embed, view=ConfirmAddView(self, discord_id, sc2_name))
+            view = ConfirmAddView(self, discord_id, sc2_name)
+            view.message = await ctx.send(embed=embed, view=view)
             return
 
         result = self.store.link_player(discord_id, sc2_name)
@@ -234,10 +240,8 @@ class Identity(commands.Cog):
                 "Pick yours from the menu below (by game count / account id).",
                 color=WARNING,
             )
-            await ctx.send(
-                embed=embed,
-                view=DisambiguationView(self.store, str(ctx.author.id), sc2_name, candidates),
-            )
+            view = DisambiguationView(self.store, str(ctx.author.id), sc2_name, candidates)
+            view.message = await ctx.send(embed=embed, view=view)
             return
 
         embed = discord.Embed(
@@ -311,7 +315,7 @@ class Identity(commands.Cog):
             "To merge two accounts that share a name, use the same name twice and pick a different one in each menu.",
             color=WARNING,
         )
-        await ctx.send(embed=embed, view=view)
+        view.message = await ctx.send(embed=embed, view=view)
 
     @commands.hybrid_command(help="declare two SC2 accounts the same player (mods)")
     @is_bot_admin()

@@ -58,9 +58,11 @@ def match_summary(match: MonobattleMatch, match_id: int | None = None) -> discor
             inline=True,
         )
 
-    awards = match_awards(match)
-    if awards:
-        lines = [f"{a.emoji} **{a.title}**: {a.player.name} ({a.detail})" for a in awards]
+    lines = []
+    if mvp is not None:
+        lines.append(f"⭐ **MVP**: {mvp.name} ({mvp.resources_killed:,} enemy value destroyed)")
+    lines += [f"{a.emoji} **{a.title}**: {a.player.name} ({a.detail})" for a in match_awards(match)]
+    if lines:
         embed.add_field(name="Awards", value="\n".join(lines), inline=False)
 
     if match.winning_team is None:
@@ -73,12 +75,8 @@ def match_summary(match: MonobattleMatch, match_id: int | None = None) -> discor
         result = f"Team {match.winning_team} (inferred, {match.winner_confidence:.0%} confidence)"
     embed.add_field(name="Result", value=result, inline=False)
 
-    footer = f"Match #{match_id}" if match_id is not None else ""
-    if mvp is not None:
-        legend = f"⭐ MVP: {mvp.resources_killed:,} enemy value destroyed"
-        footer = f"{footer} · {legend}" if footer else legend
-    if footer:
-        embed.set_footer(text=footer)
+    if match_id is not None:
+        embed.set_footer(text=f"Match #{match_id}")
     return embed
 
 

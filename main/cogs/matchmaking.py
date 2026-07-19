@@ -99,20 +99,41 @@ class Matchmaking(commands.Cog):
             except discord.HTTPException:
                 self.queue_message = None
 
+    async def _adopt_message(self, interaction: discord.Interaction):
+        """Make the message the button lives on the one live queue message,
+        deleting the previously tracked one so duplicates (leftover copies, or
+        messages from before a restart) don't accumulate out of sync."""
+        old = self.queue_message
+        self.queue_message = interaction.message
+        if old is not None and old.id != interaction.message.id:
+            try:
+                await old.delete()
+            except discord.HTTPException:
+                pass
+
     # -- commands & interactions -----------------------------------------
 
     @commands.hybrid_command(help="open the matchmaking queue and ping the community")
     @commands.cooldown(1, 30, commands.BucketType.channel)
     async def queue(self, ctx):
+        # Only one live queue message at a time: re-running !queue moves it to
+        # the bottom of the chat rather than opening a duplicate, and only a
+        # fresh (empty) queue pings the community.
         content = None
-        if CONFIG.queue_ping_role_id is not None:
+        if not self.queue and CONFIG.queue_ping_role_id is not None:
             content = f"<@&{CONFIG.queue_ping_role_id}> a monobattle queue is forming — click **Join** to get in!"
+        old = self.queue_message
         self.queue_message = await ctx.send(
             content=content,
             embed=self._status_embed(),
             view=QueueView(self),
             allowed_mentions=discord.AllowedMentions(roles=True),
         )
+        if old is not None:
+            try:
+                await old.delete()
+            except discord.HTTPException:
+                pass
 
     @commands.hybrid_command(help="remove a player from the queue (e.g. a no-show)")
     @commands.cooldown(1, 3, commands.BucketType.user)
@@ -131,9 +152,7 @@ class Matchmaking(commands.Cog):
         await ctx.send("Queue cleared.")
 
     async def handle_join(self, interaction: discord.Interaction):
-        # Re-adopt the message the button lives on (after a restart the
-        # tracked reference is gone, but the buttons still work).
-        self.queue_message = interaction.message
+        await self._adopt_message(interaction)
         uid = str(interaction.user.id)
         if not self.store.sc2_names_for(uid):
             await interaction.response.send_message(
@@ -151,6 +170,7 @@ class Matchmaking(commands.Cog):
             await interaction.response.edit_message(embed=self._status_embed(), view=QueueView(self))
 
     async def handle_leave(self, interaction: discord.Interaction):
+        await self._adopt_message(interaction)
         uid = str(interaction.user.id)
         if self.queue.pop(uid, None) is None:
             await interaction.response.send_message("You're not in the queue.", ephemeral=True)

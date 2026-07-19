@@ -74,7 +74,9 @@ class ConfirmWinnerView(ExpiringView):
             unlocks = achievements.grant_new_unlocks(self.store, self.achievements, match)
             if unlocks:
                 first = frozenset(
-                    e.spec.key for _, e in unlocks if achievements.is_secret(e.spec) and e.spec.key not in pre_discovered
+                    e.spec.key
+                    for _, e in unlocks
+                    if achievements.is_secret(e.spec) and e.spec.key not in pre_discovered
                 )
                 await interaction.followup.send(embed=match_embeds.achievement_unlocks(unlocks, first))
 

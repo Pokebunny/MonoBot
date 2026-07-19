@@ -317,7 +317,9 @@ class Leaderboard(commands.Cog):
         holders = achievements.ledger_holder_counts(self.store, self.store.merge_map())
         await ctx.send(embed=match_embeds.achievements_gallery(shown, earned, next_up, holders))
 
-    @commands.hybrid_command(aliases=["catalog"], help="browse the full achievement gallery (secret recipes reveal only via /gallery)")
+    @commands.hybrid_command(
+        aliases=["catalog"], help="browse the full achievement gallery (secret recipes reveal only via /gallery)"
+    )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def gallery(self, ctx):
         # Recipes for secrets you've earned are only revealed on a PRIVATE

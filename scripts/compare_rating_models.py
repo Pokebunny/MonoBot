@@ -33,7 +33,6 @@ from openskill.models import (  # noqa: E402
     ThurstoneMostellerFull,
     ThurstoneMostellerPart,
 )
-
 from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE  # noqa: E402
 from services.storage import DEFAULT_DB_PATH, MatchStore  # noqa: E402
 
@@ -132,11 +131,12 @@ def main() -> None:
 
     rateable = [m for m in matches if is_rateable(m)]
     print(f"DB: {os.path.abspath(db_path)}")
-    print(f"Matches: {len(matches)} total, {len(rateable)} rateable "
-          f"(conf>={MIN_WINNER_CONFIDENCE}, dur>={MIN_DURATION_SECONDS}s, 2 teams)")
+    print(
+        f"Matches: {len(matches)} total, {len(rateable)} rateable "
+        f"(conf>={MIN_WINNER_CONFIDENCE}, dur>={MIN_DURATION_SECONDS}s, 2 teams)"
+    )
     handles = {p.toon_handle for m in rateable for p in m.players}
-    print(f"Accounts in rateable games: {len(handles)} "
-          f"({len(merge_map)} handles merged into groups)\n")
+    print(f"Accounts in rateable games: {len(handles)} ({len(merge_map)} handles merged into groups)\n")
 
     baseline = "always 0.5"
     print(f"Reference — {baseline}: log loss {math.log(2):.4f}, brier 0.2500, acc 0.500\n")
@@ -152,27 +152,25 @@ def main() -> None:
         warm_n = warm_s.n
         a = all_s.row()
         w = warm_s.row()
-        print(f"{label:<26} {a[0]:>9.4f} {a[1]:>8.4f} {a[2]:>7.3f}    "
-              f"{w[0]:>9.4f} {w[1]:>8.4f} {w[2]:>7.3f}")
+        print(f"{label:<26} {a[0]:>9.4f} {a[1]:>8.4f} {a[2]:>7.3f}    {w[0]:>9.4f} {w[1]:>8.4f} {w[2]:>7.3f}")
 
-    print(f"\nall rateable n={len(rateable)}, warm n={warm_n} "
-          f"(both teams all previously-seen players)")
-    print("Lower log loss / Brier is better; higher accuracy is better. "
-          "Log loss is the primary discriminator.\n")
+    print(f"\nall rateable n={len(rateable)}, warm n={warm_n} (both teams all previously-seen players)")
+    print("Lower log loss / Brier is better; higher accuracy is better. Log loss is the primary discriminator.\n")
 
     # beta sweep on PlackettLuce: beta is the skill->outcome noise. Default is
     # sigma0/2 ~= 4.17. Bigger beta = flatter (less confident) probabilities,
     # which fixes overconfidence at the cost of accuracy discrimination.
     default_beta = PlackettLuce().beta
     print(f"beta sweep (PlackettLuce; default beta = {default_beta:.3f}):")
-    print(f"{'beta (xdefault)':<18} {'log loss':>9} {'brier':>8} {'acc':>7}    "
-          f"{'log loss':>9} {'brier':>8} {'acc':>7}")
+    print(f"{'beta (xdefault)':<18} {'log loss':>9} {'brier':>8} {'acc':>7}    {'log loss':>9} {'brier':>8} {'acc':>7}")
     for mult in (1, 2, 3, 4, 6, 8):
         beta = default_beta * mult
         all_s, warm_s = evaluate(lambda b=beta: PlackettLuce(beta=b), matches, merge_map)
         a, w = all_s.row(), warm_s.row()
-        print(f"{f'{beta:.2f} (x{mult})':<18} {a[0]:>9.4f} {a[1]:>8.4f} {a[2]:>7.3f}    "
-              f"{w[0]:>9.4f} {w[1]:>8.4f} {w[2]:>7.3f}")
+        print(
+            f"{f'{beta:.2f} (x{mult})':<18} {a[0]:>9.4f} {a[1]:>8.4f} {a[2]:>7.3f}    "
+            f"{w[0]:>9.4f} {w[1]:>8.4f} {w[2]:>7.3f}"
+        )
 
 
 if __name__ == "__main__":

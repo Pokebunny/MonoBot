@@ -99,9 +99,7 @@ class AchievementBook:
         Only units with enough games are rankable. Recomputed on every rebuild,
         so Overqualified's table tracks the meta on its own."""
         rates = _unit_win_rates(matches)
-        self._unit_winrates = {
-            pick: wr for pick, (wr, games) in rates.items() if games >= MIN_UNIT_GAMES_FOR_RANKING
-        }
+        self._unit_winrates = {pick: wr for pick, (wr, games) in rates.items() if games >= MIN_UNIT_GAMES_FOR_RANKING}
 
     def _lobby_worst_picks(self, match: MonobattleMatch) -> set[str]:
         """The lobby's lowest-win-rate pick(s) among rankable units. Being the

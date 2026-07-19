@@ -49,7 +49,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -86,6 +86,10 @@ CREATE TABLE IF NOT EXISTS match_players (
     tech_killed INTEGER,
     resources_lost INTEGER,
     resources_floated INTEGER,
+    drop_commands INTEGER,
+    static_defense INTEGER,
+    bases_before_unit INTEGER,
+    orbitals INTEGER,
     unit_counts TEXT NOT NULL
 );
 
@@ -123,6 +127,29 @@ CREATE TABLE IF NOT EXISTS replay_channels (
     added_by TEXT,
     added_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Achievement unlocks are a LEDGER, not derived state: once granted, a badge
+-- is never revoked by later data corrections or threshold tuning (services/
+-- achievements.py derives candidate state; this records what was announced).
+-- handle is the canonical post-merge handle at grant time; reads must span a
+-- player's whole merge group. earned_at = played_at of the unlocking match.
+CREATE TABLE IF NOT EXISTS achievement_unlocks (
+    handle TEXT NOT NULL,
+    key TEXT NOT NULL,
+    earned_at TEXT NOT NULL,
+    granted_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (handle, key)
+);
+
+-- Deployment facts that are data, not code. achievement_epoch is stamped the
+-- first time this DB is opened by achievement-aware code: moment achievements
+-- only count games played after it, so each deployment gets its own launch
+-- date and imported history never mass-unlocks single-game feats.
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+INSERT OR IGNORE INTO meta (key, value) VALUES ('achievement_epoch', datetime('now'));
 """
 
 
@@ -206,6 +233,28 @@ def _migration_7_drop_account_merges(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS account_merges")
 
 
+def _migration_8_achievements(conn: sqlite3.Connection) -> None:
+    """Everything the achievements feature added, in one step: the unlock
+    ledger, the meta table (see _SCHEMA — the epoch stamp itself is in
+    _SCHEMA's INSERT OR IGNORE, which runs on every open, so a DB migrated
+    here gets stamped the same way a fresh one does), and the two per-player
+    replay stats that feed Special Delivery and Great Wall."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS achievement_unlocks (
+               handle TEXT NOT NULL,
+               key TEXT NOT NULL,
+               earned_at TEXT NOT NULL,
+               granted_at TEXT NOT NULL DEFAULT (datetime('now')),
+               PRIMARY KEY (handle, key)
+           )"""
+    )
+    conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(match_players)")}
+    for col in ("drop_commands", "static_defense", "bases_before_unit", "orbitals"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE match_players ADD COLUMN {col} INTEGER")
+
+
 _MIGRATIONS = {
     1: _migration_1_content_key,
     2: _migration_2_replay_channels,
@@ -214,6 +263,7 @@ _MIGRATIONS = {
     5: _migration_5_award_stats,
     6: _migration_6_game_swings,
     7: _migration_7_drop_account_merges,
+    8: _migration_8_achievements,
 }
 
 
@@ -328,8 +378,9 @@ class MatchStore:
         self._conn.executemany(
             """INSERT INTO match_players
                (match_id, name, toon_handle, team, race, pick, repick_used, repick_from, resources_killed,
-                econ_killed, tech_killed, resources_lost, resources_floated, unit_counts)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                econ_killed, tech_killed, resources_lost, resources_floated, drop_commands, static_defense,
+                bases_before_unit, orbitals, unit_counts)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     match_id,
@@ -345,6 +396,10 @@ class MatchStore:
                     p.tech_killed,
                     p.resources_lost,
                     p.resources_floated,
+                    p.drop_commands,
+                    p.static_defense,
+                    p.bases_before_unit,
+                    p.orbitals,
                     json.dumps(p.unit_counts),
                 )
                 for p in match.players
@@ -557,6 +612,51 @@ class MatchStore:
 
     def replay_channel_ids(self) -> set[int]:
         return {r["channel_id"] for r in self._conn.execute("SELECT channel_id FROM replay_channels")}
+
+    def record_unlocks(self, rows: list[tuple[str, str, str]]) -> None:
+        """Append (handle, key, earned_at_iso) rows to the unlock ledger.
+        Append-only and idempotent: re-granting an already-held badge is a
+        no-op, and nothing here ever deletes — unlocks are never revoked."""
+        self._conn.executemany(
+            "INSERT OR IGNORE INTO achievement_unlocks (handle, key, earned_at) VALUES (?, ?, ?)",
+            rows,
+        )
+        self._conn.commit()
+
+    def unlocks_for(self, handles: list[str]) -> list[tuple[str, str]]:
+        """(key, earned_at) unlocked by any handle in a merge group, deduped
+        keeping the earliest earn (accounts merged later may share badges)."""
+        if not handles:
+            return []
+        placeholders = ",".join("?" * len(handles))
+        rows = self._conn.execute(
+            f"""SELECT key, MIN(earned_at) AS earned_at FROM achievement_unlocks
+               WHERE handle IN ({placeholders}) GROUP BY key""",
+            handles,
+        ).fetchall()
+        return [(r["key"], r["earned_at"]) for r in rows]
+
+    def all_unlocks(self) -> list[tuple[str, str]]:
+        """(handle, key) for every unlock — holder counts are computed from
+        this, collapsing merge groups at read time."""
+        rows = self._conn.execute("SELECT handle, key FROM achievement_unlocks").fetchall()
+        return [(r["handle"], r["key"]) for r in rows]
+
+    def unlock_count(self) -> int:
+        return self._conn.execute("SELECT COUNT(*) FROM achievement_unlocks").fetchone()[0]
+
+    def upload_count(self, uploader: str) -> int:
+        """Matches this uploader contributed. New ingests store the Discord
+        user ID; historic rows hold display strings, which never match an id
+        — so counts effectively start when achievements launched."""
+        return self._conn.execute("SELECT COUNT(*) FROM matches WHERE uploaded_by = ?", (uploader,)).fetchone()[0]
+
+    def achievement_epoch(self) -> datetime.datetime:
+        """When achievements launched for THIS database (stamped on first
+        open by achievement-aware code). Moment achievements only count games
+        played after it."""
+        row = self._conn.execute("SELECT value FROM meta WHERE key = 'achievement_epoch'").fetchone()
+        return datetime.datetime.fromisoformat(row["value"])
 
     def confirm_winner(self, match_id: int, winning_team: int) -> None:
         """Manual confirmation overrides any inferred result."""
@@ -798,6 +898,10 @@ class MatchStore:
                 tech_killed=p["tech_killed"],
                 resources_lost=p["resources_lost"],
                 resources_floated=p["resources_floated"],
+                drop_commands=p["drop_commands"],
+                static_defense=p["static_defense"],
+                bases_before_unit=p["bases_before_unit"],
+                orbitals=p["orbitals"],
                 unit_counts=json.loads(p["unit_counts"]),
             )
             for p in player_rows

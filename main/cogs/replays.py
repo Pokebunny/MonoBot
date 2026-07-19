@@ -11,7 +11,8 @@ import discord
 from checks import is_bot_admin
 from discord.ext import commands
 from resources.config import CONFIG
-from services import match_embeds, replay_parser, storage
+from services import achievements, match_embeds, replay_parser, storage
+from services.achievements import AchievementCache
 from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE
 from services.storage import MatchStore
 from views import ExpiringView
@@ -37,10 +38,11 @@ class ConfirmWinnerView(ExpiringView):
     via their linked SC2 name(s). Manual confirmation sets confidence to 1.0.
     Expires after 24h (a restart kills it anyway); !pending re-posts buttons."""
 
-    def __init__(self, store: MatchStore, match_id: int):
+    def __init__(self, store: MatchStore, match_id: int, achievements: AchievementCache | None = None):
         super().__init__()
         self.store = store
         self.match_id = match_id
+        self.achievements = achievements
 
     def _is_participant(self, discord_id: str) -> bool:
         handles = set(self.store.handles_for(discord_id))
@@ -67,6 +69,10 @@ class ConfirmWinnerView(ExpiringView):
             child.disabled = True
         await interaction.response.edit_message(embed=embed, view=self)
         self.stop()
+        if self.achievements:
+            unlocks = achievements.grant_new_unlocks(self.store, self.achievements, match)
+            if unlocks:
+                await interaction.followup.send(embed=match_embeds.achievement_unlocks(unlocks))
 
     @discord.ui.button(label="Team 1 won", style=discord.ButtonStyle.primary)
     async def team1(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -82,7 +88,13 @@ class Replays(commands.Cog):
         self.client = client
         if not hasattr(client, "match_store"):
             client.match_store = MatchStore()
+        if not hasattr(client, "achievement_cache"):
+            client.achievement_cache = AchievementCache(client.match_store)
         self.store: MatchStore = client.match_store
+        self.achievements: AchievementCache = client.achievement_cache
+        # First run over an existing history: grant the career backfill
+        # silently so the first upload doesn't announce years of badges.
+        achievements.ensure_seeded(self.store, self.achievements)
 
     def _watched_channels(self) -> set[int]:
         """Channels watched for replays: the runtime !watchreplays set plus
@@ -98,7 +110,7 @@ class Replays(commands.Cog):
             return
         for attachment in message.attachments:
             if attachment.filename.lower().endswith(".sc2replay"):
-                await self._process_attachment(message.channel, attachment, str(message.author))
+                await self._process_attachment(message.channel, attachment, message.author)
 
     @commands.hybrid_command(help="toggle watching this channel (or #channel) for replay uploads (mods)")
     @is_bot_admin()
@@ -113,7 +125,9 @@ class Replays(commands.Cog):
         mentions = ", ".join(f"<#{cid}>" for cid in sorted(self._watched_channels())) or "every channel"
         await ctx.send(f"{verb} {target.mention} for replay uploads. Currently watching: {mentions}")
 
-    async def _process_attachment(self, channel, attachment: discord.Attachment, uploader: str):
+    async def _process_attachment(self, channel, attachment: discord.Attachment, author: discord.abc.User):
+        # uploaded_by keys on the Discord id so Chronicler can credit it.
+        uploader = str(author.id)
         data = await attachment.read()
         file_hash = storage.hash_replay(data)
         if self.store.has_replay(file_hash):
@@ -147,10 +161,28 @@ class Replays(commands.Cog):
             match.winning_team is None or match.winner_confidence < MIN_WINNER_CONFIDENCE
         )
         if needs_confirmation:
-            view = ConfirmWinnerView(self.store, result.match_id)
+            view = ConfirmWinnerView(self.store, result.match_id, self.achievements)
             view.message = await channel.send(embed=embed, view=view)
         else:
             await channel.send(embed=embed)
+        unlocks = achievements.grant_new_unlocks(self.store, self.achievements, match)
+        unlocks += self._chronicler_unlock(author, match)
+        if unlocks:
+            await channel.send(embed=match_embeds.achievement_unlocks(unlocks))
+
+    def _chronicler_unlock(self, author, match) -> list:
+        """Chronicler is earned by uploading, not playing — grant it here
+        when this upload crosses the threshold (needs a linked account to
+        hang the badge on)."""
+        if self.store.upload_count(str(author.id)) < achievements.CHRONICLER_UPLOADS:
+            return []
+        handles = self.store.handles_for(str(author.id))
+        if not handles:
+            return []
+        spec = achievements.SPECS_BY_KEY["chronicler"]
+        if achievements.grant_direct(self.store, handles[0], spec.key, match.played_at):
+            return [(author.display_name, achievements.Earned(spec, match.played_at))]
+        return []
 
     @commands.hybrid_command(help="re-scan a channel's history for replays, refreshing stored games (mods)")
     @is_bot_admin()
@@ -185,8 +217,11 @@ class Replays(commands.Cog):
                 if self.store.refresh_parse(match, file_hash):
                     stats["refreshed"] += 1
                 else:
-                    result = self.store.ingest(match, file_hash, uploaded_by=str(message.author))
+                    result = self.store.ingest(match, file_hash, uploaded_by=str(message.author.id))
                     stats[result.status] += 1
+        granted = achievements.sweep_grants(self.store, self.achievements)
+        if granted:
+            stats["achievements granted quietly"] = granted
         summary = ", ".join(f"{k}: {n}" for k, n in stats.most_common()) or "no replays found"
         await ctx.send(f"Backfill of {target.mention} done — {summary}.")
 
@@ -199,7 +234,7 @@ class Replays(commands.Cog):
             return
         # Re-post the most recent few with confirm buttons.
         for match_id, match in pending[-3:]:
-            view = ConfirmWinnerView(self.store, match_id)
+            view = ConfirmWinnerView(self.store, match_id, self.achievements)
             view.message = await ctx.send(embed=match_embeds.match_summary(match, match_id), view=view)
         if len(pending) > 3:
             await ctx.send(f"...and {len(pending) - 3} more. Confirm these and run !pending again.")

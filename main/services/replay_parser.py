@@ -40,6 +40,18 @@ _DRAFT_SPREAD_THRESHOLD = 60
 
 _WORKER_COMMANDS = {"TrainProbe", "TrainSCV", "MorphDrone"}
 
+# Static defense structures, by exact name: variants (uprooted crawlers, the
+# map's RenegadeMissileTurret) and Raven AutoTurrets deliberately excluded.
+_STATIC_DEFENSE = {
+    "PhotonCannon",
+    "ShieldBattery",
+    "SpineCrawler",
+    "SporeCrawler",
+    "MissileTurret",
+    "Bunker",
+    "PlanetaryFortress",
+}
+
 # Units that never count toward a player's mono pick: workers, map objects,
 # spawned sub-units, and other free/incidental units.
 _NOISE_PREFIXES = ("Beacon", "Changeling", "Locust", "Broodling")
@@ -119,6 +131,12 @@ _MORPH_PRECURSORS = {
 }
 
 _HATCHERIES = {"Hatchery", "Lair", "Hive"}
+
+# New town halls only — morphs (Lair/Orbital/PlanetaryFortress) are not new
+# bases. Base #1 spawns at game start, so a player's count starts at 1; the
+# map spawns the Terran starting base directly as an OrbitalCommand, caught
+# separately (born only, so a CC-to-orbital morph can't double count).
+_BASE_STRUCTURES = {"Nexus", "CommandCenter", "Hatchery"}
 
 # Worker births are the ground truth for the race a player actually played
 # (lobby race data can't be trusted in monobattles).
@@ -228,6 +246,15 @@ class _PlayerTally:
         self.hatcheries = 0
         self.auto_turrets = 0
         self.worker_races = Counter()  # race evidence from worker births
+        self.drop_commands = 0  # transport/Nydus unload commands issued
+        self.static_defense = 0  # defensive structures completed
+        self.base_times: list[int] = []  # town-hall completion seconds
+        # Queens are tracked apart from other production: they're inject
+        # infrastructure every Zerg makes, so they only count as "making a
+        # unit" for the player whose PICK is Queen.
+        self.first_unit_second: int | None = None  # first non-Queen production
+        self.first_queen_second: int | None = None
+        self.orbitals = 0  # Orbital Commands owned (starting + CC morphs)
 
     def race(self, fallback: str) -> str:
         if self.worker_races:
@@ -313,6 +340,19 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
                 if event.second >= game_start:
                     tally.floated_samples.append(event.minerals_current + event.vespene_current)
             continue
+        if event_name.endswith("CommandEvent"):
+            # Drop play: unloads from transports (Medivac/WarpPrism/Overlord)
+            # and Nydus exits. CC/Bunker unloads are defense, not drops.
+            ability = (getattr(event, "ability_name", "") or "").lower()
+            if (
+                "unload" in ability
+                and "commandcenter" not in ability
+                and "bunker" not in ability
+                and event.second >= game_start
+                and getattr(event, "player", None) is not None
+            ):
+                tallies[event.player.name].drop_commands += 1
+            continue
         if event_name == "DialogControlEvent":
             if (
                 event.control_id in (_REPICK_BUTTON_CONTROL_ID, _KEEP_BUTTON_CONTROL_ID)
@@ -336,11 +376,21 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
         if raw in _WORKER_RACE and event.second >= game_start:
             tally.worker_races[_WORKER_RACE[raw]] += 1
             continue
+        if raw in _BASE_STRUCTURES or (raw == "OrbitalCommand" and event_name == "UnitBornEvent"):
+            tally.base_times.append(event.second)
+        if raw == "OrbitalCommand":
+            # Born = the map-spawned starting base; Done = a CC morph
+            # completing. Lift-off/landing type changes don't come this way.
+            tally.orbitals += 1
         if raw in _HATCHERIES:
             tally.hatcheries += 1
             continue
         if raw == "AutoTurret":
             tally.auto_turrets += 1
+            continue
+        if raw in _STATIC_DEFENSE:
+            if event.second >= game_start:
+                tally.static_defense += 1
             continue
         unit = _canonical(raw)
         if unit is None or event.unit.is_building:
@@ -349,6 +399,11 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
             tally.previews.append(unit)
             tally.preview_times.append(event.second)
         else:
+            if unit == "Queen":
+                if tally.first_queen_second is None:
+                    tally.first_queen_second = event.second
+            elif tally.first_unit_second is None:
+                tally.first_unit_second = event.second
             tally.units[unit] += 1
     return tallies
 
@@ -504,13 +559,20 @@ def parse_replay(path: str) -> MonobattleMatch:
                 )
                 if repick_used and tally.previews:
                     repick_from = tally.previews[0]  # the unit they gave up
+            pick = _detect_pick(tally, race)
+            # Queens only stop the "bases before your first unit" clock for
+            # the player whose pick they are.
+            clocks = [tally.first_unit_second]
+            if pick == "Queen":
+                clocks.append(tally.first_queen_second)
+            cutoff = min((s for s in clocks if s is not None), default=None)
             players.append(
                 MatchPlayer(
                     name=p.name,
                     toon_handle=getattr(p, "toon_handle", "") or "",
                     team=team.number,
                     race=race,
-                    pick=_detect_pick(tally, race),
+                    pick=pick,
                     repick_used=repick_used,
                     repick_from=repick_from,
                     resources_killed=tally.resources_killed,
@@ -520,6 +582,10 @@ def parse_replay(path: str) -> MonobattleMatch:
                     resources_floated=(
                         int(statistics.median(tally.floated_samples)) if tally.floated_samples else None
                     ),
+                    drop_commands=tally.drop_commands,
+                    static_defense=tally.static_defense,
+                    bases_before_unit=sum(1 for s in tally.base_times if cutoff is None or s < cutoff),
+                    orbitals=tally.orbitals,
                     unit_counts=dict(tally.units),
                 )
             )

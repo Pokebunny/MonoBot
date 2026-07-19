@@ -4,6 +4,8 @@ import discord
 from models.matchmaking import ProposedMatch, QueuedPlayer
 from models.rating import PlayerRating
 from models.replay import MatchPlayer, MonobattleMatch
+from services.achievements import RARITIES, RARITY_EMOJI, AchievementSpec, Earned, is_secret
+from services.achievements import SPECS as ACHIEVEMENT_SPECS
 from services.awards import SPECS, game_awards, match_awards, mvp_outkilled_team
 from services.rating import MIN_RANKED_GAMES
 
@@ -173,6 +175,7 @@ def player_profile(
     mvp_count: int = 0,
     award_counts: dict[str, int] | None = None,
     display_name: str | None = None,
+    achievements: list[Earned] | None = None,
 ) -> discord.Embed:
     shown = display_name or rating.name
     embed = discord.Embed(title=f"{shown} — profile", color=ACCENT)
@@ -186,6 +189,14 @@ def player_profile(
         parts = [f"{spec.emoji} {spec.title} ×{award_counts[spec.key]}" for spec in SPECS if award_counts.get(spec.key)]
         if parts:
             embed.add_field(name="Awards", value="  ·  ".join(parts), inline=False)
+    if achievements:
+        # earned comes rarest-first; show the count and the three rarest.
+        showcase = "  ·  ".join(f"{RARITY_EMOJI[e.spec.rarity]} {e.spec.name}" for e in achievements[:3])
+        embed.add_field(
+            name=f"Achievements ({len(achievements)}/{len(ACHIEVEMENT_SPECS)})",
+            value=f"{showcase}\n*!achievements for the full list*",
+            inline=False,
+        )
     embed.add_field(name="Races", value=_record_lines(race_records, 3), inline=True)
     embed.add_field(name="Most-played units", value=_record_lines(unit_records, 10), inline=True)
     others = [a for a in aliases if a.lower() != shown.lower()]
@@ -193,6 +204,81 @@ def player_profile(
         embed.add_field(name="Plays as", value=", ".join(others[:12]), inline=False)
     embed.set_footer(text=f"{_rating_footer(rating)} · decided games only")
     return embed
+
+
+def achievements_gallery(
+    shown_name: str,
+    earned: list[Earned],
+    next_up: list[tuple[AchievementSpec, float, float]],
+    holder_counts: dict[str, int] | None = None,
+) -> discord.Embed:
+    """A player's earned achievements grouped by rarity (rarest first), plus
+    their closest locked ones. holder_counts (key -> players holding it) adds
+    a live-rarity note to Epic+ lines."""
+    holder_counts = holder_counts or {}
+    embed = discord.Embed(title=f"{shown_name} — achievements", color=ACCENT)
+    if not earned:
+        embed.description = "*Nothing yet — go play some games!*"
+    for rarity in reversed(RARITIES):
+        lines = []
+        for e in earned:
+            if e.spec.rarity != rarity:
+                continue
+            line = f"{e.spec.emoji} **{e.spec.name}** — {e.spec.description}"
+            holders = holder_counts.get(e.spec.key)
+            if holders and rarity in ("Epic", "Legendary"):
+                line += f" *(held by {holders})*"
+            lines.append(line)
+        if not lines:
+            continue
+        # Discord caps a field value at 1024 chars; a well-stocked rarity
+        # group can exceed it, so overflow continues in unnamed fields.
+        chunks, current = [], ""
+        for line in lines:
+            if current and len(current) + 1 + len(line) > 1024:
+                chunks.append(current)
+                current = line
+            else:
+                current = f"{current}\n{line}" if current else line
+        chunks.append(current)
+        embed.add_field(name=f"{RARITY_EMOJI[rarity]} {rarity}", value=chunks[0], inline=False)
+        for chunk in chunks[1:]:
+            embed.add_field(name="​", value=chunk, inline=False)
+    if next_up:
+        lines = [
+            f"{spec.emoji} **{spec.name}** — {spec.description} ({current:,.0f}/{target:,.0f})"
+            for spec, current, target in next_up
+        ]
+        embed.add_field(name="🔒 Next up", value="\n".join(lines), inline=False)
+    earned_keys = {e.spec.key for e in earned}
+    hidden = sum(1 for s in ACHIEVEMENT_SPECS if is_secret(s) and s.key not in earned_keys)
+    tease = f" · {hidden} secret achievement{'s' if hidden != 1 else ''} undiscovered" if hidden else ""
+    embed.set_footer(text=f"{len(earned)}/{len(ACHIEVEMENT_SPECS)} unlocked{tease} · decided games only")
+    return embed
+
+
+def achievement_unlocks(unlocks: list[tuple[str, Earned]]) -> discord.Embed:
+    """Announcement for achievements a just-ingested game unlocked, as
+    (player display name, earned) pairs, rarest first. A lobby full of new
+    players can unlock dozens at once, so the list is truncated to stay under
+    the 4096-char embed description limit — the rarest survive the cut."""
+    lines, dropped = [], 0
+    budget = 3900  # headroom under the 4096 limit for the overflow line
+    for name, e in unlocks:
+        line = (
+            f"{RARITY_EMOJI[e.spec.rarity]} {e.spec.emoji} **{name}** unlocked "
+            f"**{e.spec.name}** — {e.spec.description.lower()}"
+        )
+        if is_secret(e.spec):
+            line += " ✨ *(secret!)*"
+        if budget - len(line) - 1 < 0:
+            dropped += 1
+            continue
+        budget -= len(line) + 1
+        lines.append(line)
+    if dropped:
+        lines.append(f"…and {dropped} more — check your `!achievements`")
+    return discord.Embed(title="🏅 Achievement unlocked!", description="\n".join(lines), color=ACCENT)
 
 
 def h2h_summary(

@@ -4,7 +4,8 @@ import logging
 
 import discord
 from discord.ext import commands
-from services import match_embeds
+from services import achievements, match_embeds
+from services.achievements import AchievementCache
 from services.rating import MIN_DURATION_SECONDS, MIN_RANKED_GAMES, MIN_WINNER_CONFIDENCE, RatingCache
 from services.storage import MatchStore
 from views import ExpiringView
@@ -122,8 +123,12 @@ class Leaderboard(commands.Cog):
             client.match_store = MatchStore()
         if not hasattr(client, "rating_cache"):
             client.rating_cache = RatingCache(client.match_store)
+        if not hasattr(client, "achievement_cache"):
+            client.achievement_cache = AchievementCache(client.match_store)
         self.store: MatchStore = client.match_store
         self.ratings: RatingCache = client.rating_cache
+        self.achievements: AchievementCache = client.achievement_cache
+        achievements.ensure_seeded(self.store, self.achievements)
 
     @commands.hybrid_command(aliases=["ladder"], help="show the rating leaderboard")
     @commands.cooldown(1, 5, commands.BucketType.channel)
@@ -212,10 +217,11 @@ class Leaderboard(commands.Cog):
         units = self.store.player_records_by(group, "pick", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
         mvps = self.store.mvp_count(group, MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
         awards = self.store.award_counts(group, MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
+        earned = achievements.ledger_for_group(self.store, group)
         shown = self._shown_name(ctx, group, rating.name)
         await ctx.send(
             embed=match_embeds.player_profile(
-                rating, rank, total, aliases, races, units, mvps, awards, display_name=shown
+                rating, rank, total, aliases, races, units, mvps, awards, display_name=shown, achievements=earned
             )
         )
         if n_accounts > 1:
@@ -238,6 +244,26 @@ class Leaderboard(commands.Cog):
                 if h not in group:
                     group.append(h)
         return group
+
+    @commands.hybrid_command(aliases=["ach"], help="show a player's achievements (yourself if no name given)")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def achievements(self, ctx, *, player: str | None = None):
+        if player is None:
+            group = self._own_group(ctx.author)
+            if not group:
+                await ctx.send("Link your SC2 account first (`!link <name>`), or give a name.")
+                return
+            shown = ctx.author.display_name
+        else:
+            name, group = self._group_for_name(player)
+            if not group:
+                await ctx.send(f"No games found for **{player}**.")
+                return
+            shown = self._shown_name(ctx, group, name)
+        earned = achievements.ledger_for_group(self.store, group)
+        next_up = self.achievements.book().next_up(group[0])
+        holders = achievements.ledger_holder_counts(self.store, self.store.merge_map())
+        await ctx.send(embed=match_embeds.achievements_gallery(shown, earned, next_up, holders))
 
     @commands.hybrid_command(help="browse recent matches (◀ steps back in time) — optionally a player's")
     @commands.cooldown(1, 5, commands.BucketType.channel)

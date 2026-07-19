@@ -16,6 +16,10 @@ class MatchPlayer(BaseModel):
     tech_killed: int | None = None  # enemy tech/building value destroyed
     resources_lost: int | None = None  # own value lost
     resources_floated: int | None = None  # median unspent bank over the game
+    drop_commands: int | None = None  # transport/Nydus unload commands issued
+    static_defense: int | None = None  # defensive structures completed
+    bases_before_unit: int | None = None  # town halls completed before first unit
+    orbitals: int | None = None  # Orbital Commands owned (Terran)
     unit_counts: dict[str, int]  # normalized army-unit production counts
 
 

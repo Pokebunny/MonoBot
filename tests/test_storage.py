@@ -57,6 +57,14 @@ def store(tmp_path):
     s.close()
 
 
+def test_discovered_keys(store):
+    assert store.discovered_keys() == set()
+    store.record_unlocks([("A1", "one_man_army", "2026-01-01T00:00:00")])
+    store.record_unlocks([("A2", "one_man_army", "2026-01-02T00:00:00")])  # same key, another holder
+    store.record_unlocks([("A1", "deja_vu", "2026-01-03T00:00:00")])
+    assert store.discovered_keys() == {"one_man_army", "deja_vu"}
+
+
 def test_meta_get_set_roundtrip(store):
     assert store.get_meta("queue_message") is None  # unset
     store.set_meta("queue_message", "123:456")
@@ -424,9 +432,9 @@ def test_awards_pick_outliers_only(store):
         p.tech_killed = 400
         p.resources_floated = 900
     m.players[0].econ_killed = 6000  # clear Worker Slayer outlier
-    m.players[1].resources_floated = 15000  # clear Banker outlier
+    m.players[1].resources_lost = 30000  # clear Martyr outlier
     awards = match_awards(m)
-    assert {a.key for a in awards} == {"worker_slayer", "banker"}
+    assert {a.key for a in awards} == {"worker_slayer", "martyr"}
     assert {a.player.name for a in awards} == {"A0", "A1"}
 
     # outlier below the absolute floor -> no award

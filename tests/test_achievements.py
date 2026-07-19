@@ -387,15 +387,33 @@ def test_next_up_reports_progress_and_hides_secrets():
 
 
 def test_only_surprises_are_secret():
-    # Tier extensions of visible families are never secret — only genuine
-    # surprises (standalone feats and Easter eggs) hide until unlocked.
+    # Secrets are situational surprises you stumble into (Easter eggs, quirky
+    # feats), never tier extensions of a visible family (the tier below
+    # telegraphs those).
     assert {s.key for s in SPECS if is_secret(s)} == {
         "one_man_army",
         "deja_vu",
         "repick_regret",
         "finders_keepers",
         "rubber_band",
+        "along_for_the_ride",
+        "every_mineral_counts",
+        "the_prodigal",
+        "anniversary",
+        "trust_fund",
     }
+
+
+def test_trust_fund_win_on_a_huge_bank():
+    players = (
+        [_player("A1", 1, resources_floated=6000)]
+        + [_player(f"A{i}", 1) for i in range(2, 5)]
+        + [_player(f"B{i}", 2, resources_floated=9000) for i in range(1, 5)]
+    )
+    book = _book([_match(winning_team=1, players=players)])
+    assert "trust_fund" in _keys(book, "A1")  # won on a huge bank
+    assert "trust_fund" not in _keys(book, "A2")  # normal bank
+    assert "trust_fund" not in _keys(book, "B1")  # hoarded but lost
 
 
 def test_cache_rebuilds_on_store_change():

@@ -141,9 +141,9 @@ class Tally:
     finders_keepers: int = 0  # won with a unit an opponent repicked away from
     twin_wins: int = 0  # won with 2+ of the same unit on the team
     triplet_wins: int = 0  # won with 3+ of the same unit on the team
-    did_nothing_wins: int = 0  # long wins with almost no fighting
     max_kills_in_loss: int = 0
     thrifty_wins: int = 0  # long wins with a near-zero median bank
+    hoard_wins: int = 0  # wins while sitting on a huge median bank
     delivery_wins: int = 0  # wins with real drop play
     max_static_defense: int = 0  # most defensive structures in one real game
     greed_wins: int = 0  # wins after expanding heavily before making a unit
@@ -348,14 +348,9 @@ class Tally:
             self.max_orbitals = max(self.max_orbitals, player.orbitals)
         if player.static_defense is not None:
             self.max_static_defense = max(self.max_static_defense, player.static_defense)
+        if won and player.resources_floated is not None and player.resources_floated >= 5000:
+            self.hoard_wins += 1  # won without ever spending the mountain of resources
         if won and match.duration_seconds >= 600:
-            if (
-                player.resources_killed is not None
-                and player.resources_killed <= 1000
-                and player.resources_lost is not None
-                and player.resources_lost <= 1000
-            ):
-                self.did_nothing_wins += 1
             if player.resources_floated is not None and player.resources_floated < 200:
                 self.thrifty_wins += 1
             if player.pick in _NO_ANTI_AIR_PICKS:

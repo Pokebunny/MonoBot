@@ -224,7 +224,11 @@ def achievements_gallery(
         for e in earned:
             if e.spec.rarity != rarity:
                 continue
-            line = f"{e.spec.emoji} **{e.spec.name}** — {e.spec.description}"
+            # A profile is public, so a secret's how is never printed here
+            # (the recipe lives only in the ephemeral catalog). The name is
+            # fine — earning it means it's already community-discovered.
+            body = "🔒 *secret*" if is_secret(e.spec) else e.spec.description
+            line = f"{e.spec.emoji} **{e.spec.name}** — {body}"
             holders = holder_counts.get(e.spec.key)
             if holders and rarity in ("Epic", "Legendary"):
                 line += f" *(held by {holders})*"
@@ -250,27 +254,88 @@ def achievements_gallery(
             for spec, current, target in next_up
         ]
         embed.add_field(name="🔒 Next up", value="\n".join(lines), inline=False)
-    earned_keys = {e.spec.key for e in earned}
-    hidden = sum(1 for s in ACHIEVEMENT_SPECS if is_secret(s) and s.key not in earned_keys)
-    tease = f" · {hidden} secret achievement{'s' if hidden != 1 else ''} undiscovered" if hidden else ""
-    embed.set_footer(text=f"{len(earned)}/{len(ACHIEVEMENT_SPECS)} unlocked{tease} · decided games only")
+    embed.set_footer(text=f"{len(earned)}/{len(ACHIEVEMENT_SPECS)} unlocked · run /gallery to browse them all")
     return embed
 
 
-def achievement_unlocks(unlocks: list[tuple[str, Earned]]) -> discord.Embed:
+def achievement_catalog(
+    rarity: str,
+    earned_keys: set[str],
+    discovered_keys: set[str],
+    holder_counts: dict[str, int] | None = None,
+    private: bool = False,
+) -> discord.Embed:
+    """One rarity page of the full catalogue, for browsing everything that
+    exists. Two visibility gates for secrets:
+    - name: hidden as 🔒 ??? until the community has discovered it (anyone
+      earned it); the rarity tier still shows (it's the page).
+    - recipe: shown only when the VIEWER has earned it AND this is a private
+      (ephemeral) render — a public !catalog masks it so a channel message
+      never leaks the how."""
+    holder_counts = holder_counts or {}
+    specs = [s for s in ACHIEVEMENT_SPECS if s.rarity == rarity]
+    lines = []
+    for s in specs:
+        earned = s.key in earned_keys
+        mark = "✅" if earned else "▫️"
+        if is_secret(s) and s.key not in discovered_keys:
+            lines.append("🔒 **???** — *undiscovered secret*")
+            continue
+        if is_secret(s) and not (earned and private):
+            body = "🔒 *secret*"  # name shown, how hidden
+        else:
+            body = s.description
+        line = f"{mark} {s.emoji} **{s.name}** — {body}"
+        holders = holder_counts.get(s.key)
+        if holders and rarity in ("Epic", "Legendary"):
+            line += f" *(held by {holders})*"
+        lines.append(line)
+
+    embed = discord.Embed(title=f"{RARITY_EMOJI[rarity]} {rarity} achievements", color=ACCENT)
+    # Field values cap at 1024 chars, so a big rarity tier spills into extra
+    # unnamed fields (same approach as the profile gallery).
+    chunks, current = [], ""
+    for line in lines:
+        if current and len(current) + 1 + len(line) > 1024:
+            chunks.append(current)
+            current = line
+        else:
+            current = f"{current}\n{line}" if current else line
+    chunks.append(current)
+    embed.add_field(name="​", value=chunks[0], inline=False)
+    for chunk in chunks[1:]:
+        embed.add_field(name="​", value=chunk, inline=False)
+    earned_here = sum(1 for s in specs if s.key in earned_keys)
+    footer = f"{earned_here}/{len(specs)} {rarity} unlocked"
+    if not private:
+        footer += " · run /gallery (slash) to reveal recipes for secrets you've earned"
+    embed.set_footer(text=footer)
+    return embed
+
+
+def achievement_unlocks(
+    unlocks: list[tuple[str, Earned]], first_discovery_keys: frozenset[str] = frozenset()
+) -> discord.Embed:
     """Announcement for achievements a just-ingested game unlocked, as
     (player display name, earned) pairs, rarest first. A lobby full of new
     players can unlock dozens at once, so the list is truncated to stay under
-    the 4096-char embed description limit — the rarest survive the cut."""
-    lines, dropped = [], 0
+    the 4096-char embed description limit — the rarest survive the cut.
+
+    Secrets show only their NAME here, never the how — the recipe would spoil
+    it for the whole channel. `first_discovery_keys` are secrets nobody had
+    earned before this game, so the finder gets a discovery credit."""
+    lines, dropped, any_secret = [], 0, False
     budget = 3900  # headroom under the 4096 limit for the overflow line
     for name, e in unlocks:
-        line = (
-            f"{RARITY_EMOJI[e.spec.rarity]} {e.spec.emoji} **{name}** unlocked "
-            f"**{e.spec.name}** — {e.spec.description.lower()}"
-        )
+        prefix = f"{RARITY_EMOJI[e.spec.rarity]} {e.spec.emoji} **{name}**"
         if is_secret(e.spec):
-            line += " ✨ *(secret!)*"
+            any_secret = True
+            if e.spec.key in first_discovery_keys:
+                line = f"{prefix} is the first to discover **{e.spec.name}**! 🌟"
+            else:
+                line = f"{prefix} unlocked **{e.spec.name}** ✨ *(secret!)*"
+        else:
+            line = f"{prefix} unlocked **{e.spec.name}** — {e.spec.description.lower()}"
         if budget - len(line) - 1 < 0:
             dropped += 1
             continue
@@ -278,7 +343,10 @@ def achievement_unlocks(unlocks: list[tuple[str, Earned]]) -> discord.Embed:
         lines.append(line)
     if dropped:
         lines.append(f"…and {dropped} more — check your `!achievements`")
-    return discord.Embed(title="🏅 Achievement unlocked!", description="\n".join(lines), color=ACCENT)
+    embed = discord.Embed(title="🏅 Achievement unlocked!", description="\n".join(lines), color=ACCENT)
+    if any_secret:
+        embed.set_footer(text="✨ secret unlocked — run /gallery to see what you did")
+    return embed
 
 
 def h2h_summary(

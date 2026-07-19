@@ -156,6 +156,7 @@ SPECS: list[AchievementSpec] = [
         "Rare",
         "Play on the anniversary of your first game",
         _career("anniversary_games", 1),
+        secret=True,
     ),
     _spec("insomniac", "Insomniac", "🌃", "Epic", "Play 50 late-night games", _career("night_games", 50)),
     # -- moment: streaks (live only) --------------------------------------
@@ -232,20 +233,22 @@ SPECS: list[AchievementSpec] = [
         _live("max_kills_in_loss", 30000),
     ),
     _spec(
-        "cheerleader",
-        "Cheerleader",
-        "📣",
-        "Rare",
-        "Win a 10+ minute game with under 1,000 value killed and lost",
-        _live("did_nothing_wins", 1),
-    ),
-    _spec(
         "every_mineral_counts",
         "Every Mineral Counts",
         "💎",
         "Rare",
         "Win a 10+ minute game with a median bank under 200",
         _live("thrifty_wins", 1),
+        secret=True,
+    ),
+    _spec(
+        "trust_fund",
+        "Trust Fund",
+        "🐷",
+        "Rare",
+        "Win a game sitting on a 5,000+ bank",
+        _live("hoard_wins", 1),
+        secret=True,
     ),
     _spec(
         "seeing_double",
@@ -358,6 +361,7 @@ SPECS: list[AchievementSpec] = [
         "Uncommon",
         "Win your first game back after 30+ days away",
         _live("return_wins", 1),
+        secret=True,
     ),
     _spec(
         "mirror_master",
@@ -382,6 +386,7 @@ SPECS: list[AchievementSpec] = [
         "Uncommon",
         "Win a 10+ minute game with the fewest kills in the lobby",
         _live("fewest_kills_wins", 1),
+        secret=True,
     ),
     _spec(
         "overqualified",

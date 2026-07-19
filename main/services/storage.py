@@ -645,6 +645,12 @@ class MatchStore:
     def unlock_count(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM achievement_unlocks").fetchone()[0]
 
+    def discovered_keys(self) -> set[str]:
+        """Every achievement key at least one player holds. Gates a secret's
+        community reveal: its NAME becomes visible to everyone once anyone has
+        earned it (the how stays hidden until a viewer earns it themselves)."""
+        return {r["key"] for r in self._conn.execute("SELECT DISTINCT key FROM achievement_unlocks")}
+
     def upload_count(self, uploader: str) -> int:
         """Matches this uploader contributed. New ingests store the Discord
         user ID; historic rows hold display strings, which never match an id

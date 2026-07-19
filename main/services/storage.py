@@ -658,6 +658,22 @@ class MatchStore:
         row = self._conn.execute("SELECT value FROM meta WHERE key = 'achievement_epoch'").fetchone()
         return datetime.datetime.fromisoformat(row["value"])
 
+    def get_meta(self, key: str) -> str | None:
+        """Read a deployment fact from the meta key/value table (None if
+        unset). For small runtime state that outlives a restart but isn't
+        match data — e.g. the live queue message pointer."""
+        row = self._conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        """Upsert a meta key/value. Not a match write, so it does not bump
+        change_count (derived caches don't depend on it)."""
+        self._conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        self._conn.commit()
+
     def confirm_winner(self, match_id: int, winning_team: int) -> None:
         """Manual confirmation overrides any inferred result."""
         self._conn.execute(

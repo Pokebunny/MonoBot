@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 
 QUEUE_TARGET = 8  # 4v4
 
+# meta key holding the live queue message pointer ("<channel_id>:<message_id>")
+# so a message posted before a restart can still be found and cleaned up.
+QUEUE_MSG_META_KEY = "queue_message"
+
 
 class QueueView(discord.ui.View):
     """Join/Leave buttons attached to the queue message. Persistent (fixed
@@ -56,6 +60,47 @@ class Matchmaking(commands.Cog):
         # Register the persistent view so Join/Leave buttons on queue messages
         # from before the last restart still dispatch here.
         self.client.add_view(QueueView(self))
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        # Sweep a queue message left over from before a restart so a stale,
+        # unbacked queue isn't left sitting in chat. keep=self.queue_message is
+        # None on a fresh process (deletes the leftover) but the live message
+        # on a mid-session gateway reconnect (so it's preserved, not deleted).
+        await self._clear_old_queue_message(keep=self.queue_message)
+
+    async def _clear_old_queue_message(self, keep: discord.Message | None = None):
+        """Delete the last-tracked queue message unless it's `keep`, then record
+        `keep` as the current one. Called whenever a new queue message is posted
+        or adopted, and on startup (keep=None), so exactly one live queue
+        message survives and stale ones never accumulate — even across a restart,
+        since the pointer lives in the DB, not just memory."""
+        keep_ref = f"{keep.channel.id}:{keep.id}" if keep is not None else ""
+        old_ref = self.store.get_meta(QUEUE_MSG_META_KEY) or ""
+        if old_ref == keep_ref:
+            return
+        if old_ref:
+            await self._delete_message_ref(old_ref)
+        self.store.set_meta(QUEUE_MSG_META_KEY, keep_ref)
+
+    async def _delete_message_ref(self, ref: str):
+        """Delete a message given a stored "<channel_id>:<message_id>" pointer.
+        Silent if it's already gone or the channel is unreachable."""
+        try:
+            channel_id, message_id = (int(part) for part in ref.split(":"))
+        except ValueError:
+            return
+        channel = self.client.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.client.fetch_channel(channel_id)
+            except discord.HTTPException:
+                return
+        try:
+            message = await channel.fetch_message(message_id)
+            await message.delete()
+        except discord.HTTPException:
+            pass
 
     # -- rating lookup ---------------------------------------------------
 
@@ -98,18 +143,14 @@ class Matchmaking(commands.Cog):
                 await self.queue_message.edit(embed=self._status_embed(), view=QueueView(self))
             except discord.HTTPException:
                 self.queue_message = None
+                self.store.set_meta(QUEUE_MSG_META_KEY, "")
 
     async def _adopt_message(self, interaction: discord.Interaction):
         """Make the message the button lives on the one live queue message,
-        deleting the previously tracked one so duplicates (leftover copies, or
+        deleting any previously tracked one so duplicates (leftover copies, or
         messages from before a restart) don't accumulate out of sync."""
-        old = self.queue_message
         self.queue_message = interaction.message
-        if old is not None and old.id != interaction.message.id:
-            try:
-                await old.delete()
-            except discord.HTTPException:
-                pass
+        await self._clear_old_queue_message(keep=interaction.message)
 
     # -- commands & interactions -----------------------------------------
 
@@ -122,18 +163,13 @@ class Matchmaking(commands.Cog):
         content = None
         if not self.queue and CONFIG.queue_ping_role_id is not None:
             content = f"<@&{CONFIG.queue_ping_role_id}> a monobattle queue is forming — click **Join** to get in!"
-        old = self.queue_message
         self.queue_message = await ctx.send(
             content=content,
             embed=self._status_embed(),
             view=QueueView(self),
             allowed_mentions=discord.AllowedMentions(roles=True),
         )
-        if old is not None:
-            try:
-                await old.delete()
-            except discord.HTTPException:
-                pass
+        await self._clear_old_queue_message(keep=self.queue_message)
 
     @commands.hybrid_command(help="remove a player from the queue (e.g. a no-show)")
     @commands.cooldown(1, 3, commands.BucketType.user)

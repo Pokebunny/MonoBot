@@ -57,6 +57,14 @@ def store(tmp_path):
     s.close()
 
 
+def test_meta_get_set_roundtrip(store):
+    assert store.get_meta("queue_message") is None  # unset
+    store.set_meta("queue_message", "123:456")
+    assert store.get_meta("queue_message") == "123:456"
+    store.set_meta("queue_message", "")  # cleared
+    assert store.get_meta("queue_message") == ""
+
+
 def test_ingest_and_roundtrip(store):
     original = _match()
     res = store.ingest(original, hash_replay(b"replay-bytes"), uploaded_by="tester")

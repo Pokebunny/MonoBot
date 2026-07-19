@@ -70,9 +70,13 @@ class ConfirmWinnerView(ExpiringView):
         await interaction.response.edit_message(embed=embed, view=self)
         self.stop()
         if self.achievements:
+            pre_discovered = self.store.discovered_keys()  # before grant, to spot community-first secrets
             unlocks = achievements.grant_new_unlocks(self.store, self.achievements, match)
             if unlocks:
-                await interaction.followup.send(embed=match_embeds.achievement_unlocks(unlocks))
+                first = frozenset(
+                    e.spec.key for _, e in unlocks if achievements.is_secret(e.spec) and e.spec.key not in pre_discovered
+                )
+                await interaction.followup.send(embed=match_embeds.achievement_unlocks(unlocks, first))
 
     @discord.ui.button(label="Team 1 won", style=discord.ButtonStyle.primary)
     async def team1(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -165,10 +169,14 @@ class Replays(commands.Cog):
             view.message = await channel.send(embed=embed, view=view)
         else:
             await channel.send(embed=embed)
+        pre_discovered = self.store.discovered_keys()  # before grant, to spot community-first secrets
         unlocks = achievements.grant_new_unlocks(self.store, self.achievements, match)
         unlocks += self._chronicler_unlock(author, match)
         if unlocks:
-            await channel.send(embed=match_embeds.achievement_unlocks(unlocks))
+            first = frozenset(
+                e.spec.key for _, e in unlocks if achievements.is_secret(e.spec) and e.spec.key not in pre_discovered
+            )
+            await channel.send(embed=match_embeds.achievement_unlocks(unlocks, first))
 
     def _chronicler_unlock(self, author, match) -> list:
         """Chronicler is earned by uploading, not playing — grant it here

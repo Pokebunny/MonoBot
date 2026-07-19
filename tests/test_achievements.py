@@ -150,6 +150,32 @@ def test_moral_victory_losing_mvp():
     assert "moral_victory" in _keys(book, "B1")
 
 
+def test_overqualified_mvp_with_worst_unit():
+    # Build a live win-rate table: BroodLord always loses, Zergling always
+    # wins, so BroodLord is the community's worst (and rankable) unit.
+    matches = [
+        _match(
+            winning_team=1,
+            players=[_player(f"A{i}", 1, pick="Zergling", kills=1000) for i in range(1, 5)]
+            + [_player(f"B{i}", 2, pick="BroodLord", kills=1000) for i in range(1, 5)],
+            played_at=AFTER_EPOCH + datetime.timedelta(hours=h),
+        )
+        for h in range(10)
+    ]
+    # Qualifying game: a BroodLord player tops the lobby's kills. Win isn't
+    # required — topping kills with the worst unit is the feat.
+    q_players = (
+        [_player(f"A{i}", 1, pick="Zergling", kills=1000) for i in range(1, 5)]
+        + [_player("B1", 2, pick="BroodLord", kills=30000)]
+        + [_player(f"B{i}", 2, pick="BroodLord", kills=1000) for i in range(2, 5)]
+    )
+    matches.append(_match(winning_team=1, players=q_players, played_at=AFTER_EPOCH + datetime.timedelta(hours=11)))
+    book = _book(matches)
+    assert "overqualified" in _keys(book, "B1")  # MVP on the lobby's worst unit
+    assert "overqualified" not in _keys(book, "B2")  # worst unit, but not the MVP
+    assert "overqualified" not in _keys(book, "A1")  # MVP earlier, but on a strong unit
+
+
 def test_mirror_master():
     players = [_player(f"A{i}", 1, pick="Marine" if i == 1 else "Zergling") for i in range(1, 5)] + [
         _player(f"B{i}", 2, pick="Marine" if i == 1 else "Roach") for i in range(1, 5)
@@ -361,15 +387,33 @@ def test_next_up_reports_progress_and_hides_secrets():
 
 
 def test_only_surprises_are_secret():
-    # Tier extensions of visible families are never secret — only genuine
-    # surprises (standalone feats and Easter eggs) hide until unlocked.
+    # Secrets are situational surprises you stumble into (Easter eggs, quirky
+    # feats), never tier extensions of a visible family (the tier below
+    # telegraphs those).
     assert {s.key for s in SPECS if is_secret(s)} == {
         "one_man_army",
         "deja_vu",
         "repick_regret",
         "finders_keepers",
         "rubber_band",
+        "along_for_the_ride",
+        "every_mineral_counts",
+        "the_prodigal",
+        "anniversary",
+        "trust_fund",
     }
+
+
+def test_trust_fund_win_on_a_huge_bank():
+    players = (
+        [_player("A1", 1, resources_floated=6000)]
+        + [_player(f"A{i}", 1) for i in range(2, 5)]
+        + [_player(f"B{i}", 2, resources_floated=9000) for i in range(1, 5)]
+    )
+    book = _book([_match(winning_team=1, players=players)])
+    assert "trust_fund" in _keys(book, "A1")  # won on a huge bank
+    assert "trust_fund" not in _keys(book, "A2")  # normal bank
+    assert "trust_fund" not in _keys(book, "B1")  # hoarded but lost
 
 
 def test_cache_rebuilds_on_store_change():

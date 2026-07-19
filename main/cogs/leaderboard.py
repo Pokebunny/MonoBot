@@ -69,6 +69,58 @@ class LeaderboardView(ExpiringView):
         await self._show(interaction)
 
 
+class CatalogView(ExpiringView):
+    """◀ ▶ pagination over the full achievement catalogue, one rarity per
+    page. `private` (an ephemeral slash invocation) reveals the recipes of
+    secrets the viewer has earned; a public !catalog keeps them masked so a
+    channel message never leaks the how."""
+
+    def __init__(self, earned_keys: set[str], discovered_keys: set[str], holder_counts: dict[str, int], private: bool):
+        super().__init__()
+        self.earned_keys = earned_keys
+        self.discovered_keys = discovered_keys
+        self.holder_counts = holder_counts
+        self.private = private
+        self.page = 0
+        self.pages = len(achievements.RARITIES)
+        self._sync()
+
+    def _sync(self):
+        at_start = self.page <= 0
+        at_end = self.page >= self.pages - 1
+        self.first.disabled = self.prev.disabled = at_start
+        self.next.disabled = self.last.disabled = at_end
+
+    def embed(self) -> discord.Embed:
+        return match_embeds.achievement_catalog(
+            achievements.RARITIES[self.page], self.earned_keys, self.discovered_keys, self.holder_counts, self.private
+        )
+
+    async def _show(self, interaction: discord.Interaction):
+        self._sync()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    @discord.ui.button(emoji="⏮", style=discord.ButtonStyle.secondary)
+    async def first(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = 0
+        await self._show(interaction)
+
+    @discord.ui.button(emoji="◀", style=discord.ButtonStyle.secondary)
+    async def prev(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = max(0, self.page - 1)
+        await self._show(interaction)
+
+    @discord.ui.button(emoji="▶", style=discord.ButtonStyle.secondary)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = min(self.pages - 1, self.page + 1)
+        await self._show(interaction)
+
+    @discord.ui.button(emoji="⏭", style=discord.ButtonStyle.secondary)
+    async def last(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = self.pages - 1
+        await self._show(interaction)
+
+
 class MatchBrowserView(ExpiringView):
     """⏮ ◀ ▶ ⏭ browsing over a snapshot of match history (oldest→newest);
     opens on the newest game, ◀ steps back in time."""
@@ -264,6 +316,21 @@ class Leaderboard(commands.Cog):
         next_up = self.achievements.book().next_up(group[0])
         holders = achievements.ledger_holder_counts(self.store, self.store.merge_map())
         await ctx.send(embed=match_embeds.achievements_gallery(shown, earned, next_up, holders))
+
+    @commands.hybrid_command(aliases=["catalog"], help="browse the full achievement gallery (secret recipes reveal only via /gallery)")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def gallery(self, ctx):
+        # Recipes for secrets you've earned are only revealed on a PRIVATE
+        # (ephemeral) render, which needs a slash invocation. A text !catalog
+        # still works — it just keeps secret recipes masked, since the message
+        # is public.
+        group = self._own_group(ctx.author)
+        earned_keys = {e.spec.key for e in achievements.ledger_for_group(self.store, group)} if group else set()
+        discovered = self.store.discovered_keys()
+        holders = achievements.ledger_holder_counts(self.store, self.store.merge_map())
+        private = ctx.interaction is not None
+        view = CatalogView(earned_keys, discovered, holders, private)
+        view.message = await ctx.send(embed=view.embed(), view=view, ephemeral=private)
 
     @commands.hybrid_command(help="browse recent matches (◀ steps back in time) — optionally a player's")
     @commands.cooldown(1, 5, commands.BucketType.channel)

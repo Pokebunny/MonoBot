@@ -63,16 +63,8 @@ SPECS = [
         8000,
         lambda v: f"{v:,.0f} value lost",
     ),
-    AwardSpec(
-        "banker",
-        "💰",
-        "The Banker",
-        # Median bank over the game, not the final snapshot — leavers donate
-        # their resources to teammates, which would frame the recipient.
-        lambda p: p.resources_floated,
-        2000,
-        lambda v: f"~{v:,.0f} unspent all game",
-    ),
+    # No Banker award: a big unspent bank is a mistake, not a highlight. The
+    # Trust Fund achievement reframes it as a "won despite hoarding" surprise.
 ]
 
 

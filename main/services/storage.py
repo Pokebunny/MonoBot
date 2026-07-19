@@ -645,6 +645,12 @@ class MatchStore:
     def unlock_count(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM achievement_unlocks").fetchone()[0]
 
+    def discovered_keys(self) -> set[str]:
+        """Every achievement key at least one player holds. Gates a secret's
+        community reveal: its NAME becomes visible to everyone once anyone has
+        earned it (the how stays hidden until a viewer earns it themselves)."""
+        return {r["key"] for r in self._conn.execute("SELECT DISTINCT key FROM achievement_unlocks")}
+
     def upload_count(self, uploader: str) -> int:
         """Matches this uploader contributed. New ingests store the Discord
         user ID; historic rows hold display strings, which never match an id
@@ -657,6 +663,22 @@ class MatchStore:
         played after it."""
         row = self._conn.execute("SELECT value FROM meta WHERE key = 'achievement_epoch'").fetchone()
         return datetime.datetime.fromisoformat(row["value"])
+
+    def get_meta(self, key: str) -> str | None:
+        """Read a deployment fact from the meta key/value table (None if
+        unset). For small runtime state that outlives a restart but isn't
+        match data — e.g. the live queue message pointer."""
+        row = self._conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        """Upsert a meta key/value. Not a match write, so it does not bump
+        change_count (derived caches don't depend on it)."""
+        self._conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        self._conn.commit()
 
     def confirm_winner(self, match_id: int, winning_team: int) -> None:
         """Manual confirmation overrides any inferred result."""

@@ -88,6 +88,7 @@ class _MatchContext:
     newcomers: set[str] = field(default_factory=set)  # canonical handles in their first game
     all_veterans: bool = False  # every player has 50+ prior games
     community_opening: bool = False  # first game after 6+ community-wide quiet hours
+    worst_winrate_picks: set[str] = field(default_factory=set)  # lobby's lowest-winrate pick(s), if a real underdog
 
 
 @dataclass
@@ -120,6 +121,7 @@ class Tally:
     veteran_lobbies: int = 0  # games where everyone had 50+ prior games
     mvps: int = 0
     losing_mvps: int = 0
+    underdog_mvps: int = 0  # MVP while playing the lobby's worst unit by win rate
     mvp_streak: int = 0
     best_mvp_streak: int = 0
     best_session_mvps: int = 0  # most MVPs in one sitting
@@ -315,6 +317,8 @@ class Tally:
             self.best_session_mvps = max(self.best_session_mvps, self._session_mvps)
             if not won:
                 self.losing_mvps += 1
+            if player.pick and player.pick in ctx.worst_winrate_picks:
+                self.underdog_mvps += 1
         elif ctx.mvp is not None:
             # Only a game that crowned someone else breaks an MVP run; games
             # with no kill stats at all leave it untouched.
@@ -436,6 +440,14 @@ def _race_wins(race: str, target: int) -> tuple[Callable, Callable]:
 # The statistically worst units, from the full pub archive (30+ games each:
 # BroodLord 33%, Archon 37%, Queen 37%). Revisit if the meta shifts.
 UNDERDOG_UNITS = ("BroodLord", "Archon", "Queen")
+
+# Overqualified pulls unit win rates LIVE from match history (never hardcoded),
+# so the badge tracks the community meta with no upkeep. A unit needs this many
+# decided games before it can be named the lobby's worst — an unlucky game or
+# two shouldn't crown an under-sampled unit. No win-rate floor: being the MVP on
+# the lobby's lowest-win-rate unit means everyone else drew a better one, so it
+# reads as a real feat even when that unit isn't bad in absolute terms.
+MIN_UNIT_GAMES_FOR_RANKING = 10
 
 # Chronicler is granted from upload counts, not match history (see the
 # replays cog); its check never fires in the derived engine.
@@ -810,6 +822,14 @@ SPECS: list[AchievementSpec] = [
         "Win a 10+ minute game with the fewest kills in the lobby",
         _live("fewest_kills_wins", 1),
     ),
+    _spec(
+        "overqualified",
+        "Overqualified",
+        "🎓",
+        "Rare",
+        "Be the MVP while playing the lobby's worst unit by win rate",
+        _live("underdog_mvps", 1),
+    ),
     _spec("the_swarm", "The Swarm", "🐜", "Epic", "Build 500 units in one game", _live("max_units_one_game", 500)),
     _spec("no_regrets", "No Regrets", "🎲", "Common", "Win a game after repicking", _live("repick_wins", 1)),
     _spec(
@@ -936,6 +956,24 @@ def is_countable(match: MonobattleMatch) -> bool:
     )
 
 
+def _unit_win_rates(matches) -> dict[str, tuple[float, int]]:
+    """pick -> (win rate, games) over countable matches. A unit's record, not
+    a player's, so account merges don't matter. Pulled live so Overqualified
+    never carries a hardcoded win-rate table."""
+    counts: dict[str, list[int]] = {}  # pick -> [wins, games]
+    for match in matches:
+        if not is_countable(match):
+            continue
+        for p in match.players:
+            if not p.pick:
+                continue
+            c = counts.setdefault(p.pick, [0, 0])
+            c[1] += 1
+            if p.team == match.winning_team:
+                c[0] += 1
+    return {pick: (w / g, g) for pick, (w, g) in counts.items() if g}
+
+
 def _match_context(match: MonobattleMatch) -> _MatchContext:
     scored = [p.resources_killed for p in match.players if p.resources_killed is not None]
     min_kills = min(scored) if len(scored) >= 6 else None
@@ -966,19 +1004,43 @@ class AchievementBook:
         self.histories: dict[str, PlayerHistory] = {}
         self.earned: dict[str, dict[str, Earned]] = {}  # handle -> key -> Earned
         self._last_countable_at: datetime.datetime | None = None
+        # Dynamic unit win-rate table (see _compute_unit_winrates): rankable
+        # units -> win rate, for Overqualified's lobby-worst check.
+        self._unit_winrates: dict[str, float] = {}
 
     @classmethod
     def from_matches(
         cls, matches, merge_map: dict[str, str] | None = None, epoch: datetime.datetime | None = None
     ) -> "AchievementBook":
         book = cls(merge_map, epoch)
-        for match in sorted(matches, key=lambda m: _naive(m.played_at)):
+        ordered = sorted(matches, key=lambda m: _naive(m.played_at))
+        book._compute_unit_winrates(ordered)
+        for match in ordered:
             if is_countable(match):
                 book._tally_match(match)
         return book
 
     def canonical(self, handle: str) -> str:
         return self._merge.get(handle, handle)
+
+    def _compute_unit_winrates(self, matches) -> None:
+        """Unit win rates, pulled live from match history — no hardcoded rates.
+        Only units with enough games are rankable. Recomputed on every rebuild,
+        so Overqualified's table tracks the meta on its own."""
+        rates = _unit_win_rates(matches)
+        self._unit_winrates = {
+            pick: wr for pick, (wr, games) in rates.items() if games >= MIN_UNIT_GAMES_FOR_RANKING
+        }
+
+    def _lobby_worst_picks(self, match: MonobattleMatch) -> set[str]:
+        """The lobby's lowest-win-rate pick(s) among rankable units. Being the
+        MVP on one of these means everyone else drew a better unit — a real
+        feat regardless of the unit's absolute win rate, so there's no floor."""
+        rated = {p.pick for p in match.players if p.pick in self._unit_winrates}
+        if not rated:
+            return set()
+        worst = min(self._unit_winrates[pick] for pick in rated)
+        return {pick for pick in rated if self._unit_winrates[pick] == worst}
 
     def _tally_match(self, match: MonobattleMatch) -> None:
         ctx = _match_context(match)
@@ -991,6 +1053,7 @@ class AchievementBook:
             self._last_countable_at is not None and played - self._last_countable_at >= datetime.timedelta(hours=6)
         )
         self._last_countable_at = played
+        ctx.worst_winrate_picks = self._lobby_worst_picks(match)
         live = self._epoch is None or played >= _naive(self._epoch)
         for player in match.players:
             handle = self.canonical(player.toon_handle)

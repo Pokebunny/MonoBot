@@ -273,7 +273,8 @@ def achievement_catalog(
       (ephemeral) render — a public !catalog masks it so a channel message
       never leaks the how."""
     holder_counts = holder_counts or {}
-    specs = [s for s in ACHIEVEMENT_SPECS if s.rarity == rarity]
+    # Secrets sink to the bottom of their rarity page (mystery slots last).
+    specs = sorted((s for s in ACHIEVEMENT_SPECS if s.rarity == rarity), key=is_secret)
     lines = []
     for s in specs:
         earned = s.key in earned_keys

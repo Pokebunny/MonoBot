@@ -4,6 +4,7 @@ import logging
 import os
 
 import discord
+from context import MonoContext
 from discord.ext import commands
 from dotenv import load_dotenv
 
@@ -31,6 +32,11 @@ class MonoBot(commands.Bot):
         for cog in cog_files:
             await self.load_extension("cogs." + cog)
             logger.info("%s cog loaded", cog)
+
+    async def get_context(self, origin, *, cls=MonoContext):
+        # Route both prefix and hybrid-slash invocations through MonoContext so
+        # the slash-is-ephemeral policy applies everywhere ctx.send is called.
+        return await super().get_context(origin, cls=cls)
 
 
 bot = MonoBot(command_prefix="!", intents=intents, case_insensitive=True)

@@ -1,7 +1,7 @@
 import datetime
 
 import pytest
-from models.replay import MatchPlayer, MonobattleMatch
+from models.replay import PICKABLE_UNITS, UNIT_RACE, MatchPlayer, MonobattleMatch
 from services.achievements import (
     SPECS,
     SPECS_BY_KEY,
@@ -380,10 +380,43 @@ def test_merged_accounts_share_achievements():
 def test_next_up_reports_progress_and_hides_secrets():
     book = _book(_series(10))
     entries = book.next_up("A1", limit=50)
-    progress = {spec.key: (cur, target) for spec, cur, target in entries}
+    progress = {spec.key: (cur, target) for spec, cur, target, _ in entries}
     assert progress["regular"] == (10, 25)
     assert "first_game" not in progress  # already earned
-    assert all(not is_secret(spec) for spec, _, _ in entries)
+    assert all(not is_secret(spec) for spec, _, _, _ in entries)
+
+
+def test_next_up_names_the_units_still_missing():
+    # Ten games all on Zergling: the roster badges know exactly what's left.
+    book = _book(_series(10))
+    missing = {spec.key: names for spec, _, _, names in book.next_up("A1", limit=50)}
+    assert missing["royal_flush"], "a set-based spec must name what's left"
+    assert "Zergling" not in missing["royal_flush"]  # already won with it
+    assert "Marine" in missing["royal_flush"]
+    assert len(missing["royal_flush"]) == 41  # 42-unit pool, one down
+    # Units the map never deals must never be demanded.
+    for unreachable in ("Medivac", "Observer", "Overseer", "WarpPrism", "Mothership", "Viper"):
+        assert unreachable not in missing["royal_flush"]
+    # Race-scoped badges list only that race's units.
+    assert all(UNIT_RACE[u] == "Zerg" for u in missing["zoo_keeper"])
+    # A pure counter has nothing to name.
+    assert missing["regular"] == []
+
+
+def test_next_up_can_guarantee_an_answerable_entry():
+    # Roster badges are long hauls that rarely rank in a proximity top 3, so
+    # the profile asks for one explicitly -- otherwise "what do I still need?"
+    # never gets answered.
+    book = _book(_series(10))
+    plain = book.next_up("A1", limit=3)
+    assert not any(missing for *_, missing in plain)
+    ensured = book.next_up("A1", limit=3, ensure_detail=True)
+    assert len(ensured) == 4
+    assert ensured[-1][3], "the appended entry must be one that names what's left"
+
+
+def test_pick_pool_matches_the_roster_achievements_promise():
+    assert len(PICKABLE_UNITS) == 42  # Royal Flush / Exterminator both say "all 42"
 
 
 def test_only_surprises_are_secret():

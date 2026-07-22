@@ -313,7 +313,7 @@ class Leaderboard(commands.Cog):
                 return
             shown = self._shown_name(ctx, group, name)
         earned = achievements.ledger_for_group(self.store, group)
-        next_up = self.achievements.book().next_up(group[0])
+        next_up = self.achievements.book().next_up(group[0], ensure_detail=True)
         holders = achievements.ledger_holder_counts(self.store, self.store.merge_map())
         await ctx.send(embed=match_embeds.achievements_gallery(shown, earned, next_up, holders))
 

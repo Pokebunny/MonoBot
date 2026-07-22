@@ -22,7 +22,7 @@ import statistics
 from collections import Counter, defaultdict
 
 import sc2reader
-from models.replay import MatchPlayer, MonobattleMatch
+from models.replay import UNIT_RACE, MatchPlayer, MonobattleMatch
 
 logger = logging.getLogger(__name__)
 
@@ -154,60 +154,9 @@ _TOWN_HALLS = _BASE_STRUCTURES | {
 # (lobby race data can't be trusted in monobattles).
 _WORKER_RACE = {"Drone": "Zerg", "Probe": "Protoss", "SCV": "Terran"}
 
-# Race of each pickable unit (canonical names). A preview unit whose race
-# doesn't match the race the player actually played is a stale browse (the
-# player switched pick at the last moment and the final preview was missed),
-# so it must be discarded in favor of production evidence.
-_UNIT_RACE = {
-    "Marine": "Terran",
-    "Marauder": "Terran",
-    "Reaper": "Terran",
-    "Ghost": "Terran",
-    "Hellion": "Terran",
-    "SiegeTank": "Terran",
-    "Cyclone": "Terran",
-    "WidowMine": "Terran",
-    "Thor": "Terran",
-    "Viking": "Terran",
-    "Medivac": "Terran",
-    "Liberator": "Terran",
-    "Raven": "Terran",
-    "Banshee": "Terran",
-    "Battlecruiser": "Terran",
-    "Zergling": "Zerg",
-    "Baneling": "Zerg",
-    "Roach": "Zerg",
-    "Ravager": "Zerg",
-    "Hydralisk": "Zerg",
-    "Lurker": "Zerg",
-    "Queen": "Zerg",
-    "Mutalisk": "Zerg",
-    "Corruptor": "Zerg",
-    "BroodLord": "Zerg",
-    "SwarmHost": "Zerg",
-    "Infestor": "Zerg",
-    "Ultralisk": "Zerg",
-    "Viper": "Zerg",
-    "Overseer": "Zerg",
-    "Zealot": "Protoss",
-    "Adept": "Protoss",
-    "Stalker": "Protoss",
-    "Sentry": "Protoss",
-    "HighTemplar": "Protoss",
-    "DarkTemplar": "Protoss",
-    "Archon": "Protoss",
-    "Immortal": "Protoss",
-    "Colossus": "Protoss",
-    "Disruptor": "Protoss",
-    "Observer": "Protoss",
-    "WarpPrism": "Protoss",
-    "Phoenix": "Protoss",
-    "VoidRay": "Protoss",
-    "Oracle": "Protoss",
-    "Tempest": "Protoss",
-    "Carrier": "Protoss",
-    "Mothership": "Protoss",
-}
+# Race of each pickable unit; the roster itself lives in models.replay so the
+# achievement engine can share it (see UNIT_RACE there).
+_UNIT_RACE = UNIT_RACE
 
 # Winner-inference tuning. Solo confidences reflect blind validation against
 # the 446 replays with a recorded winner (2026-07, event-time clock):

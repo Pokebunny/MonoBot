@@ -206,10 +206,18 @@ def player_profile(
     return embed
 
 
+def _missing_summary(missing: list[str], limit: int = 8) -> str:
+    """Name what's left, capped so a player who is 30 units from Royal Flush
+    gets a readable line instead of a wall (and the field stays under 1024)."""
+    shown = ", ".join(missing[:limit])
+    extra = len(missing) - limit
+    return f"{shown} +{extra} more" if extra > 0 else shown
+
+
 def achievements_gallery(
     shown_name: str,
     earned: list[Earned],
-    next_up: list[tuple[AchievementSpec, float, float]],
+    next_up: list[tuple[AchievementSpec, float, float, list[str]]],
     holder_counts: dict[str, int] | None = None,
 ) -> discord.Embed:
     """A player's earned achievements grouped by rarity (rarest first), plus
@@ -249,10 +257,11 @@ def achievements_gallery(
         for chunk in chunks[1:]:
             embed.add_field(name="​", value=chunk, inline=False)
     if next_up:
-        lines = [
-            f"{spec.emoji} **{spec.name}** — {spec.description} ({current:,.0f}/{target:,.0f})"
-            for spec, current, target in next_up
-        ]
+        lines = []
+        for spec, current, target, missing in next_up:
+            lines.append(f"{spec.emoji} **{spec.name}** — {spec.description} ({current:,.0f}/{target:,.0f})")
+            if missing:
+                lines.append(f"　↳ *still need:* {_missing_summary(missing)}")
         embed.add_field(name="🔒 Next up", value="\n".join(lines), inline=False)
     embed.set_footer(text=f"{len(earned)}/{len(ACHIEVEMENT_SPECS)} unlocked · run /gallery to browse them all")
     return embed

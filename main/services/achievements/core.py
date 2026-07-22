@@ -9,10 +9,11 @@ import datetime
 from dataclasses import dataclass, field
 from typing import Callable, NamedTuple
 
-from models.replay import MatchPlayer, MonobattleMatch
+from models.replay import PICKABLE_UNITS, UNIT_RACE, MatchPlayer, MonobattleMatch
 from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE
 
 RARITIES = ["Common", "Uncommon", "Rare", "Epic", "Legendary"]
+RACES = ("Terran", "Zerg", "Protoss")
 RARITY_EMOJI = {"Common": "⚪", "Uncommon": "🟢", "Rare": "🔵", "Epic": "🟣", "Legendary": "🟠"}
 
 # Late-night window in UTC (~11pm–4am US Eastern, where the community plays).
@@ -398,6 +399,10 @@ class AchievementSpec(NamedTuple):
     # only teased as a count. For Easter eggs and true surprises only — a
     # tier extension of a visible family is never secret.
     secret: bool = False
+    # The specific things still missing, for achievements whose progress is a
+    # set drawn from a known universe ("win with all 42 units" can say WHICH
+    # units are left). None where a count says it all ("play 47 more games").
+    detail: Callable[[PlayerHistory], list[str]] | None = None
 
 
 class Earned(NamedTuple):
@@ -423,6 +428,17 @@ def _career_len(attr: str, target: int) -> tuple[Callable, Callable]:
     )
 
 
+def _career_set(attr: str, universe, target: int) -> tuple[Callable, Callable, Callable]:
+    """Like _career_len, but also able to name what's still missing. `target`
+    can be below len(universe) (a 25-of-42 rung), in which case any remaining
+    unit counts toward it — the list is what's left of the whole universe."""
+    return (
+        lambda h: len(getattr(h.career, attr)) >= target,
+        lambda h: (len(getattr(h.career, attr)), target),
+        lambda h: sorted(set(universe) - getattr(h.career, attr)),
+    )
+
+
 def _live(attr: str, target: float) -> tuple[Callable, Callable]:
     return (
         lambda h: getattr(h.live, attr) >= target,
@@ -431,12 +447,15 @@ def _live(attr: str, target: float) -> tuple[Callable, Callable]:
 
 
 def _spec(key, name, emoji, rarity, description, checks, secret=False) -> AchievementSpec:
-    check, progress = checks
-    return AchievementSpec(key, name, emoji, rarity, description, check, progress, secret)
+    check, progress, *rest = checks
+    detail = rest[0] if rest else None
+    return AchievementSpec(key, name, emoji, rarity, description, check, progress, secret, detail)
 
 
-def _race_wins(race: str, target: int) -> tuple[Callable, Callable]:
+def _race_wins(race: str, target: int) -> tuple[Callable, Callable, Callable]:
+    roster = {u for u in PICKABLE_UNITS if UNIT_RACE[u] == race}
     return (
         lambda h: len(h.career.units_won_by_race.get(race, set())) >= target,
         lambda h: (len(h.career.units_won_by_race.get(race, set())), target),
+        lambda h: sorted(roster - h.career.units_won_by_race.get(race, set())),
     )

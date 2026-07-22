@@ -146,9 +146,18 @@ class AchievementBook:
         resolves to the same set."""
         return self.for_handle(handles[0]) if handles else []
 
-    def next_up(self, handle: str, limit: int = 3) -> list[tuple[AchievementSpec, float, float]]:
-        """The closest not-yet-earned achievements with measurable progress,
-        as (spec, current, target), most complete first."""
+    def next_up(
+        self, handle: str, limit: int = 3, ensure_detail: bool = False
+    ) -> list[tuple[AchievementSpec, float, float, list[str]]]:
+        """The closest not-yet-earned achievements with measurable progress, as
+        (spec, current, target, missing), most complete first. `missing` names
+        what's left for set-based specs ("win with all 42 units" lists the
+        units still owed) and is empty where a count says it all.
+
+        Roster-completion badges are long hauls, so they rarely rank in a
+        proximity-sorted top 3 — and they are exactly the ones players ask
+        "what do I still need?" about. `ensure_detail` appends the closest one
+        that can answer that when none made the cut."""
         history = self.histories.get(self.canonical(handle))
         if history is None:
             return []
@@ -159,9 +168,15 @@ class AchievementBook:
                 continue
             current, target = spec.progress(history)
             if current > 0:
-                candidates.append((spec, current, target))
+                missing = spec.detail(history) if spec.detail else []
+                candidates.append((spec, current, target, missing))
         candidates.sort(key=lambda c: c[1] / c[2], reverse=True)
-        return candidates[:limit]
+        top = candidates[:limit]
+        if ensure_detail and not any(c[3] for c in top):
+            with_detail = next((c for c in candidates if c[3]), None)
+            if with_detail is not None:
+                top.append(with_detail)
+        return top
 
     def holder_counts(self) -> dict[str, int]:
         """key -> how many players have earned it (for live rarity display)."""

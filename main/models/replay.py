@@ -2,6 +2,71 @@ import datetime
 
 from pydantic import BaseModel
 
+# Race of every unit that can appear as a player's army: unit -> race. Used by
+# the replay parser, where a preview unit whose race contradicts the race
+# actually played is a stale browse. This is NOT the pick pool — see
+# PICKABLE_UNITS below.
+UNIT_RACE = {
+    "Marine": "Terran",
+    "Marauder": "Terran",
+    "Reaper": "Terran",
+    "Ghost": "Terran",
+    "Hellion": "Terran",
+    "SiegeTank": "Terran",
+    "Cyclone": "Terran",
+    "WidowMine": "Terran",
+    "Thor": "Terran",
+    "Viking": "Terran",
+    "Medivac": "Terran",
+    "Liberator": "Terran",
+    "Raven": "Terran",
+    "Banshee": "Terran",
+    "Battlecruiser": "Terran",
+    "Zergling": "Zerg",
+    "Baneling": "Zerg",
+    "Roach": "Zerg",
+    "Ravager": "Zerg",
+    "Hydralisk": "Zerg",
+    "Lurker": "Zerg",
+    "Queen": "Zerg",
+    "Mutalisk": "Zerg",
+    "Corruptor": "Zerg",
+    "BroodLord": "Zerg",
+    "SwarmHost": "Zerg",
+    "Infestor": "Zerg",
+    "Ultralisk": "Zerg",
+    "Viper": "Zerg",
+    "Overseer": "Zerg",
+    "Zealot": "Protoss",
+    "Adept": "Protoss",
+    "Stalker": "Protoss",
+    "Sentry": "Protoss",
+    "HighTemplar": "Protoss",
+    "DarkTemplar": "Protoss",
+    "Archon": "Protoss",
+    "Immortal": "Protoss",
+    "Colossus": "Protoss",
+    "Disruptor": "Protoss",
+    "Observer": "Protoss",
+    "WarpPrism": "Protoss",
+    "Phoenix": "Protoss",
+    "VoidRay": "Protoss",
+    "Oracle": "Protoss",
+    "Tempest": "Protoss",
+    "Carrier": "Protoss",
+    "Mothership": "Protoss",
+}
+
+# Units the map never offers as a pick: the four support units a player gets
+# alongside their real army, plus two the pool simply omits. Confirmed by the
+# match history — 42 distinct picks across every game on record, never these.
+_NOT_IN_PICK_POOL = frozenset({"Medivac", "Observer", "WarpPrism", "Overseer", "Mothership", "Viper"})
+
+# The 42-unit pick pool. Roster-completion achievements (Royal Flush, Winning
+# Hand, Exterminator, the zoo set) count and name units from this set, so a
+# player is never told to go win with a unit the map cannot deal them.
+PICKABLE_UNITS = frozenset(UNIT_RACE) - _NOT_IN_PICK_POOL
+
 
 class MatchPlayer(BaseModel):
     name: str  # display name; NOT unique across SC2 accounts

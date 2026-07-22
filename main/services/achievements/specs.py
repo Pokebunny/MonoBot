@@ -3,12 +3,15 @@ mechanics that evaluate them live in `core` (the `Tally` a spec's check reads)
 and `engine` (the detector that runs the checks). Adding an achievement is
 usually a one-line entry here plus, if it needs a new stat, a `Tally` field."""
 
+from models.replay import PICKABLE_UNITS
 from services.achievements.core import (
     CHRONICLER_UPLOADS,
+    RACES,
     UNDERDOG_UNITS,
     AchievementSpec,
     _career,
     _career_len,
+    _career_set,
     _live,
     _race_wins,
     _spec,
@@ -39,16 +42,32 @@ SPECS: list[AchievementSpec] = [
     _spec("constellation", "Constellation", "💫", "Epic", "Earn 25 MVPs", _career("mvps", 25)),
     _spec("supernova", "Supernova", "🌠", "Legendary", "Earn 250 MVPs", _career("mvps", 250)),
     # -- career: variety --------------------------------------------------
-    _spec("sampler", "Sampler", "🍬", "Common", "Play 3 different units", _career_len("units_played", 3)),
-    _spec("field_tester", "Field Tester", "🧪", "Common", "Play 10 different units", _career_len("units_played", 10)),
-    _spec("connoisseur", "Connoisseur", "🍷", "Rare", "Play 25 different units", _career_len("units_played", 25)),
+    _spec(
+        "sampler", "Sampler", "🍬", "Common", "Play 3 different units", _career_set("units_played", PICKABLE_UNITS, 3)
+    ),
+    _spec(
+        "field_tester",
+        "Field Tester",
+        "🧪",
+        "Common",
+        "Play 10 different units",
+        _career_set("units_played", PICKABLE_UNITS, 10),
+    ),
+    _spec(
+        "connoisseur",
+        "Connoisseur",
+        "🍷",
+        "Rare",
+        "Play 25 different units",
+        _career_set("units_played", PICKABLE_UNITS, 25),
+    ),
     _spec(
         "one_of_everything",
         "One of Everything",
         "📦",
         "Epic",
         "Play all 42 units",
-        _career_len("units_played", 42),
+        _career_set("units_played", PICKABLE_UNITS, 42),
     ),
     _spec(
         "ten_ways_to_win",
@@ -56,23 +75,41 @@ SPECS: list[AchievementSpec] = [
         "🔟",
         "Uncommon",
         "Win with 10 different units",
-        _career_len("units_won", 10),
+        _career_set("units_won", PICKABLE_UNITS, 10),
     ),
-    _spec("winning_hand", "Winning Hand", "🃏", "Epic", "Win with 25 different units", _career_len("units_won", 25)),
+    _spec(
+        "winning_hand",
+        "Winning Hand",
+        "🃏",
+        "Epic",
+        "Win with 25 different units",
+        _career_set("units_won", PICKABLE_UNITS, 25),
+    ),
     # 42 = every unit the map has ever dealt (stable across 716+ archive
     # games); the collection capstone. Best so far: 41.
-    _spec("royal_flush", "Royal Flush", "♠️", "Legendary", "Win with all 42 units", _career_len("units_won", 42)),
-    _spec("triple_threat", "Triple Threat", "🔱", "Uncommon", "Win with all three races", _career_len("races_won", 3)),
+    _spec(
+        "royal_flush",
+        "Royal Flush",
+        "♠️",
+        "Legendary",
+        "Win with all 42 units",
+        _career_set("units_won", PICKABLE_UNITS, 42),
+    ),
+    _spec(
+        "triple_threat",
+        "Triple Threat",
+        "🔱",
+        "Uncommon",
+        "Win with all three races",
+        _career_set("races_won", RACES, 3),
+    ),
     _spec(
         "exterminator",
         "Exterminator",
         "☠️",
         "Rare",
         "Defeat all 42 units",
-        (
-            lambda h: len(h.career.units_beaten) >= 42,
-            lambda h: (len(h.career.units_beaten), 42),
-        ),
+        _career_set("units_beaten", PICKABLE_UNITS, 42),
     ),
     _spec("zoo_keeper", "Zoo Keeper", "🦎", "Rare", "Win with 8 different Zerg units", _race_wins("Zerg", 8)),
     _spec("machinist", "Machinist", "🔩", "Rare", "Win with 8 different Terran units", _race_wins("Terran", 8)),

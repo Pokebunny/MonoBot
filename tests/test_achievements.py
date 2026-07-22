@@ -401,7 +401,24 @@ def test_only_surprises_are_secret():
         "the_prodigal",
         "anniversary",
         "trust_fund",
+        "nomad",
     }
+
+
+def test_nomad_only_for_a_winner_wiped_off_the_map():
+    def match(baseless_name, played_at=AFTER_EPOCH):
+        players = [_player(f"A{i}", 1, lost_all_bases=(f"A{i}" == baseless_name)) for i in range(1, 5)] + [
+            _player(f"B{i}", 2, lost_all_bases=(f"B{i}" == baseless_name)) for i in range(1, 5)
+        ]
+        return _match(winning_team=1, players=players, played_at=played_at)
+
+    assert "nomad" in _keys(_book([match("A1")]), "A1")
+    assert "nomad" not in _keys(_book([match("B1")]), "B1")  # losers stay homeless
+    assert "nomad" not in _keys(_book([match("A2")]), "A1")  # teammate's wipe isn't yours
+    # Moment achievement: history before the epoch never grants it.
+    assert "nomad" not in _keys(_book([match("A1", played_at=BEFORE_EPOCH)]), "A1")
+    # Games parsed before the stat existed read NULL, not False.
+    assert "nomad" not in _keys(_book([_match(winning_team=1)]), "A1")
 
 
 def test_trust_fund_win_on_a_huge_bank():

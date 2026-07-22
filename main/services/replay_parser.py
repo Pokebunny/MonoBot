@@ -138,6 +138,18 @@ _HATCHERIES = {"Hatchery", "Lair", "Hive"}
 # separately (born only, so a CC-to-orbital morph can't double count).
 _BASE_STRUCTURES = {"Nexus", "CommandCenter", "Hatchery"}
 
+# Every form a town hall can take, for tracking whether a player still owns
+# one. Unlike _BASE_STRUCTURES (which counts fresh expansions) this includes
+# morphs and lift-offs: a flying CC and a Hive are still homes.
+_TOWN_HALLS = _BASE_STRUCTURES | {
+    "CommandCenterFlying",
+    "OrbitalCommand",
+    "OrbitalCommandFlying",
+    "PlanetaryFortress",
+    "Lair",
+    "Hive",
+}
+
 # Worker births are the ground truth for the race a player actually played
 # (lobby race data can't be trusted in monobattles).
 _WORKER_RACE = {"Drone": "Zerg", "Probe": "Protoss", "SCV": "Terran"}
@@ -255,6 +267,10 @@ class _PlayerTally:
         self.first_unit_second: int | None = None  # first non-Queen production
         self.first_queen_second: int | None = None
         self.orbitals = 0  # Orbital Commands owned (starting + CC morphs)
+        # Town halls still standing, by unit id — morphs and lift-offs keep the
+        # same id, so a CC becoming an Orbital never looks like a loss.
+        self.live_town_halls: set[int] = set()
+        self.lost_all_bases = False  # was ever wiped down to zero town halls
 
     def race(self, fallback: str) -> str:
         if self.worker_races:
@@ -361,6 +377,14 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
             ):
                 tallies[event.player.name].last_pick_dialog = event.control_id
             continue
+        if event_name == "UnitDiedEvent":
+            owner = event.unit.owner
+            if owner is not None and event.unit.name in _TOWN_HALLS:
+                tally = tallies[owner.name]
+                tally.live_town_halls.discard(event.unit.id)
+                if not tally.live_town_halls and event.second >= game_start:
+                    tally.lost_all_bases = True
+            continue
         # UnitBornEvent: instantly-created units. UnitDoneEvent: gradually
         # created ones (warp-ins, morph cocoons, archon merges, buildings).
         if event_name == "UnitBornEvent":
@@ -376,6 +400,8 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
         if raw in _WORKER_RACE and event.second >= game_start:
             tally.worker_races[_WORKER_RACE[raw]] += 1
             continue
+        if raw in _TOWN_HALLS:
+            tally.live_town_halls.add(event.unit.id)
         if raw in _BASE_STRUCTURES or (raw == "OrbitalCommand" and event_name == "UnitBornEvent"):
             tally.base_times.append(event.second)
         if raw == "OrbitalCommand":
@@ -586,6 +612,7 @@ def parse_replay(path: str) -> MonobattleMatch:
                     static_defense=tally.static_defense,
                     bases_before_unit=sum(1 for s in tally.base_times if cutoff is None or s < cutoff),
                     orbitals=tally.orbitals,
+                    lost_all_bases=tally.lost_all_bases,
                     unit_counts=dict(tally.units),
                 )
             )

@@ -49,7 +49,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS match_players (
     static_defense INTEGER,
     bases_before_unit INTEGER,
     orbitals INTEGER,
+    lost_all_bases INTEGER,
     unit_counts TEXT NOT NULL
 );
 
@@ -255,6 +256,15 @@ def _migration_8_achievements(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE match_players ADD COLUMN {col} INTEGER")
 
 
+def _migration_9_lost_all_bases(conn: sqlite3.Connection) -> None:
+    """Per-player replay stat behind Nomad: was the player ever wiped down to
+    zero town halls. NULL on rows parsed before this existed — Nomad is a
+    live/moment achievement, so history is never asked."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(match_players)")}
+    if "lost_all_bases" not in cols:
+        conn.execute("ALTER TABLE match_players ADD COLUMN lost_all_bases INTEGER")
+
+
 _MIGRATIONS = {
     1: _migration_1_content_key,
     2: _migration_2_replay_channels,
@@ -264,6 +274,7 @@ _MIGRATIONS = {
     6: _migration_6_game_swings,
     7: _migration_7_drop_account_merges,
     8: _migration_8_achievements,
+    9: _migration_9_lost_all_bases,
 }
 
 
@@ -379,8 +390,8 @@ class MatchStore:
             """INSERT INTO match_players
                (match_id, name, toon_handle, team, race, pick, repick_used, repick_from, resources_killed,
                 econ_killed, tech_killed, resources_lost, resources_floated, drop_commands, static_defense,
-                bases_before_unit, orbitals, unit_counts)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                bases_before_unit, orbitals, lost_all_bases, unit_counts)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     match_id,
@@ -400,6 +411,7 @@ class MatchStore:
                     p.static_defense,
                     p.bases_before_unit,
                     p.orbitals,
+                    None if p.lost_all_bases is None else int(p.lost_all_bases),
                     json.dumps(p.unit_counts),
                 )
                 for p in match.players
@@ -924,6 +936,7 @@ class MatchStore:
                 static_defense=p["static_defense"],
                 bases_before_unit=p["bases_before_unit"],
                 orbitals=p["orbitals"],
+                lost_all_bases=None if p["lost_all_bases"] is None else bool(p["lost_all_bases"]),
                 unit_counts=json.loads(p["unit_counts"]),
             )
             for p in player_rows

@@ -424,6 +424,15 @@ SPECS: list[AchievementSpec] = [
         _live("greed_wins", 1),
     ),
     _spec(
+        "nomad",
+        "Nomad",
+        "🏕️",
+        "Epic",
+        "Win a game after losing every last one of your bases",
+        _live("baseless_wins", 1),
+        secret=True,
+    ),
+    _spec(
         "orbital_farm",
         "Orbital Farm",
         "🛰️",

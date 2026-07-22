@@ -20,6 +20,7 @@ class MatchPlayer(BaseModel):
     static_defense: int | None = None  # defensive structures completed
     bases_before_unit: int | None = None  # town halls completed before first unit
     orbitals: int | None = None  # Orbital Commands owned (Terran)
+    lost_all_bases: bool | None = None  # was ever wiped down to zero town halls
     unit_counts: dict[str, int]  # normalized army-unit production counts
 
 

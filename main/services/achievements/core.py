@@ -148,6 +148,7 @@ class Tally:
     max_static_defense: int = 0  # most defensive structures in one real game
     greed_wins: int = 0  # wins after expanding heavily before making a unit
     max_orbitals: int = 0  # most Orbital Commands owned in one game
+    baseless_wins: int = 0  # wins after being wiped down to zero town halls
     grounded_wins: int = 0  # long wins with a no-anti-air pick vs 2+ enemy air
     team_grounded_wins: int = 0  # long wins where the WHOLE team lacked anti-air vs enemy air
     fastest_win: int | None = None
@@ -346,6 +347,12 @@ class Tally:
             self.greed_wins += 1
         if player.orbitals is not None:
             self.max_orbitals = max(self.max_orbitals, player.orbitals)
+        # No duration or dwell gate: across 527 community games every player
+        # who won after losing their last town hall had been baseless for at
+        # least 40s (median ~2.5 min), so there is no last-second false
+        # positive to filter out — winning from nothing takes time by nature.
+        if won and player.lost_all_bases:
+            self.baseless_wins += 1
         if player.static_defense is not None:
             self.max_static_defense = max(self.max_static_defense, player.static_defense)
         if won and player.resources_floated is not None and player.resources_floated >= 5000:

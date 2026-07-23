@@ -1,6 +1,6 @@
 import pytest
 from models.matchmaking import QueuedPlayer
-from services.matchmaking import balance_teams
+from services.matchmaking import balance_teams, ranked_matches
 from services.rating import DEFAULT_MU, DEFAULT_SIGMA, predict_win_probability
 
 
@@ -56,3 +56,25 @@ def test_odd_count_rejected():
 def test_empty_rejected():
     with pytest.raises(ValueError):
         balance_teams([])
+
+
+def test_ranked_matches_are_all_distinct_splits_best_first():
+    options = ranked_matches([_p(f"p{i}") for i in range(8)])
+    assert len(options) == 35  # C(7, 3): every split, mirror-deduped
+    gaps = [abs(0.5 - o.team1_win_probability) for o in options]
+    assert gaps == sorted(gaps)  # most balanced first
+    # The top option matches what balance_teams picks alone.
+    assert balance_teams([_p(f"p{i}") for i in range(8)]).team1_win_probability == options[0].team1_win_probability
+
+
+def test_ranked_matches_limit_caps_the_list():
+    options = ranked_matches([_p(f"p{i}") for i in range(8)], limit=8)
+    assert len(options) == 8
+    # Kept the 8 most balanced, dropped the rest.
+    full = ranked_matches([_p(f"p{i}") for i in range(8)])
+    assert [o.team1_win_probability for o in options] == [o.team1_win_probability for o in full[:8]]
+
+
+def test_ranked_matches_single_split_for_a_pair():
+    options = ranked_matches([_p("a"), _p("b")])
+    assert len(options) == 1  # nothing to shuffle through

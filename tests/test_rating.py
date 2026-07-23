@@ -3,7 +3,7 @@ import datetime
 from models.rating import PlayerRating
 from models.replay import MatchPlayer, MonobattleMatch
 from services.match_embeds import leaderboard_page_count
-from services.rating import RatingBook
+from services.rating import RatingBook, match_rating_deltas
 
 
 def _match(winning_team, confidence=1.0, duration=900, team1=None, team2=None):
@@ -95,6 +95,50 @@ def test_display_rating_and_provisional():
     settled = PlayerRating(handle="h", name="n", mu=30.0, sigma=4.0, wins=20, losses=5)
     assert not settled.provisional
     assert settled.display_rating > fresh.display_rating
+
+
+def test_match_rating_deltas_winners_up_losers_down():
+    base = datetime.datetime(2026, 7, 1, tzinfo=datetime.timezone.utc)
+    # Three games of the same matchup; probe the delta from the last one.
+    games = [
+        (i + 1, _match(winning_team=1).model_copy(update={"played_at": base + datetime.timedelta(days=i)}))
+        for i in range(3)
+    ]
+    deltas = match_rating_deltas(games, match_id=3)
+    assert set(deltas) == {"A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4"}
+    for h, (before, after) in deltas.items():
+        if h.startswith("A"):
+            assert after > before  # winners gain
+        else:
+            assert after < before  # losers drop
+
+
+def test_match_rating_deltas_empty_for_unrateable_game():
+    base = datetime.datetime(2026, 7, 1, tzinfo=datetime.timezone.utc)
+    games = [(1, _match(winning_team=None).model_copy(update={"played_at": base}))]
+    assert match_rating_deltas(games, match_id=1) == {}
+
+
+def test_match_rating_deltas_start_from_default_for_new_players():
+    base = datetime.datetime(2026, 7, 1, tzinfo=datetime.timezone.utc)
+    games = [(1, _match(winning_team=1).model_copy(update={"played_at": base}))]
+    deltas = match_rating_deltas(games, match_id=1)
+    # First-ever game: everyone's "before" is the same default display rating.
+    befores = {before for before, _ in deltas.values()}
+    assert len(befores) == 1
+
+
+def test_match_rating_deltas_computed_at_chronological_position():
+    # A later-played game's delta must reflect ratings as of its own time,
+    # regardless of the order matches are passed in.
+    base = datetime.datetime(2026, 7, 1, tzinfo=datetime.timezone.utc)
+    games = [
+        (i + 1, _match(winning_team=1).model_copy(update={"played_at": base + datetime.timedelta(days=i)}))
+        for i in range(4)
+    ]
+    forward = match_rating_deltas(games, match_id=4)
+    shuffled = match_rating_deltas(list(reversed(games)), match_id=4)
+    assert forward == shuffled
 
 
 def test_leaderboard_page_count():

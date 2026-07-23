@@ -39,6 +39,39 @@ def predict_win_probability(team1: list[tuple[float, float]], team2: list[tuple[
     return _model.predict_win([t1, t2])[0]
 
 
+# Display rating a player carries before their first rated game (the model's
+# prior, run through PlayerRating.display_rating).
+_DEFAULT_DISPLAY = PlayerRating(handle="", name="", mu=DEFAULT_MU, sigma=DEFAULT_SIGMA).display_rating
+
+
+def match_rating_deltas(matches, match_id: int, merge_map: dict[str, str] | None = None) -> dict[str, tuple[int, int]]:
+    """For the match with id `match_id`, each participant's (before, after)
+    display rating, computed at the match's true chronological position by
+    replaying history up to and through it. Keyed by the player's own
+    toon_handle (so callers can look up by MatchPlayer without a merge map).
+
+    Empty when the match didn't move ratings (unrateable — no winner, low
+    confidence, too short), which is exactly when callers should say so rather
+    than show a change. `matches` is an iterable of (id, match) pairs, e.g.
+    MatchStore.all_matches()."""
+    book = RatingBook(merge_map)
+    ordered = sorted(matches, key=lambda im: im[1].played_at)
+    for mid, match in ordered:
+        if mid != match_id:
+            book.rate_match(match)
+            continue
+        before = {}
+        for p in match.players:
+            r = book.rating_for(p.toon_handle)
+            before[p.toon_handle] = r.display_rating if r is not None else _DEFAULT_DISPLAY
+        if not book.rate_match(match):
+            return {}
+        return {
+            p.toon_handle: (before[p.toon_handle], book.rating_for(p.toon_handle).display_rating) for p in match.players
+        }
+    return {}
+
+
 class RatingBook:
     """All player ratings, updated match by match (in chronological order)."""
 

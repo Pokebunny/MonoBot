@@ -37,7 +37,29 @@ def _team_lines(match: MonobattleMatch, team: int, mvp: MatchPlayer | None = Non
     return "\n".join(lines) or "*empty*"
 
 
-def match_summary(match: MonobattleMatch, match_id: int | None = None) -> discord.Embed:
+def _rating_change_lines(match: MonobattleMatch, deltas: dict[str, tuple[int, int]]) -> str:
+    """One line per rated participant, biggest gain first: '📈 Name +23
+    (1180 → 1203)'. Winners tend to the top, but a strong loss can still show
+    a small gain, so we sort by the actual change."""
+    rows = []
+    for p in match.players:
+        d = deltas.get(p.toon_handle)
+        if d is None:
+            continue
+        before, after = d
+        change = after - before
+        arrow = "📈" if change > 0 else "📉" if change < 0 else "➖"
+        sign = f"+{change}" if change > 0 else str(change)
+        rows.append((change, f"{arrow} **{p.name}** {sign} ({before} → {after})"))
+    rows.sort(key=lambda r: r[0], reverse=True)
+    return "\n".join(line for _, line in rows)
+
+
+def match_summary(
+    match: MonobattleMatch,
+    match_id: int | None = None,
+    rating_deltas: dict[str, tuple[int, int]] | None = None,
+) -> discord.Embed:
     if match.winning_team is not None and match.winner_confidence >= 1.0:
         color = ACCENT
     elif match.winning_team is not None:
@@ -81,6 +103,9 @@ def match_summary(match: MonobattleMatch, match_id: int | None = None) -> discor
     else:
         result = f"Team {match.winning_team} (inferred, {match.winner_confidence:.0%} confidence)"
     embed.add_field(name="Result", value=result, inline=False)
+
+    if rating_deltas:
+        embed.add_field(name="Rating changes", value=_rating_change_lines(match, rating_deltas), inline=False)
 
     if match_id is not None:
         embed.set_footer(text=f"Match #{match_id}")
@@ -420,13 +445,12 @@ def _team_field(name: str, team: list[QueuedPlayer]) -> tuple[str, str]:
     return name, lines or "*empty*"
 
 
-def proposed_match(match: ProposedMatch) -> discord.Embed:
+def proposed_match(match: ProposedMatch, option_index: int = 0, option_count: int = 1) -> discord.Embed:
     fav = match.team1_win_probability
-    embed = discord.Embed(
-        title="Match found!",
-        description=f"Balance: **{match.fairness:.0%}** (Team 1 win chance ≈ {fav:.0%})",
-        color=ACCENT,
-    )
+    description = f"Balance: **{match.fairness:.0%}** (Team 1 win chance ≈ {fav:.0%})"
+    if option_count > 1:
+        description += f"\nOption {option_index + 1} of {option_count} — 🔀 Shuffle for another split."
+    embed = discord.Embed(title="Match found!", description=description, color=ACCENT)
     n1, v1 = _team_field("Team 1", match.team1)
     n2, v2 = _team_field("Team 2", match.team2)
     embed.add_field(name=n1, value=v1, inline=True)

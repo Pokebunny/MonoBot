@@ -10,16 +10,20 @@ import logging
 import discord
 from checks import is_bot_admin
 from discord.ext import commands
-from models.matchmaking import QueuedPlayer
+from models.matchmaking import ProposedMatch, QueuedPlayer
 from resources.config import CONFIG
 from services import match_embeds
-from services.matchmaking import balance_teams
+from services.matchmaking import ranked_matches
 from services.rating import DEFAULT_MU, DEFAULT_SIGMA, RatingCache
 from services.storage import MatchStore
 
 logger = logging.getLogger(__name__)
 
 QUEUE_TARGET = 8  # 4v4
+
+# How many of the most-balanced splits players can shuffle through. A full 4v4
+# has 35; the top few are all near-even, past that they get lopsided.
+SHUFFLE_OPTIONS = 8
 
 # meta key holding the live queue message pointer ("<channel_id>:<message_id>")
 # so a message posted before a restart can still be found and cleaned up.
@@ -42,6 +46,35 @@ class QueueView(discord.ui.View):
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, custom_id="monobot:queue:leave")
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.handle_leave(interaction)
+
+
+class ProposedMatchView(discord.ui.View):
+    """The teams announced when the queue fills, with a Shuffle button that
+    walks through the next-most-balanced splits. State is in-memory only (the
+    ranked options and current index) — a restart drops it and the button goes
+    inert, which is fine: the match is a fleeting proposal, not stored. Only a
+    player in the match may shuffle it."""
+
+    def __init__(self, options: list[ProposedMatch], timeout: float = 600):
+        super().__init__(timeout=timeout)
+        self.options = options
+        self.index = 0
+        self.player_ids = {p.discord_id for p in options[0].team1 + options[0].team2}
+        if len(options) <= 1:
+            self.shuffle.disabled = True
+
+    def embed(self) -> discord.Embed:
+        return match_embeds.proposed_match(self.options[self.index], self.index, len(self.options))
+
+    @discord.ui.button(label="Shuffle", style=discord.ButtonStyle.secondary, emoji="🔀")
+    async def shuffle(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if str(interaction.user.id) not in self.player_ids:
+            await interaction.response.send_message(
+                "Only a player in this match can shuffle the teams.", ephemeral=True
+            )
+            return
+        self.index = (self.index + 1) % len(self.options)
+        await interaction.response.edit_message(embed=self.embed(), view=self)
 
 
 class Matchmaking(commands.Cog):
@@ -215,14 +248,16 @@ class Matchmaking(commands.Cog):
 
     async def _form_match(self, interaction: discord.Interaction):
         players = self._players()[:QUEUE_TARGET]
-        match = balance_teams(players)
+        options = ranked_matches(players, limit=SHUFFLE_OPTIONS)
         self.queue.clear()
         # Reset the queue message, then announce the teams and ping everyone in.
         await interaction.response.edit_message(embed=self._status_embed(), view=QueueView(self))
+        view = ProposedMatchView(options)
         mentions = " ".join(f"<@{p.discord_id}>" for p in players)
         await interaction.followup.send(
             content=f"{mentions} — your match is ready!",
-            embed=match_embeds.proposed_match(match),
+            embed=view.embed(),
+            view=view,
             allowed_mentions=discord.AllowedMentions(users=True),
         )
 

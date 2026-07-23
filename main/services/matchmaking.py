@@ -19,8 +19,11 @@ def _win_probability(team1: list[QueuedPlayer], team2: list[QueuedPlayer]) -> fl
     )
 
 
-def balance_teams(players: list[QueuedPlayer]) -> ProposedMatch:
-    """Split an even number of players into the two most balanced teams.
+def ranked_matches(players: list[QueuedPlayer], limit: int | None = None) -> list[ProposedMatch]:
+    """Every distinct split of an even roster into two teams, most balanced
+    first (predicted win probability closest to 50/50). `limit` keeps only the
+    top N — enough for players to shuffle through fair alternatives without
+    wandering into lopsided splits.
 
     Fixing the first player on team1 dedupes mirror-image splits (team1/team2
     swaps), so 8 players yield 35 candidates rather than 70."""
@@ -30,15 +33,16 @@ def balance_teams(players: list[QueuedPlayer]) -> ProposedMatch:
     half = n // 2
 
     anchor, rest = players[0], players[1:]
-    best: ProposedMatch | None = None
-    best_gap = 2.0
+    matches = []
     for combo in itertools.combinations(range(len(rest)), half - 1):
         team1 = [anchor] + [rest[i] for i in combo]
         team2 = [rest[i] for i in range(len(rest)) if i not in combo]
         p1 = _win_probability(team1, team2)
-        gap = abs(0.5 - p1)
-        if gap < best_gap:
-            best_gap = gap
-            best = ProposedMatch(team1=team1, team2=team2, team1_win_probability=p1)
-    assert best is not None  # guaranteed since at least one combo exists
-    return best
+        matches.append(ProposedMatch(team1=team1, team2=team2, team1_win_probability=p1))
+    matches.sort(key=lambda m: abs(0.5 - m.team1_win_probability))
+    return matches if limit is None else matches[:limit]
+
+
+def balance_teams(players: list[QueuedPlayer]) -> ProposedMatch:
+    """The single most balanced split of an even roster."""
+    return ranked_matches(players, limit=1)[0]

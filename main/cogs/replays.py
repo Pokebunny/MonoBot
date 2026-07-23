@@ -13,7 +13,7 @@ from discord.ext import commands
 from resources.config import CONFIG
 from services import achievements, match_embeds, replay_parser, storage
 from services.achievements import AchievementCache
-from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE
+from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, match_rating_deltas
 from services.storage import MatchStore
 from views import ExpiringView
 
@@ -160,7 +160,12 @@ class Replays(commands.Cog):
             await channel.send(embed=match_embeds.duplicate_notice(attachment.filename))
             return
 
-        embed = match_embeds.match_summary(match, result.match_id)
+        # Fresh-upload rating changes: the game just entered history, so replay
+        # to its chronological position and show what it moved. Empty for
+        # unrateable games (unconfirmed winner / too short) — the field is
+        # simply omitted in that case.
+        deltas = match_rating_deltas(self.store.all_matches(), result.match_id, self.store.merge_map())
+        embed = match_embeds.match_summary(match, result.match_id, rating_deltas=deltas)
         if result.status == "updated":
             embed.set_footer(text=f"Match #{result.match_id} · refined from a more complete recording")
         needs_confirmation = match.duration_seconds >= MIN_DURATION_SECONDS and (

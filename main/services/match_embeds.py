@@ -24,7 +24,24 @@ def _duration(seconds: int) -> str:
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
-def _team_lines(match: MonobattleMatch, team: int, mvp: MatchPlayer | None = None) -> str:
+def _rating_tag(deltas: dict[str, tuple[int, int]] | None, player: MatchPlayer) -> str:
+    """A small ' `+23`' / ' `-18`' after a player's name showing how the game
+    moved their rating. Empty when the game didn't rate (no deltas) or the
+    player has no entry."""
+    d = (deltas or {}).get(player.toon_handle)
+    if d is None:
+        return ""
+    change = d[1] - d[0]
+    sign = f"+{change}" if change >= 0 else str(change)
+    return f" `{sign}`"
+
+
+def _team_lines(
+    match: MonobattleMatch,
+    team: int,
+    mvp: MatchPlayer | None = None,
+    deltas: dict[str, tuple[int, int]] | None = None,
+) -> str:
     lines = []
     for p in match.team(team):
         pick = p.pick or "?"
@@ -33,26 +50,8 @@ def _team_lines(match: MonobattleMatch, team: int, mvp: MatchPlayer | None = Non
             was = f" (was {p.repick_from})" if p.repick_from and p.repick_from != p.pick else ""
             repick = f" ↻{was}"
         star = " ⭐" if p is mvp else ""
-        lines.append(f"**{p.name}** — {pick}{repick}{star}")
+        lines.append(f"**{p.name}**{_rating_tag(deltas, p)} — {pick}{repick}{star}")
     return "\n".join(lines) or "*empty*"
-
-
-def _rating_change_lines(match: MonobattleMatch, deltas: dict[str, tuple[int, int]]) -> str:
-    """One line per rated participant, biggest gain first: '📈 Name +23
-    (1180 → 1203)'. Winners tend to the top, but a strong loss can still show
-    a small gain, so we sort by the actual change."""
-    rows = []
-    for p in match.players:
-        d = deltas.get(p.toon_handle)
-        if d is None:
-            continue
-        before, after = d
-        change = after - before
-        arrow = "📈" if change > 0 else "📉" if change < 0 else "➖"
-        sign = f"+{change}" if change > 0 else str(change)
-        rows.append((change, f"{arrow} **{p.name}** {sign} ({before} → {after})"))
-    rows.sort(key=lambda r: r[0], reverse=True)
-    return "\n".join(line for _, line in rows)
 
 
 def match_summary(
@@ -79,7 +78,7 @@ def match_summary(
         trophy = " 🏆" if match.winning_team == team_number else ""
         embed.add_field(
             name=f"Team {team_number}{trophy}",
-            value=_team_lines(match, team_number, mvp),
+            value=_team_lines(match, team_number, mvp, rating_deltas),
             inline=True,
         )
 
@@ -103,9 +102,6 @@ def match_summary(
     else:
         result = f"Team {match.winning_team} (inferred, {match.winner_confidence:.0%} confidence)"
     embed.add_field(name="Result", value=result, inline=False)
-
-    if rating_deltas:
-        embed.add_field(name="Rating changes", value=_rating_change_lines(match, rating_deltas), inline=False)
 
     if match_id is not None:
         embed.set_footer(text=f"Match #{match_id}")

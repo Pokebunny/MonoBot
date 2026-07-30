@@ -10,3 +10,4 @@ main/resources/replays/
 /scratch/
 /test_replays/
 /.claude/settings.local.json
+main/resources/*.db.log

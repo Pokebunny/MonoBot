@@ -81,7 +81,9 @@ def rotate(dest: str, keep: int) -> None:
     base, ext = os.path.splitext(dest)
     shutil.copy2(dest, f"{base}.{stamp}{ext}")
     history = sorted(
-        f for f in os.listdir(os.path.dirname(dest) or ".") if f.startswith(os.path.basename(base) + ".") and f.endswith(ext)
+        f
+        for f in os.listdir(os.path.dirname(dest) or ".")
+        if f.startswith(os.path.basename(base) + ".") and f.endswith(ext)
     )
     for old in history[:-keep]:
         os.remove(os.path.join(os.path.dirname(dest) or ".", old))
@@ -103,7 +105,19 @@ def main() -> int:
 
     tmp = dest + ".part"
     try:
-        run(["ssh", "-i", SSH_KEY, "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", SSH_HOST, f"python3 - <<'PY'{SNAPSHOT_SCRIPT}PY"])
+        run(
+            [
+                "ssh",
+                "-i",
+                SSH_KEY,
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=15",
+                SSH_HOST,
+                f"python3 - <<'PY'{SNAPSHOT_SCRIPT}PY",
+            ]
+        )
         run(["scp", "-i", SSH_KEY, "-o", "BatchMode=yes", "-q", f"{SSH_HOST}:{REMOTE_SNAPSHOT}", tmp])
         matches, links = verify(tmp)
         rotate(dest, args.keep)

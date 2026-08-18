@@ -23,6 +23,12 @@ class BotConfig(BaseModel):
     # None means no ping.
     queue_ping_role_id: int | None = None
 
+    # Daily automatic queue reset, for players who joined, never got a game,
+    # and forgot to leave. "HH:MM" in queue_reset_timezone (an IANA name);
+    # None disables the reset.
+    queue_reset_time: str | None = "05:00"
+    queue_reset_timezone: str = "America/New_York"
+
     # Discord user IDs allowed to run bot-admin commands (merges, linking other
     # members, clearing the queue) regardless of server permissions.
     admin_user_ids: list[int] = []

@@ -5,11 +5,13 @@ The queue is a single in-memory roster (one queue for the bot). discord.py
 runs interaction callbacks on one event-loop thread, so no locking is needed.
 """
 
+import datetime as dt
 import logging
+import zoneinfo
 
 import discord
 from checks import is_bot_admin
-from discord.ext import commands
+from discord.ext import commands, tasks
 from models.matchmaking import ProposedMatch, QueuedPlayer
 from resources.config import CONFIG
 from services import match_embeds
@@ -28,6 +30,25 @@ SHUFFLE_OPTIONS = 8
 # meta key holding the live queue message pointer ("<channel_id>:<message_id>")
 # so a message posted before a restart can still be found and cleaned up.
 QUEUE_MSG_META_KEY = "queue_message"
+
+
+def _reset_time() -> dt.time | None:
+    """The configured daily queue-reset time, or None if it's disabled or
+    unparseable (a bad value shouldn't stop the bot from booting)."""
+    raw = CONFIG.queue_reset_time
+    if not raw:
+        return None
+    try:
+        tz = zoneinfo.ZoneInfo(CONFIG.queue_reset_timezone)
+        hour, minute = (int(part) for part in raw.split(":"))
+        return dt.time(hour=hour, minute=minute, tzinfo=tz)
+    except ValueError, zoneinfo.ZoneInfoNotFoundError:
+        logger.warning(
+            "Ignoring bad queue reset config (%r in %r); daily reset disabled",
+            raw,
+            CONFIG.queue_reset_timezone,
+        )
+        return None
 
 
 class QueueView(discord.ui.View):
@@ -93,6 +114,30 @@ class Matchmaking(commands.Cog):
         # Register the persistent view so Join/Leave buttons on queue messages
         # from before the last restart still dispatch here.
         self.client.add_view(QueueView(self))
+        reset_at = _reset_time()
+        if reset_at is not None:
+            self.daily_reset.change_interval(time=reset_at)
+            self.daily_reset.start()
+
+    async def cog_unload(self):
+        self.daily_reset.cancel()
+
+    # A queue that sat unfilled overnight is stale: people who joined, never
+    # got a game and forgot to leave make the count look healthier than it is.
+    # Wipe it once a day in the small hours (real time set in cog_load).
+    @tasks.loop(time=dt.time(hour=5))
+    async def daily_reset(self):
+        if not self.queue:
+            return
+        stale = len(self.queue)
+        self.queue.clear()
+        logger.info("Daily queue reset: cleared %d player(s)", stale)
+        # Silent: the live queue message just edits back to empty, no new post.
+        await self._refresh_message()
+
+    @daily_reset.before_loop
+    async def before_daily_reset(self):
+        await self.client.wait_until_ready()
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -204,7 +249,7 @@ class Matchmaking(commands.Cog):
         )
         await self._clear_old_queue_message(keep=self.queue_message)
 
-    @commands.hybrid_command(help="remove a player from the queue (e.g. a no-show)")
+    @commands.hybrid_command(aliases=["remove"], help="remove a player from the queue (e.g. a no-show)")
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def bump(self, ctx, member: discord.Member):
         if self.queue.pop(str(member.id), None) is None:

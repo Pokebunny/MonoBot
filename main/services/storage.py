@@ -900,7 +900,10 @@ class MatchStore:
         """Close the open season as of now and open a new one. The boundary is
         shared (previous ended_at == new started_at) so no match can fall
         between two seasons, and none is counted by both."""
-        now = datetime.datetime.now().replace(microsecond=0).isoformat()
+        # UTC-aware, matching how played_at is stored: season windows are
+        # compared as strings in SQL, so a naive local boundary would sit hours
+        # off from the timestamps it is filtering whenever the host isn't UTC.
+        now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
         with self._conn:
             self._conn.execute("UPDATE seasons SET ended_at = ? WHERE ended_at IS NULL", (now,))
             cur = self._conn.execute("INSERT INTO seasons (name, started_at) VALUES (?, ?)", (name, now))

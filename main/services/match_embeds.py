@@ -170,6 +170,12 @@ def _rating_value(rating: PlayerRating) -> str:
     return f"**{rating.display_rating}**" + ("  *(provisional)*" if rating.provisional else "")
 
 
+def _record_value(rating: PlayerRating) -> str:
+    if not rating.games:
+        return "0-0"
+    return f"{rating.wins}-{rating.losses} ({100 * rating.wins / rating.games:.0f}%)"
+
+
 def _rank_value(rating: PlayerRating, rank: int | None, total_ranked: int) -> str:
     if rank is None:
         return f"Unranked ({rating.games}/{MIN_RANKED_GAMES} games)"
@@ -203,15 +209,28 @@ def player_profile(
     award_counts: dict[str, int] | None = None,
     display_name: str | None = None,
     achievements: list[Earned] | None = None,
+    season_rating: PlayerRating | None = None,
+    season_name: str | None = None,
 ) -> discord.Embed:
+    """`rating` is the player's career rating — always present, so a profile
+    exists for anyone who has ever played. `season_rating` is their standing in
+    the open season and is None until they play in it; the Rating/Rank fields
+    show the season so this agrees with the leaderboard, with career alongside."""
     shown = display_name or rating.name
     embed = discord.Embed(title=f"{shown} — profile", color=ACCENT)
-    embed.add_field(name="Rating", value=_rating_value(rating), inline=True)
-    embed.add_field(name="Rank", value=_rank_value(rating, rank, total_ranked), inline=True)
-    record = f"{rating.wins}-{rating.losses} ({100 * rating.wins / rating.games:.0f}%)"
+    current = season_rating or rating
+    label = f"Rating · {season_name}" if season_name else "Rating"
+    if season_rating is None and season_name:
+        embed.add_field(name=label, value=f"*No games yet in {season_name}*", inline=True)
+        embed.add_field(name="Rank", value="Unranked", inline=True)
+    else:
+        embed.add_field(name=label, value=_rating_value(current), inline=True)
+        embed.add_field(name="Rank", value=_rank_value(current, rank, total_ranked), inline=True)
+        embed.add_field(name="Record", value=_record_value(current), inline=True)
+    career = _record_value(rating)
     if mvp_count:
-        record += f" · ⭐ {mvp_count} MVP{'s' if mvp_count != 1 else ''}"
-    embed.add_field(name="Record", value=record, inline=True)
+        career += f" · ⭐ {mvp_count} MVP{'s' if mvp_count != 1 else ''}"
+    embed.add_field(name="Career", value=f"**{rating.display_rating}** · {career}", inline=True)
     if award_counts:
         parts = [f"{spec.emoji} {spec.title} ×{award_counts[spec.key]}" for spec in SPECS if award_counts.get(spec.key)]
         if parts:
@@ -229,7 +248,7 @@ def player_profile(
     others = [a for a in aliases if a.lower() != shown.lower()]
     if others:
         embed.add_field(name="Plays as", value=", ".join(others[:12]), inline=False)
-    embed.set_footer(text=f"{_rating_footer(rating)} · decided games only")
+    embed.set_footer(text=f"{_rating_footer(current)} · decided games only")
     return embed
 
 

@@ -574,3 +574,19 @@ def test_season_reset_keeps_links_and_achievements(store):
     assert store.sc2_names_for("42") == ["A0"]
     assert [key for key, _earned in store.unlocks_for(["h-A0"])] == ["first_game"]
     assert store.match_count() == 1
+
+
+def test_season_boundary_is_utc_aware_like_played_at(store):
+    """Windows are compared as strings in SQL, so the boundary must be written
+    in the same format matches use — a naive local boundary sits hours off the
+    timestamps it filters whenever the host isn't UTC."""
+    season = store.start_season("Season 2")
+    parsed = datetime.datetime.fromisoformat(season.started_at)
+    assert parsed.tzinfo is not None, season.started_at
+    assert parsed.utcoffset() == datetime.timedelta(0)
+
+    # A game played right after the boundary lands in the new season.
+    now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=30)
+    store.ingest(_match(played_at=now, file_name="after.SC2Replay"), hash_replay(b"after"))
+    assert len(store.season_matches(store.current_season())) == 1
+    assert store.season_containing(now.isoformat()).name == "Season 2"

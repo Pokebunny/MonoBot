@@ -305,11 +305,17 @@ class Leaderboard(commands.Cog):
             return user.display_name if user else fallback
         return fallback
 
+    def _career_book(self):
+        """Every match ever, ignoring season windows. Profiles resolve against
+        this so a player who hasn't played yet this season still has one."""
+        return self._book_for(None, career=True)
+
     def _resolve(self, player: str):
-        """Resolve a display name (current or former) to (rating, rank, board
-        size, number of same-named accounts), or None if no rated games.
-        Names aren't unique, so pick the most-active matching account."""
-        book = self.ratings.book()
+        """Resolve a display name (current or former) to (career rating, this
+        season's rating or None, rank, board size, number of same-named
+        accounts), or None if no rated games ever. Names aren't unique, so pick
+        the most-active matching account."""
+        book = self._career_book()
         rated, seen = [], set()
         for h in self.store.handles_for_name(player):
             r = book.rating_for(h)  # follows account merges
@@ -319,9 +325,7 @@ class Leaderboard(commands.Cog):
         if not rated:
             return None
         rated.sort(key=lambda r: r.games, reverse=True)
-        rating = rated[0]
-        rank, ranked_total = self._rank_of(book, rating)
-        return rating, rank, ranked_total, len(rated)
+        return (*self._with_season(rated[0]), len(rated))
 
     def _rank_of(self, book, rating) -> tuple[int | None, int]:
         """(rank among ranked players, size of the ranked board). Players
@@ -330,9 +334,19 @@ class Leaderboard(commands.Cog):
         rank = next((i for i, r in enumerate(ranked, 1) if r.handle == rating.handle), None)
         return rank, len(ranked)
 
+    def _with_season(self, career_rating):
+        """Pair a career rating with the same player's standing in the open
+        season (None until they play in it) and their season rank."""
+        book = self.ratings.book()
+        season_rating = book.rating_for(career_rating.handle)
+        if season_rating is None:
+            return career_rating, None, None, len(book.leaderboard(min_games=MIN_RANKED_GAMES))
+        rank, ranked_total = self._rank_of(book, season_rating)
+        return career_rating, season_rating, rank, ranked_total
+
     def _resolve_self(self, author):
         """The command author's own most-active rated account, or None."""
-        book = self.ratings.book()
+        book = self._career_book()
         best = None
         for h in self.store.handles_for(str(author.id)):
             r = book.rating_for(h)
@@ -340,8 +354,7 @@ class Leaderboard(commands.Cog):
                 best = r
         if best is None:
             return None
-        rank, ranked_total = self._rank_of(book, best)
-        return best, rank, ranked_total, 1
+        return (*self._with_season(best), 1)
 
     async def _resolve_or_reply(self, ctx, player: str | None):
         if player is None:
@@ -354,26 +367,32 @@ class Leaderboard(commands.Cog):
             await ctx.send(f"No rated games found for **{player}**.")
         return resolved
 
+    def _profile_embed(self, ctx, resolved, player: str | None):
+        rating, season_rating, rank, total, _n = resolved
+        group = self.store.merged_handles(rating.handle)  # all merged accounts, e.g. Jay+Luigi
+        return match_embeds.player_profile(
+            rating,
+            rank,
+            total,
+            self.store.aliases_for_handles(group),
+            self.store.player_records_by(group, "race", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS),
+            self.store.player_records_by(group, "pick", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS),
+            self.store.mvp_count(group, MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS),
+            self.store.award_counts(group, MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS),
+            display_name=self._shown_name(ctx, group, rating.name),
+            achievements=achievements.ledger_for_group(self.store, group),
+            season_rating=season_rating,
+            season_name=self.store.current_season().name,
+        )
+
     @commands.hybrid_command(aliases=["rank"], help="show a player's full profile (yourself if no name given)")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def profile(self, ctx, *, player: str | None = None):
         resolved = await self._resolve_or_reply(ctx, player)
         if resolved is None:
             return
-        rating, rank, total, n_accounts = resolved
-        group = self.store.merged_handles(rating.handle)  # all merged accounts, e.g. Jay+Luigi
-        aliases = self.store.aliases_for_handles(group)
-        races = self.store.player_records_by(group, "race", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
-        units = self.store.player_records_by(group, "pick", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
-        mvps = self.store.mvp_count(group, MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
-        awards = self.store.award_counts(group, MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
-        earned = achievements.ledger_for_group(self.store, group)
-        shown = self._shown_name(ctx, group, rating.name)
-        await ctx.send(
-            embed=match_embeds.player_profile(
-                rating, rank, total, aliases, races, units, mvps, awards, display_name=shown, achievements=earned
-            )
-        )
+        n_accounts = resolved[-1]
+        await ctx.send(embed=self._profile_embed(ctx, resolved, player))
         if n_accounts > 1:
             await ctx.send(
                 f"*(Note: {n_accounts} different accounts have played as **{player}**; showing the most active.)*"

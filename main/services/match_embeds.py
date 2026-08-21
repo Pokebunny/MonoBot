@@ -139,9 +139,13 @@ def leaderboard(
     min_games: int = 1,
     display_names: dict[str, str] | None = None,
     hidden: int = 0,
+    season: str | None = None,
+    final: bool = False,
 ) -> discord.Embed:
     """display_names maps handle -> shown name (the linked member's Discord
-    name); unmapped handles fall back to the account's SC2 name."""
+    name); unmapped handles fall back to the account's SC2 name. `season`
+    names the window these ratings cover, shown so a reset ladder is never
+    mistaken for lost history; `final` marks a season that has already ended."""
     display_names = display_names or {}
     pages = leaderboard_page_count(ratings)
     page = max(0, min(page, pages - 1))
@@ -152,11 +156,13 @@ def leaderboard(
         lines.append(
             f"`{i:>2}` **{shown}** — **{r.display_rating}** ({r.wins}-{r.losses}, {100 * r.wins / r.games:.0f}%)"
         )
-    embed = discord.Embed(title="Monobattle Leaderboard", color=ACCENT)
-    embed.description = "\n".join(lines) or "*No rated players yet.*"
+    title = "Monobattle Leaderboard" if season is None else f"Monobattle Leaderboard — {season}"
+    embed = discord.Embed(title=title, color=ACCENT)
+    embed.description = "\n".join(lines) or "*No rated players yet — play a game to open the season.*"
     note = f"min {min_games} games · " if min_games > 1 else ""
     more = f" · {hidden} more below the minimum (!leaderboard 1 shows all)" if hidden else ""
-    embed.set_footer(text=f"{note}Page {page + 1}/{pages}{more}")
+    closed = "Final standings · " if final else ""
+    embed.set_footer(text=f"{closed}{note}Page {page + 1}/{pages}{more}")
     return embed
 
 

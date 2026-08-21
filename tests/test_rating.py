@@ -146,3 +146,34 @@ def test_leaderboard_page_count():
     assert leaderboard_page_count(list(range(20))) == 1
     assert leaderboard_page_count(list(range(21))) == 2
     assert leaderboard_page_count(list(range(45))) == 3
+
+
+def test_rating_cache_follows_the_open_season(tmp_path):
+    """A season turnover changes the window without changing any match, so the
+    cache must invalidate on it — not only on change_count."""
+    from services.rating import RatingCache
+    from services.storage import MatchStore, hash_replay
+
+    store = MatchStore(str(tmp_path / "seasons.db"))
+    try:
+        base = datetime.datetime(2026, 7, 17, tzinfo=datetime.timezone.utc)
+        for i in range(4):
+            m = _match(winning_team=1)
+            m.played_at = base + datetime.timedelta(minutes=i)
+            m.file_name = f"g{i}.SC2Replay"
+            store.ingest(m, hash_replay(f"g{i}".encode()))
+
+        cache = RatingCache(store)
+        assert cache.book().leaderboard(min_games=1)
+        cached = cache.book()
+        assert cache.book() is cached  # no write, no rebuild
+
+        store.start_season("Season 2")
+        assert cache.book() is not cached
+        assert cache.book().leaderboard(min_games=1) == []
+
+        # career=True ignores the season window entirely
+        career = RatingCache(store, career=True)
+        assert career.book().leaderboard(min_games=1)
+    finally:
+        store.close()

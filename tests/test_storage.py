@@ -473,3 +473,104 @@ def test_game_awards_and_mvp_garnish(store):
     _mid, stored = store.all_matches()[0]
     assert stored.comeback_deficit == 2000
     assert stored.lead_changes == 1
+
+
+# -- seasons ---------------------------------------------------------------
+
+
+def test_season_1_seeded_and_holds_all_history(store):
+    """A fresh DB has exactly one open season, starting early enough that
+    every pre-seasons match belongs to it."""
+    seasons = store.seasons()
+    assert len(seasons) == 1
+    assert seasons[0].ended_at is None
+    store.ingest(_match(played_at=_at(1)), hash_replay(b"s1"))
+    assert len(store.season_matches(store.current_season())) == 1
+
+
+def test_start_season_resets_ratings_without_losing_matches(store):
+    for i in range(3):
+        store.ingest(_match(played_at=_at(i)), hash_replay(f"r{i}".encode()))
+    old = store.current_season()
+    assert len(store.season_matches(old)) == 3
+
+    new = store.start_season("Season 2")
+    assert new.name == "Season 2"
+    assert new.ended_at is None
+    # Matches are untouched; only the window moved.
+    assert store.match_count() == 3
+    assert store.season_matches(new) == []
+    assert len(store.season_matches(store.seasons()[0])) == 3
+
+
+def test_seasons_partition_history(store):
+    """Shared boundaries mean no match falls between seasons or into two."""
+    for i in range(4):
+        store.ingest(_match(played_at=_at(i)), hash_replay(f"p{i}".encode()))
+    store.start_season("Season 2")
+    store.start_season("Season 3")
+    total = sum(len(store.season_matches(s)) for s in store.seasons())
+    assert total == store.match_count()
+
+
+def test_only_one_season_open_at_a_time(store):
+    store.start_season("Season 2")
+    assert [s.ended_at is None for s in store.seasons()] == [False, True]
+    assert store.current_season().name == "Season 2"
+
+
+def test_find_season_accepts_what_people_type(store):
+    store.start_season("Season 2")
+    for query in ("Season 1", "season 1", "s1", "S1", "1", "#1"):
+        assert store.find_season(query).name == "Season 1", query
+    assert store.find_season("s2").name == "Season 2"
+    assert store.find_season("s3") is None
+    assert store.find_season("nonsense") is None
+    assert store.find_season("") is None
+
+
+def test_season_containing_uses_played_at_not_upload_time(store):
+    """A replay from last season uploaded today scores against last season."""
+    store.ingest(_match(played_at=_at(0)), hash_replay(b"old"))
+    store.start_season("Season 2")
+    old_season, new_season = store.seasons()
+    assert store.season_containing(_at(0).isoformat()).id == old_season.id
+
+    # Uploaded now, but played before the boundary -> still Season 1.
+    late = _match(played_at=_at(1), file_name="late.SC2Replay")
+    store.ingest(late, hash_replay(b"late"))
+    assert store.season_containing(late.played_at.isoformat()).id == old_season.id
+    assert len(store.season_matches(old_season)) == 2
+    assert store.season_matches(new_season) == []
+
+
+def test_past_season_ratings_are_reconstructible(store):
+    """The point of deriving ratings: a closed season's board can still be
+    rebuilt after a reset, and matches what it was while live."""
+    for i in range(6):
+        store.ingest(_match(played_at=_at(i)), hash_replay(f"b{i}".encode()))
+    season = store.current_season()
+    live = RatingBook.from_matches((m for _, m in store.season_matches(season)))
+    before = [(r.name, r.display_rating) for r in live.leaderboard(min_games=1)]
+    assert before
+
+    store.start_season("Season 2")
+    current = RatingBook.from_matches((m for _, m in store.season_matches(store.current_season())))
+    assert current.leaderboard(min_games=1) == []  # hard reset
+
+    closed = store.find_season("s1")
+    rebuilt = RatingBook.from_matches((m for _, m in store.season_matches(closed)))
+    assert [(r.name, r.display_rating) for r in rebuilt.leaderboard(min_games=1)] == before
+
+
+def test_season_reset_keeps_links_and_achievements(store):
+    """Only ratings are season-scoped — user-written and ledger data survive."""
+    m = _match(played_at=_at(0))
+    store.ingest(m, hash_replay(b"keep"))
+    store.link_player("42", "A0")
+    store.record_unlocks([("h-A0", "first_game", _at(0).isoformat())])
+
+    store.start_season("Season 2")
+    assert store.sc2_names_for("42") == ["A0"]
+    assert [key for key, _earned in store.unlocks_for(["h-A0"])] == ["first_game"]
+    assert store.match_count() == 1

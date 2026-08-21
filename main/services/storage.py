@@ -45,11 +45,21 @@ class LinkResult(NamedTuple):
     candidates: int = 0
 
 
+class Season(NamedTuple):
+    id: int
+    name: str
+    started_at: str  # ISO, inclusive
+    ended_at: str | None  # ISO, exclusive; None = still running
+
+    def contains(self, played_at: str) -> bool:
+        return self.started_at <= played_at and (self.ended_at is None or played_at < self.ended_at)
+
+
 DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "monobot.db")
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -141,6 +151,28 @@ CREATE TABLE IF NOT EXISTS achievement_unlocks (
     granted_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (handle, key)
 );
+
+-- Ladder seasons. A season is a TIME WINDOW, not a tag on each match: a
+-- match belongs to the season whose window contains its played_at. That way a
+-- replay from last season uploaded today still scores against last season,
+-- and no stored row has to be rewritten when a season turns over. The open
+-- season (ended_at IS NULL) is the current one; there is always exactly one.
+-- Only ratings are season-scoped (see services/rating.py) — match history,
+-- profile stats and the achievement ledger stay career-wide.
+CREATE TABLE IF NOT EXISTS seasons (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT
+);
+
+-- Exactly one open season. Indexing the expression, not ended_at itself:
+-- SQLite treats NULLs as distinct, so a unique index on ended_at would
+-- happily allow two open seasons.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_seasons_open
+    ON seasons((ended_at IS NULL)) WHERE ended_at IS NULL;
+-- Season 1 opens at the dawn of time so all pre-seasons history belongs to it.
+INSERT OR IGNORE INTO seasons (id, name, started_at) VALUES (1, 'Season 1', '0001-01-01T00:00:00');
 
 -- Deployment facts that are data, not code. achievement_epoch is stamped the
 -- first time this DB is opened by achievement-aware code: moment achievements
@@ -265,6 +297,25 @@ def _migration_9_lost_all_bases(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE match_players ADD COLUMN lost_all_bases INTEGER")
 
 
+def _migration_10_seasons(conn: sqlite3.Connection) -> None:
+    """Introduce ladder seasons. Existing history all belongs to Season 1,
+    whose window starts at the dawn of time — no match rows are touched."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS seasons (
+               id INTEGER PRIMARY KEY,
+               name TEXT NOT NULL,
+               started_at TEXT NOT NULL,
+               ended_at TEXT
+           )"""
+    )
+    # Indexes the expression, not ended_at: NULLs are distinct in SQLite, so
+    # a unique index on the column itself would allow two open seasons.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_seasons_open ON seasons((ended_at IS NULL)) WHERE ended_at IS NULL"
+    )
+    conn.execute("INSERT OR IGNORE INTO seasons (id, name, started_at) VALUES (1, 'Season 1', '0001-01-01T00:00:00')")
+
+
 _MIGRATIONS = {
     1: _migration_1_content_key,
     2: _migration_2_replay_channels,
@@ -275,6 +326,7 @@ _MIGRATIONS = {
     7: _migration_7_drop_account_merges,
     8: _migration_8_achievements,
     9: _migration_9_lost_all_bases,
+    10: _migration_10_seasons,
 }
 
 
@@ -788,10 +840,72 @@ class MatchStore:
             return None
         return self._build_match(row)
 
-    def all_matches(self) -> list[tuple[int, MonobattleMatch]]:
-        """All matches with their ids, oldest first (rating order)."""
-        rows = self._conn.execute("SELECT * FROM matches ORDER BY played_at").fetchall()
+    def all_matches(self, since: str | None = None, until: str | None = None) -> list[tuple[int, MonobattleMatch]]:
+        """Matches with their ids, oldest first (rating order). `since` and
+        `until` bound played_at (inclusive / exclusive) to window a season;
+        unbounded by default, since only ratings are season-scoped."""
+        clauses, params = [], []
+        if since is not None:
+            clauses.append("played_at >= ?")
+            params.append(since)
+        if until is not None:
+            clauses.append("played_at < ?")
+            params.append(until)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._conn.execute(f"SELECT * FROM matches {where} ORDER BY played_at", params).fetchall()
         return [(row["id"], self._build_match(row)) for row in rows]
+
+    def season_matches(self, season: "Season") -> list[tuple[int, MonobattleMatch]]:
+        return self.all_matches(since=season.started_at, until=season.ended_at)
+
+    def find_season(self, query: str) -> Season | None:
+        """Resolve a user-typed season reference. Accepts the full name
+        ("Season 1"), a bare or prefixed number ("1", "s1", "#1"), and matches
+        case-insensitively — nobody types the exact stored name."""
+        q = query.strip().lower()
+        if not q:
+            return None
+        seasons = self.seasons()
+        for s in seasons:
+            if s.name.lower() == q:
+                return s
+        digits = q.lstrip("#s ").strip()
+        if digits.isdigit():
+            n = int(digits)
+            # Number means the Nth season chronologically, which is what a
+            # reader means by "season 2" even if the row was renamed.
+            if 1 <= n <= len(seasons):
+                return seasons[n - 1]
+        return None
+
+    def current_season(self) -> Season:
+        """The open season. Guaranteed to exist — the schema seeds Season 1."""
+        row = self._conn.execute(
+            "SELECT * FROM seasons WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+        return Season(row["id"], row["name"], row["started_at"], row["ended_at"])
+
+    def season_containing(self, played_at: str) -> Season | None:
+        """The season whose window holds this played_at. Used so a match's
+        rating delta is computed against its own season, not whichever one
+        happens to be open when the replay is uploaded."""
+        return next((s for s in self.seasons() if s.contains(played_at)), None)
+
+    def seasons(self) -> list[Season]:
+        """All seasons, oldest first."""
+        rows = self._conn.execute("SELECT * FROM seasons ORDER BY started_at").fetchall()
+        return [Season(r["id"], r["name"], r["started_at"], r["ended_at"]) for r in rows]
+
+    def start_season(self, name: str) -> Season:
+        """Close the open season as of now and open a new one. The boundary is
+        shared (previous ended_at == new started_at) so no match can fall
+        between two seasons, and none is counted by both."""
+        now = datetime.datetime.now().replace(microsecond=0).isoformat()
+        with self._conn:
+            self._conn.execute("UPDATE seasons SET ended_at = ? WHERE ended_at IS NULL", (now,))
+            cur = self._conn.execute("INSERT INTO seasons (name, started_at) VALUES (?, ?)", (name, now))
+        self.change_count += 1
+        return Season(cur.lastrowid, name, now, None)
 
     def pending_confirmations(self, confidence_gate: float, min_duration: int) -> list[tuple[int, MonobattleMatch]]:
         """Real matches whose winner is unknown or below the rating gate."""

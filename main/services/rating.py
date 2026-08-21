@@ -156,17 +156,36 @@ class RatingCache:
     """A RatingBook derived from a match store, rebuilt only when the store
     changes. Shared by the cogs that read ratings (leaderboard, matchmaking).
 
+    Ratings are season-scoped: the book replays only matches inside the open
+    season's window, so starting a season is a hard reset (everyone back to
+    the prior) without deleting anything. `career=True` ignores season bounds.
+    Match history, profile stats and achievements are NOT season-scoped and
+    read the store directly.
+
     `store` is duck-typed (needs `.all_matches()` and `.change_count`) so this
     module keeps its one-way dependency on models only."""
 
-    def __init__(self, store):
+    def __init__(self, store, career: bool = False):
         self._store = store
+        self._career = career
         self._book: RatingBook | None = None
         self._version = -1
+        self._season_id: int | None = None
+
+    def _season(self):
+        if self._career or not hasattr(self._store, "current_season"):
+            return None
+        return self._store.current_season()
 
     def book(self) -> RatingBook:
-        if self._book is None or self._version != self._store.change_count:
+        season = self._season()
+        season_id = season.id if season else None
+        # Season turnover changes the window without necessarily changing the
+        # matches, so it invalidates the book independently of change_count.
+        if self._book is None or self._version != self._store.change_count or self._season_id != season_id:
             merge_map = self._store.merge_map() if hasattr(self._store, "merge_map") else None
-            self._book = RatingBook.from_matches((m for _, m in self._store.all_matches()), merge_map)
+            matches = self._store.all_matches() if season is None else self._store.season_matches(season)
+            self._book = RatingBook.from_matches((m for _, m in matches), merge_map)
             self._version = self._store.change_count
+            self._season_id = season_id
         return self._book

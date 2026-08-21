@@ -3,10 +3,17 @@
 import logging
 
 import discord
+from checks import is_bot_admin
 from discord.ext import commands
 from services import achievements, match_embeds
 from services.achievements import AchievementCache
-from services.rating import MIN_DURATION_SECONDS, MIN_RANKED_GAMES, MIN_WINNER_CONFIDENCE, RatingCache
+from services.rating import (
+    MIN_DURATION_SECONDS,
+    MIN_RANKED_GAMES,
+    MIN_WINNER_CONFIDENCE,
+    RatingBook,
+    RatingCache,
+)
 from services.storage import MatchStore
 from views import ExpiringView
 
@@ -21,9 +28,19 @@ class LeaderboardView(ExpiringView):
     """◀ ▶ pagination for the leaderboard. Snapshots the ranking so paging
     stays consistent even if a game is uploaded mid-browse."""
 
-    def __init__(self, board, min_games: int, display_names: dict[str, str] | None = None, hidden: int = 0):
+    def __init__(
+        self,
+        board,
+        min_games: int,
+        display_names: dict[str, str] | None = None,
+        hidden: int = 0,
+        season: str | None = None,
+        final: bool = False,
+    ):
         super().__init__()
         self.board = board
+        self.season = season
+        self.final = final
         self.min_games = min_games
         self.display_names = display_names
         self.hidden = hidden
@@ -44,7 +61,9 @@ class LeaderboardView(ExpiringView):
     async def _show(self, interaction: discord.Interaction):
         self._sync()
         await interaction.response.edit_message(
-            embed=match_embeds.leaderboard(self.board, self.page, self.min_games, self.display_names, self.hidden),
+            embed=match_embeds.leaderboard(
+                self.board, self.page, self.min_games, self.display_names, self.hidden, self.season, self.final
+            ),
             view=self,
         )
 
@@ -168,6 +187,40 @@ class MatchBrowserView(ExpiringView):
         await self._show(interaction)
 
 
+class ConfirmSeasonView(ExpiringView):
+    """Confirmation for a season reset. Visible to the whole channel, so the
+    button is locked to the mod who ran the command."""
+
+    def __init__(self, store, ratings, name: str, invoker_id: int, timeout: float = 60):
+        super().__init__(timeout=timeout)
+        self.store = store
+        self.ratings = ratings
+        self.name = name
+        self.invoker_id = invoker_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.send_message("Only the mod who ran `!newseason` can confirm.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Start season", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        season = self.store.start_season(self.name)
+        # The book is windowed to the open season, so it empties on next read.
+        self.ratings.book()
+        logger.info("Season %d (%s) started by %s", season.id, season.name, interaction.user)
+        self.stop()
+        await interaction.response.edit_message(
+            content=f"**{season.name}** has begun — every rating is back to the default. Good luck.", view=None
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        await interaction.response.edit_message(content="Season unchanged.", view=None)
+
+
 class Leaderboard(commands.Cog):
     def __init__(self, client):
         self.client = client
@@ -182,18 +235,63 @@ class Leaderboard(commands.Cog):
         self.achievements: AchievementCache = client.achievement_cache
         achievements.ensure_seeded(self.store, self.achievements)
 
-    @commands.hybrid_command(aliases=["ladder"], help="show the rating leaderboard")
+    @commands.hybrid_command(
+        aliases=["ladder"],
+        help="show the rating leaderboard — add a season (!leaderboard s1) or 'career' for all-time",
+    )
     @commands.cooldown(1, 5, commands.BucketType.channel)
-    async def leaderboard(self, ctx, min_games: int = DEFAULT_MIN_GAMES):
-        everyone = self.ratings.book().leaderboard(min_games=1)
+    async def leaderboard(self, ctx, *, query: str = ""):
+        min_games, season_query = self._parse_board_query(query)
+        career = season_query.lower() in ("career", "all", "alltime", "all-time")
+        if career:
+            season, label = None, "All-Time"
+        elif season_query:
+            season = self.store.find_season(season_query)
+            if season is None:
+                known = ", ".join(s.name for s in self.store.seasons())
+                await ctx.send(f"No season called **{season_query}**. Seasons so far: {known}.")
+                return
+            label = season.name
+        else:
+            season = self.store.current_season()
+            label = season.name
+
+        book = self._book_for(season, career)
+        everyone = book.leaderboard(min_games=1)
         board = [r for r in everyone if r.games >= min_games]
         hidden = len(everyone) - len(board)
         names = {r.handle: self._shown_name(ctx, r.handle, r.name) for r in board}
-        view = LeaderboardView(board, min_games, names, hidden)
+        # Only ever one season on the board — name it so an empty or shuffled
+        # ladder right after a reset reads as intentional, not as data loss.
+        final = season is not None and season.ended_at is not None
+        view = LeaderboardView(board, min_games, names, hidden, label, final)
         message = await ctx.send(
-            embed=match_embeds.leaderboard(board, 0, min_games, names, hidden), view=view if view.multipage else None
+            embed=match_embeds.leaderboard(board, 0, min_games, names, hidden, label, final),
+            view=view if view.multipage else None,
         )
         view.message = message
+
+    @staticmethod
+    def _parse_board_query(query: str) -> tuple[int, str]:
+        """Split '!leaderboard [min_games] [season]' into its two parts. A bare
+        number stays min_games — that predates seasons and is what the board's
+        own footer tells people to type — so a season needs a name ('s1')."""
+        min_games, season_words = DEFAULT_MIN_GAMES, []
+        for token in query.split():
+            if token.isdigit() and not season_words:
+                min_games = int(token)
+            else:
+                season_words.append(token)
+        return min_games, " ".join(season_words)
+
+    def _book_for(self, season, career: bool):
+        """The rating book for a season. The open season comes from the shared
+        cache; past seasons and the career board are built on demand — they're
+        rare reads, and at this history size a full replay is ~50ms."""
+        if not career and season is not None and season.ended_at is None:
+            return self.ratings.book()
+        matches = self.store.all_matches() if career else self.store.season_matches(season)
+        return RatingBook.from_matches((m for _, m in matches), self.store.merge_map())
 
     def _shown_name(self, ctx, handles, fallback: str) -> str:
         """The Discord display name of whoever these accounts are linked to —
@@ -394,6 +492,52 @@ class Leaderboard(commands.Cog):
             await ctx.send("No decided matches stored yet.")
             return
         await ctx.send(embed=match_embeds.unit_stats(records, min_games))
+
+    @commands.hybrid_command(help="show the current ladder season")
+    @commands.cooldown(1, 5, commands.BucketType.channel)
+    async def season(self, ctx):
+        current = self.store.current_season()
+        played = len(self.store.season_matches(current))
+        past = [s for s in self.store.seasons() if s.id != current.id]
+        started = current.started_at[:10]
+        # Season 1 opens at the dawn of time to absorb pre-seasons history;
+        # a date of year 1 would be nonsense to show.
+        opened = "" if started.startswith("0001") else f" · started {started}"
+        embed = discord.Embed(
+            title=current.name,
+            description=f"**{played}** games played this season{opened}.",
+            color=match_embeds.ACCENT,
+        )
+        if past:
+            embed.add_field(
+                name="Past seasons",
+                value="\n".join(f"{s.name} — {len(self.store.season_matches(s))} games" for s in reversed(past)),
+                inline=False,
+            )
+        footer = "Ratings cover this season only · match history and achievements are all-time"
+        if past:
+            footer = "!leaderboard s1 shows a past season · !leaderboard career is all-time\n" + footer
+        embed.set_footer(text=footer)
+        await ctx.send(embed=embed)
+
+    @commands.hybrid_command(help="start a new ladder season, resetting all ratings (mods)")
+    @is_bot_admin()
+    async def newseason(self, ctx, *, name: str | None = None):
+        current = self.store.current_season()
+        name = (name or "").strip() or self._next_season_name()
+        played = len(self.store.season_matches(current))
+        view = ConfirmSeasonView(self.store, self.ratings, name, ctx.author.id)
+        message = await ctx.send(
+            f"Start **{name}**? This ends **{current.name}** ({played} games) and resets every rating to "
+            f"the default — nothing is deleted, and match history, profile stats and achievements are "
+            f"untouched.",
+            view=view,
+        )
+        view.message = message
+
+    def _next_season_name(self) -> str:
+        """Default name continues the numbering: 'Season 1' -> 'Season 2'."""
+        return f"Season {len(self.store.seasons()) + 1}"
 
     @commands.hybrid_command(help="how many matches are stored")
     @commands.cooldown(1, 5, commands.BucketType.channel)

@@ -22,6 +22,13 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   Schema changes go through numbered migrations in `services/storage.py`
   (bump `SCHEMA_VERSION`, add to `_MIGRATIONS`) — never a DB rebuild, which
   would lose the user-written `player_links` table.
+- Ladder **seasons** are time windows (`seasons` table: name + `started_at` /
+  `ended_at`), never a tag on each match: a match belongs to the season whose
+  window holds its `played_at`, so a late-uploaded old replay still scores
+  against the season it was played in. Starting a season resets ratings by
+  moving the window, deleting nothing — past boards stay reconstructible.
+  Only ratings are season-scoped; match history, profile stats and the
+  achievement ledger are career-wide.
 - `scripts/` (repo root) — one-shot utilities, e.g. `backfill_archive.py` to
   seed the database from a folder of replays (idempotent, dedupes by hash).
 

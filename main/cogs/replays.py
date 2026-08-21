@@ -161,10 +161,13 @@ class Replays(commands.Cog):
             return
 
         # Fresh-upload rating changes: the game just entered history, so replay
-        # to its chronological position and show what it moved. Empty for
-        # unrateable games (unconfirmed winner / too short) — the field is
-        # simply omitted in that case.
-        deltas = match_rating_deltas(self.store.all_matches(), result.match_id, self.store.merge_map())
+        # to its chronological position and show what it moved. Scoped to the
+        # season the game was PLAYED in (not the open one) so a late-uploaded
+        # old replay reports the delta it actually caused. Empty for unrateable
+        # games (unconfirmed winner / too short) — the field is simply omitted.
+        season = self.store.season_containing(match.played_at.isoformat())
+        history = self.store.season_matches(season) if season else self.store.all_matches()
+        deltas = match_rating_deltas(history, result.match_id, self.store.merge_map())
         embed = match_embeds.match_summary(match, result.match_id, rating_deltas=deltas)
         if result.status == "updated":
             embed.set_footer(text=f"Match #{result.match_id} · refined from a more complete recording")

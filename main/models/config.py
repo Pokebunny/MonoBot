@@ -19,10 +19,6 @@ class BotConfig(BaseModel):
                 data["replays_channel_ids"] = ids
         return data
 
-    # Role pinged when a matchmaking queue opens (e.g. a @monobattlers role).
-    # None means no ping.
-    queue_ping_role_id: int | None = None
-
     # Daily automatic queue reset, for players who joined, never got a game,
     # and forgot to leave. "HH:MM" in queue_reset_timezone (an IANA name);
     # None disables the reset.

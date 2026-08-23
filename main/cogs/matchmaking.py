@@ -70,32 +70,63 @@ class QueueView(discord.ui.View):
 
 
 class ProposedMatchView(discord.ui.View):
-    """The teams announced when the queue fills, with a Shuffle button that
-    walks through the next-most-balanced splits. State is in-memory only (the
-    ranked options and current index) — a restart drops it and the button goes
-    inert, which is fine: the match is a fleeting proposal, not stored. Only a
-    player in the match may shuffle it."""
+    """The teams announced when the queue fills.
 
-    def __init__(self, options: list[ProposedMatch], timeout: float = 600):
+    Two buttons, deliberately distinct:
+
+    - **Shuffle** cycles the alternatives that were ranked when the match was
+      posted — same ratings, different split.
+    - **Re-balance** throws those away and re-splits the roster from the
+      players' *current* ratings, so replays uploaded since the match formed
+      count. Groups often play a couple of games before re-teaming, and the
+      stale options no longer reflect where anyone stands.
+
+    State is in-memory only (the ranked options and current index) — a restart
+    drops it and the buttons go inert, which is fine: the match is a fleeting
+    proposal, not stored. Only a player in the match may touch either button.
+    """
+
+    def __init__(
+        self,
+        cog: "Matchmaking",
+        users: list[discord.abc.User],
+        options: list[ProposedMatch],
+        timeout: float = 600,
+    ):
         super().__init__(timeout=timeout)
+        self.cog = cog
+        self.users = users  # kept so a re-balance can re-read live ratings
         self.options = options
         self.index = 0
-        self.player_ids = {p.discord_id for p in options[0].team1 + options[0].team2}
+        self.player_ids = {str(u.id) for u in users}
         if len(options) <= 1:
             self.shuffle.disabled = True
 
     def embed(self) -> discord.Embed:
         return match_embeds.proposed_match(self.options[self.index], self.index, len(self.options))
 
+    async def _players_only(self, interaction: discord.Interaction, action: str) -> bool:
+        if str(interaction.user.id) in self.player_ids:
+            return True
+        await interaction.response.send_message(f"Only a player in this match can {action} the teams.", ephemeral=True)
+        return False
+
     @discord.ui.button(label="Shuffle", style=discord.ButtonStyle.secondary, emoji="🔀")
     async def shuffle(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if str(interaction.user.id) not in self.player_ids:
-            await interaction.response.send_message(
-                "Only a player in this match can shuffle the teams.", ephemeral=True
-            )
+        if not await self._players_only(interaction, "shuffle"):
             return
         self.index = (self.index + 1) % len(self.options)
         await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    @discord.ui.button(label="Re-balance", style=discord.ButtonStyle.primary, emoji="🔄")
+    async def rebalance(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._players_only(interaction, "re-balance"):
+            return
+        # Repost at the bottom of the channel rather than editing in place:
+        # by now the old message has scrolled away under the games that were
+        # just played. post_match deletes this one, so only one stands.
+        await interaction.response.defer()
+        await self.cog.post_match(interaction.channel, self.users)
 
 
 class Matchmaking(commands.Cog):
@@ -109,6 +140,11 @@ class Matchmaking(commands.Cog):
         self.ratings: RatingCache = client.rating_cache
         self.queue: dict[str, discord.abc.User] = {}
         self.queue_message: discord.Message | None = None  # the live queue embed
+        # The last roster to get teams, so !teams and Re-balance can re-split
+        # it without anyone re-queuing. Users, not QueuedPlayers: ratings are
+        # looked up fresh each time so re-teaming picks up recent games.
+        self.last_roster: list[discord.abc.User] = []
+        self.match_message: discord.Message | None = None  # the live proposal
 
     async def cog_load(self):
         # Register the persistent view so Join/Leave buttons on queue messages
@@ -232,31 +268,68 @@ class Matchmaking(commands.Cog):
 
     # -- commands & interactions -----------------------------------------
 
-    @commands.hybrid_command(help="open the matchmaking queue and ping the community")
+    @commands.hybrid_command(help="open the matchmaking queue")
     @commands.cooldown(1, 30, commands.BucketType.channel)
     async def queue(self, ctx):
         # Only one live queue message at a time: re-running !queue moves it to
-        # the bottom of the chat rather than opening a duplicate, and only a
-        # fresh (empty) queue pings the community.
-        content = None
-        if not self.queue and CONFIG.queue_ping_role_id is not None:
-            content = f"<@&{CONFIG.queue_ping_role_id}> a monobattle queue is forming — click **Join** to get in!"
+        # the bottom of the chat rather than opening a duplicate. No role ping
+        # — re-opening the queue mid-session is routine (re-teaming, a late
+        # swap), and pinging the whole role each time is noise. Whoever wants
+        # the community called in can @ the role themselves.
         self.queue_message = await ctx.send(
-            content=content,
             embed=self._status_embed(),
             view=QueueView(self),
-            allowed_mentions=discord.AllowedMentions(roles=True),
         )
         await self._clear_old_queue_message(keep=self.queue_message)
 
-    @commands.hybrid_command(aliases=["remove"], help="remove a player from the queue (e.g. a no-show)")
-    @commands.cooldown(1, 3, commands.BucketType.user)
+    @commands.hybrid_command(aliases=["remove"], help="remove a player from the queue, e.g. a no-show (mods)")
+    @is_bot_admin()
     async def bump(self, ctx, member: discord.Member):
+        # Admin-gated: players drop themselves with Leave, so this exists only
+        # to clear someone else out, which shouldn't be open to everyone.
         if self.queue.pop(str(member.id), None) is None:
             await ctx.send(f"{member.display_name} isn't in the queue.")
             return
         await self._refresh_message()
         await ctx.send(f"Removed **{member.display_name}** from the queue.")
+
+    @commands.hybrid_command(help="re-post the last match with freshly balanced teams (optionally naming a new roster)")
+    @commands.cooldown(1, 10, commands.BucketType.channel)
+    async def teams(self, ctx, members: commands.Greedy[discord.Member] = None):
+        """Re-split a roster without going back through the queue. With no
+        arguments it re-teams whoever was in the last match, which is the
+        common case after a few games; name members to swap someone in or out."""
+        roster = list(dict.fromkeys(members or self.last_roster))
+        if not roster:
+            await ctx.send("No recent match to re-team — run `!queue` to start one.")
+            return
+        if len(roster) < 2 or len(roster) % 2 != 0:
+            await ctx.send(f"Need an even number of players, got {len(roster)}.")
+            return
+        await self.post_match(ctx.channel, roster)
+
+    @commands.hybrid_command(help="put a player into the queue (mods)")
+    @is_bot_admin()
+    async def add(self, ctx, member: discord.Member):
+        uid = str(member.id)
+        # Same link requirement as the Join button: an unlinked player would
+        # queue on the new-player default and quietly skew the balance, so say
+        # so rather than adding them.
+        if not self.store.sc2_names_for(uid):
+            await ctx.send(
+                f"**{member.display_name}** hasn't linked an SC2 name yet — "
+                "they need to run `!link <their SC2 name>` before they can queue."
+            )
+            return
+        if uid in self.queue:
+            await ctx.send(f"**{member.display_name}** is already in the queue.")
+            return
+        self.queue[uid] = member
+        roster = self._take_queue() if len(self.queue) >= QUEUE_TARGET else None
+        await self._refresh_message()
+        await ctx.send(f"Added **{member.display_name}** to the queue.")
+        if roster:
+            await self.post_match(ctx.channel, roster, announce=True)
 
     @commands.hybrid_command(help="clear the matchmaking queue (mods)")
     @is_bot_admin()
@@ -278,10 +351,11 @@ class Matchmaking(commands.Cog):
             await interaction.response.send_message("You're already in the queue.", ephemeral=True)
             return
         self.queue[uid] = interaction.user
-        if len(self.queue) >= QUEUE_TARGET:
-            await self._form_match(interaction)
-        else:
-            await interaction.response.edit_message(embed=self._status_embed(), view=QueueView(self))
+        roster = self._take_queue() if len(self.queue) >= QUEUE_TARGET else None
+        # Reset the queue message either way, then announce any formed match.
+        await interaction.response.edit_message(embed=self._status_embed(), view=QueueView(self))
+        if roster:
+            await self.post_match(interaction.channel, roster, announce=True)
 
     async def handle_leave(self, interaction: discord.Interaction):
         await self._adopt_message(interaction)
@@ -291,20 +365,55 @@ class Matchmaking(commands.Cog):
             return
         await interaction.response.edit_message(embed=self._status_embed(), view=QueueView(self))
 
-    async def _form_match(self, interaction: discord.Interaction):
-        players = self._players()[:QUEUE_TARGET]
-        options = ranked_matches(players, limit=SHUFFLE_OPTIONS)
+    def _take_queue(self) -> list[discord.abc.User]:
+        """Empty the queue and hand back the roster for a match. Callers refresh
+        the queue message themselves — through the interaction for a button
+        join, through _refresh_message for an admin !add."""
+        users = list(self.queue.values())[:QUEUE_TARGET]
         self.queue.clear()
-        # Reset the queue message, then announce the teams and ping everyone in.
-        await interaction.response.edit_message(embed=self._status_embed(), view=QueueView(self))
-        view = ProposedMatchView(options)
-        mentions = " ".join(f"<@{p.discord_id}>" for p in players)
-        await interaction.followup.send(
-            content=f"{mentions} — your match is ready!",
+        return users
+
+    async def post_match(
+        self,
+        channel: discord.abc.Messageable,
+        users: list[discord.abc.User],
+        announce: bool = False,
+    ):
+        """Balance `users` from their current ratings and post the proposal at
+        the bottom of the channel, superseding any previous one.
+
+        The ratings are read here rather than passed in, so every route into
+        this (queue filling, Re-balance, !teams) reflects games played since
+        the last split. `announce` mentions the players — on for a freshly
+        formed match, off for a re-team, where everyone is already watching
+        and eight pings per re-roll would be spam."""
+        players = [self._queued_player(u) for u in users]
+        options = ranked_matches(players, limit=SHUFFLE_OPTIONS)
+        self.last_roster = list(users)
+        view = ProposedMatchView(self, list(users), options)
+        content = None
+        if announce:
+            content = " ".join(f"<@{u.id}>" for u in users) + " — your match is ready!"
+        message = await channel.send(
+            content=content,
             embed=view.embed(),
             view=view,
-            allowed_mentions=discord.AllowedMentions(users=True),
+            allowed_mentions=discord.AllowedMentions(users=announce),
         )
+        await self._clear_match_message(keep=message)
+
+    async def _clear_match_message(self, keep: discord.Message | None = None):
+        """Delete the previous proposal so exactly one set of teams is live and
+        players can't act on a superseded split. In-memory only, unlike the
+        queue pointer: a proposal is fleeting and needn't survive a restart."""
+        old = self.match_message
+        self.match_message = keep
+        if old is None or (keep is not None and old.id == keep.id):
+            return
+        try:
+            await old.delete()
+        except discord.HTTPException:
+            pass
 
 
 async def setup(client):

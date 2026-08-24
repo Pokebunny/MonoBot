@@ -229,7 +229,8 @@ def player_profile(
         embed.add_field(name="Record", value=_record_value(current), inline=True)
     career = _record_value(rating)
     if mvp_count:
-        career += f" · ⭐ {mvp_count} MVP{'s' if mvp_count != 1 else ''}"
+        share = f" ({100 * mvp_count / rating.games:.0f}%)" if rating.games else ""
+        career += f" · ⭐ {mvp_count} MVP{'s' if mvp_count != 1 else ''}{share}"
     embed.add_field(name="Career", value=f"**{rating.display_rating}** · {career}", inline=True)
     if award_counts:
         parts = [f"{spec.emoji} {spec.title} ×{award_counts[spec.key]}" for spec in SPECS if award_counts.get(spec.key)]
@@ -248,7 +249,7 @@ def player_profile(
     others = [a for a in aliases if a.lower() != shown.lower()]
     if others:
         embed.add_field(name="Plays as", value=", ".join(others[:12]), inline=False)
-    embed.set_footer(text=f"{_rating_footer(current)} · decided games only")
+    embed.set_footer(text=_rating_footer(current))
     return embed
 
 
@@ -443,7 +444,6 @@ def h2h_summary(
         )
     if lines:
         embed.add_field(name="Recent meetings", value="\n".join(reversed(lines)), inline=False)
-    embed.set_footer(text="decided games only")
     return embed
 
 
@@ -489,6 +489,6 @@ def unit_stats(records: dict[str, list[int]], min_games: int = 10) -> discord.Em
         lines.append(f"{pick:<14} {wins:>4} {losses:>4}  {100 * wins / (wins + losses):>4.1f}%")
     embed = discord.Embed(title="Unit Win Rates", color=ACCENT)
     embed.description = "```\n" + "\n".join(lines) + "\n```"
-    suffix = f" · min {min_games} games per unit" if min_games > 1 else ""
-    embed.set_footer(text=f"decided matches only{suffix}")
+    if min_games > 1:
+        embed.set_footer(text=f"min {min_games} games per unit")
     return embed

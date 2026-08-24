@@ -494,7 +494,14 @@ def mvp_rates(
     same way: the linked member's Discord name, falling back to the SC2 name.
 
     One player in eight is the MVP, so the footer states that 12.5% is average
-    — a bare percentage gives no sense of what's good."""
+    — a bare percentage gives no sense of what's good.
+
+    The footer also names the window as career/all-seasons. The ladder defaults
+    to the OPEN season, so without saying so these two boards show the same
+    person with wildly different game counts (21 this season vs 478 career) and
+    read as contradicting each other. MVP rate stays career on purpose — it is
+    a slow stat, and a fresh season holds far too few games for it to mean
+    anything — so the fix is to label the window, not to match the ladder."""
     display_names = display_names or {}
     pages = page_count(rows)
     page = max(0, min(page, pages - 1))
@@ -506,7 +513,9 @@ def mvp_rates(
     embed = discord.Embed(title="Career MVP Rate", color=ACCENT)
     embed.description = "\n".join(lines) or "*Nobody has enough games yet.*"
     note = f"min {min_games} games · " if min_games > 1 else ""
-    embed.set_footer(text=f"{note}12.5% is average (one MVP per 8-player game) · Page {page + 1}/{pages}")
+    embed.set_footer(
+        text=f"Career · all seasons · {note}12.5% is average (one MVP per 8-player game) · Page {page + 1}/{pages}"
+    )
     return embed
 
 

@@ -19,27 +19,39 @@ from services.achievements.core import (
 )
 
 SPECS: list[AchievementSpec] = [
-    # Career tier ladders end WELL above the current record holder (2026-07:
-    # 347 games, 216 wins, 41 units won with, 16.4k units built, 184
-    # repicks, 54 teammates): at the most active pace (~175 games/yr) each
+    # Career tier ladders end WELL above the current record holder (2026-08:
+    # 478 games, 281 wins, 110 MVPs, 41 units won with, 16.4k units built,
+    # 184 repicks, 54 teammates): at the most active pace (~370 games and
+    # ~225 wins a year, up sharply from the ~175 games/yr of a year ago) each
     # top rung is a multi-year chase, so there is always something to play
     # for. Epic rungs may be held; Legendary rungs must be years out.
+    #
+    # Rungs step ~2-2.5x and each rarity lands in a holder band measured over
+    # the 132 players in the community DB: Common >=25%, Uncommon 10-25%,
+    # Rare 4-10%, Epic 1-4%, Legendary unheld. Rarity only ever moves UP --
+    # the unlock ledger is append-only and grandfathered, so demoting a held
+    # badge would cheapen something players already show off.
     # -- career: volume ---------------------------------------------------
     _spec("first_game", "Fresh Meat", "🐣", "Common", "Play your first monobattle", _career("games", 1)),
     _spec("settling_in", "Settling In", "🏕️", "Common", "Play 10 games", _career("games", 10)),
-    _spec("regular", "Regular", "🪑", "Common", "Play 25 games", _career("games", 25)),
+    _spec("regular", "Regular", "🪑", "Uncommon", "Play 25 games", _career("games", 25)),
     _spec("veteran", "Veteran", "🎖️", "Rare", "Play 100 games", _career("games", 100)),
     _spec("lifer", "Lifer", "🗿", "Epic", "Play 300 games", _career("games", 300)),
+    _spec("bedrock", "Bedrock", "🪨", "Epic", "Play 500 games", _career("games", 500)),
     _spec("millennium", "Millennium", "♾️", "Legendary", "Play 1,000 games", _career("games", 1000)),
     _spec("first_win", "On the Board", "✅", "Common", "Win your first game", _career("wins", 1)),
     _spec("warming_up", "Warming Up", "💪", "Uncommon", "Win 10 games", _career("wins", 10)),
     _spec("proven", "Proven", "📈", "Uncommon", "Win 25 games", _career("wins", 25)),
+    _spec("seasoned", "Seasoned", "🧭", "Rare", "Win 50 games", _career("wins", 50)),
     _spec("centurion", "Centurion", "🏛️", "Epic", "Win 100 games", _career("wins", 100)),
+    _spec("conqueror", "Conqueror", "⚔️", "Epic", "Win 250 games", _career("wins", 250)),
     _spec("warlord", "Warlord", "👑", "Legendary", "Win 500 games", _career("wins", 500)),
     # -- career: MVP ------------------------------------------------------
     _spec("first_mvp", "Star of the Game", "⭐", "Uncommon", "Earn your first MVP", _career("mvps", 1)),
     _spec("serial_star", "Serial Star", "🌟", "Rare", "Earn 10 MVPs", _career("mvps", 10)),
     _spec("constellation", "Constellation", "💫", "Epic", "Earn 25 MVPs", _career("mvps", 25)),
+    _spec("nebula", "Nebula", "🌌", "Epic", "Earn 50 MVPs", _career("mvps", 50)),
+    _spec("galaxy", "Galaxy", "🌀", "Epic", "Earn 100 MVPs", _career("mvps", 100)),
     _spec("supernova", "Supernova", "🌠", "Legendary", "Earn 250 MVPs", _career("mvps", 250)),
     # -- career: variety --------------------------------------------------
     _spec(

@@ -126,11 +126,13 @@ def parse_failure(file_name: str, error: str) -> discord.Embed:
     return embed
 
 
-LEADERBOARD_PAGE_SIZE = 20
+BOARD_PAGE_SIZE = 20
 
 
-def leaderboard_page_count(ratings: list[PlayerRating]) -> int:
-    return max(1, (len(ratings) + LEADERBOARD_PAGE_SIZE - 1) // LEADERBOARD_PAGE_SIZE)
+def page_count(rows: list) -> int:
+    """Pages a board of this length takes. Every board pages at one size, so
+    ratings and MVP rate line up row-for-row when read side by side."""
+    return max(1, (len(rows) + BOARD_PAGE_SIZE - 1) // BOARD_PAGE_SIZE)
 
 
 def leaderboard(
@@ -147,11 +149,11 @@ def leaderboard(
     names the window these ratings cover, shown so a reset ladder is never
     mistaken for lost history; `final` marks a season that has already ended."""
     display_names = display_names or {}
-    pages = leaderboard_page_count(ratings)
+    pages = page_count(ratings)
     page = max(0, min(page, pages - 1))
-    start = page * LEADERBOARD_PAGE_SIZE
+    start = page * BOARD_PAGE_SIZE
     lines = []
-    for i, r in enumerate(ratings[start : start + LEADERBOARD_PAGE_SIZE], start + 1):
+    for i, r in enumerate(ratings[start : start + BOARD_PAGE_SIZE], start + 1):
         shown = display_names.get(r.handle, r.name)
         lines.append(
             f"`{i:>2}` **{shown}** — **{r.display_rating}** ({r.wins}-{r.losses}, {100 * r.wins / r.games:.0f}%)"
@@ -481,17 +483,30 @@ def proposed_match(match: ProposedMatch, option_index: int = 0, option_count: in
     return embed
 
 
-def mvp_rates(rows: list[tuple[str, int, int]], min_games: int) -> discord.Embed:
-    """`rows` is (name, mvps, games), already filtered and sorted by rate.
+def mvp_rates(
+    rows: list[tuple[str, str, int, int]],
+    page: int = 0,
+    min_games: int = 1,
+    display_names: dict[str, str] | None = None,
+) -> discord.Embed:
+    """`rows` is (handle, sc2_name, mvps, games), sorted by rate. Takes the
+    same display_names mapping as leaderboard() so both boards name people the
+    same way: the linked member's Discord name, falling back to the SC2 name.
 
-    One player in eight is the MVP, so 12.5% is the average — the footer says
-    so, because a bare percentage gives no sense of what's good."""
-    lines = [f"{'#':>2}  {'Player':<16} {'MVP%':>6} {'MVPs':>5} {'Games':>6}"]
-    for i, (name, mvps, games) in enumerate(rows, 1):
-        lines.append(f"{i:>2}. {name[:16]:<16} {100 * mvps / games:>5.1f}% {mvps:>5} {games:>6}")
+    One player in eight is the MVP, so the footer states that 12.5% is average
+    — a bare percentage gives no sense of what's good."""
+    display_names = display_names or {}
+    pages = page_count(rows)
+    page = max(0, min(page, pages - 1))
+    start = page * BOARD_PAGE_SIZE
+    lines = []
+    for i, (handle, name, mvps, games) in enumerate(rows[start : start + BOARD_PAGE_SIZE], start + 1):
+        shown = display_names.get(handle, name)
+        lines.append(f"`{i:>2}` **{shown}** — **{100 * mvps / games:.1f}%** ({mvps} in {games} games)")
     embed = discord.Embed(title="Career MVP Rate", color=ACCENT)
-    embed.description = "```\n" + "\n".join(lines) + "\n```"
-    embed.set_footer(text=f"min {min_games} games · 12.5% is average (one MVP per 8-player game)")
+    embed.description = "\n".join(lines) or "*Nobody has enough games yet.*"
+    note = f"min {min_games} games · " if min_games > 1 else ""
+    embed.set_footer(text=f"{note}12.5% is average (one MVP per 8-player game) · Page {page + 1}/{pages}")
     return embed
 
 

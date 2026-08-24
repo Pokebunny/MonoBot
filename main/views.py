@@ -35,3 +35,56 @@ class ExpiringView(discord.ui.View):
             await self.message.edit(view=self)
         except discord.HTTPException:
             pass  # message deleted, or we lost permission — nothing to grey out
+
+
+class PagedBoardView(ExpiringView):
+    """⏮ ◀ ▶ ⏭ pagination for any board embed.
+
+    `render(page)` returns the embed for that page and closes over the board
+    data, so the ranking is snapshotted at send time and paging stays
+    consistent even if a game is uploaded mid-browse. Any board that can
+    render a page — ratings, MVP rate — pages the same way through this."""
+
+    def __init__(self, render, pages: int):
+        super().__init__()
+        self.render = render
+        self.pages = max(1, pages)
+        self.page = 0
+        self._sync()
+
+    @property
+    def multipage(self) -> bool:
+        return self.pages > 1
+
+    def embed(self) -> discord.Embed:
+        return self.render(self.page)
+
+    def _sync(self):
+        at_start = self.page <= 0
+        at_end = self.page >= self.pages - 1
+        self.first.disabled = self.prev.disabled = at_start
+        self.next.disabled = self.last.disabled = at_end
+
+    async def _show(self, interaction: discord.Interaction):
+        self._sync()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    @discord.ui.button(emoji="⏮", style=discord.ButtonStyle.secondary)
+    async def first(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = 0
+        await self._show(interaction)
+
+    @discord.ui.button(emoji="◀", style=discord.ButtonStyle.secondary)
+    async def prev(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = max(0, self.page - 1)
+        await self._show(interaction)
+
+    @discord.ui.button(emoji="▶", style=discord.ButtonStyle.secondary)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = min(self.pages - 1, self.page + 1)
+        await self._show(interaction)
+
+    @discord.ui.button(emoji="⏭", style=discord.ButtonStyle.secondary)
+    async def last(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = self.pages - 1
+        await self._show(interaction)

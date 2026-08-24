@@ -15,7 +15,7 @@ from services.rating import (
     RatingCache,
 )
 from services.storage import MatchStore
-from views import ExpiringView
+from views import ExpiringView, PagedBoardView
 
 logger = logging.getLogger(__name__)
 
@@ -27,71 +27,6 @@ DEFAULT_MIN_GAMES = MIN_RANKED_GAMES
 # games and two MVPs sits at 33% on nothing but variance, so a low floor makes
 # the board a list of small samples. !mvprate <n> overrides it.
 MVP_RATE_MIN_GAMES = 50
-MVP_RATE_LIMIT = 15  # keeps the embed inside Discord's 4096-char description
-
-
-class LeaderboardView(ExpiringView):
-    """◀ ▶ pagination for the leaderboard. Snapshots the ranking so paging
-    stays consistent even if a game is uploaded mid-browse."""
-
-    def __init__(
-        self,
-        board,
-        min_games: int,
-        display_names: dict[str, str] | None = None,
-        hidden: int = 0,
-        season: str | None = None,
-        final: bool = False,
-    ):
-        super().__init__()
-        self.board = board
-        self.season = season
-        self.final = final
-        self.min_games = min_games
-        self.display_names = display_names
-        self.hidden = hidden
-        self.page = 0
-        self.pages = match_embeds.leaderboard_page_count(board)
-        self._sync()
-
-    @property
-    def multipage(self) -> bool:
-        return self.pages > 1
-
-    def _sync(self):
-        at_start = self.page <= 0
-        at_end = self.page >= self.pages - 1
-        self.first.disabled = self.prev.disabled = at_start
-        self.next.disabled = self.last.disabled = at_end
-
-    async def _show(self, interaction: discord.Interaction):
-        self._sync()
-        await interaction.response.edit_message(
-            embed=match_embeds.leaderboard(
-                self.board, self.page, self.min_games, self.display_names, self.hidden, self.season, self.final
-            ),
-            view=self,
-        )
-
-    @discord.ui.button(emoji="⏮", style=discord.ButtonStyle.secondary)
-    async def first(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.page = 0
-        await self._show(interaction)
-
-    @discord.ui.button(emoji="◀", style=discord.ButtonStyle.secondary)
-    async def prev(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.page = max(0, self.page - 1)
-        await self._show(interaction)
-
-    @discord.ui.button(emoji="▶", style=discord.ButtonStyle.secondary)
-    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.page = min(self.pages - 1, self.page + 1)
-        await self._show(interaction)
-
-    @discord.ui.button(emoji="⏭", style=discord.ButtonStyle.secondary)
-    async def last(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.page = self.pages - 1
-        await self._show(interaction)
 
 
 class CatalogView(ExpiringView):
@@ -270,12 +205,11 @@ class Leaderboard(commands.Cog):
         # Only ever one season on the board — name it so an empty or shuffled
         # ladder right after a reset reads as intentional, not as data loss.
         final = season is not None and season.ended_at is not None
-        view = LeaderboardView(board, min_games, names, hidden, label, final)
-        message = await ctx.send(
-            embed=match_embeds.leaderboard(board, 0, min_games, names, hidden, label, final),
-            view=view if view.multipage else None,
+        view = PagedBoardView(
+            lambda page: match_embeds.leaderboard(board, page, min_games, names, hidden, label, final),
+            match_embeds.page_count(board),
         )
-        view.message = message
+        await self._send_board(ctx, view)
 
     @staticmethod
     def _parse_board_query(query: str) -> tuple[int, str]:
@@ -514,14 +448,25 @@ class Leaderboard(commands.Cog):
     async def mvprate(self, ctx, min_games: int = MVP_RATE_MIN_GAMES):
         # Career, not seasonal: MVP rate is a slow stat and a season's worth of
         # games is far too few for it to mean anything.
+        min_games = max(1, min_games)
         book = self._career_book()
         counts = self.store.mvp_counts(MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS, self.store.merge_map())
-        rows = [(r.name, counts.get(r.handle, 0), r.games) for r in book.leaderboard(min_games=max(1, min_games))]
+        rows = [(r.handle, r.name, counts.get(r.handle, 0), r.games) for r in book.leaderboard(min_games=min_games)]
         if not rows:
             await ctx.send(f"Nobody has {min_games} games yet.")
             return
-        rows.sort(key=lambda row: row[1] / row[2], reverse=True)
-        await ctx.send(embed=match_embeds.mvp_rates(rows[:MVP_RATE_LIMIT], max(1, min_games)))
+        rows.sort(key=lambda row: row[2] / row[3], reverse=True)
+        # Same resolution as the rating board: the linked member's Discord name.
+        names = {handle: self._shown_name(ctx, handle, name) for handle, name, _mvps, _games in rows}
+        view = PagedBoardView(
+            lambda page: match_embeds.mvp_rates(rows, page, min_games, names),
+            match_embeds.page_count(rows),
+        )
+        await self._send_board(ctx, view)
+
+    async def _send_board(self, ctx, view: PagedBoardView):
+        """Post a paged board, hiding the arrows when there's only one page."""
+        view.message = await ctx.send(embed=view.embed(), view=view if view.multipage else None)
 
     @commands.hybrid_command(help="show win rates by unit pick")
     @commands.cooldown(1, 5, commands.BucketType.channel)

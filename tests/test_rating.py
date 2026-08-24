@@ -2,7 +2,7 @@ import datetime
 
 from models.rating import PlayerRating
 from models.replay import MatchPlayer, MonobattleMatch
-from services.match_embeds import leaderboard_page_count
+from services.match_embeds import page_count
 from services.rating import RatingBook, match_rating_deltas
 
 
@@ -142,10 +142,10 @@ def test_match_rating_deltas_computed_at_chronological_position():
 
 
 def test_leaderboard_page_count():
-    assert leaderboard_page_count([]) == 1
-    assert leaderboard_page_count(list(range(20))) == 1
-    assert leaderboard_page_count(list(range(21))) == 2
-    assert leaderboard_page_count(list(range(45))) == 3
+    assert page_count([]) == 1
+    assert page_count(list(range(20))) == 1
+    assert page_count(list(range(21))) == 2
+    assert page_count(list(range(45))) == 3
 
 
 def test_rating_cache_follows_the_open_season(tmp_path):

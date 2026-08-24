@@ -959,6 +959,25 @@ class MatchStore:
                 count += 1
         return count
 
+    def mvp_counts(
+        self, confidence_gate: float, min_duration: int, merge_map: dict[str, str] | None = None
+    ) -> dict[str, int]:
+        """MVPs per player over decided games, keyed by canonical handle so a
+        merged account group tallies as one person. Unlike unit_records this
+        can't be a GROUP BY: the MVP is whoever destroyed the most value, which
+        MonobattleMatch.mvp() decides in Python."""
+        merge = merge_map or {}
+        counts: dict[str, int] = {}
+        for _match_id, match in self.all_matches():
+            if match.winner_confidence < confidence_gate or match.duration_seconds < min_duration:
+                continue
+            mvp = match.mvp()
+            if mvp is None:  # no kill stats (a handful of pre-archive parses)
+                continue
+            handle = merge.get(mvp.toon_handle, mvp.toon_handle)
+            counts[handle] = counts.get(handle, 0) + 1
+        return counts
+
     def award_counts(self, handles: list[str], confidence_gate: float, min_duration: int) -> dict[str, int]:
         """Career tally of stat awards (award key -> times won) for a merged
         account group, over rating-eligible games."""

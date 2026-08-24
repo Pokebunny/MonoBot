@@ -23,6 +23,12 @@ logger = logging.getLogger(__name__)
 # accounts now that the ladder is in real use. !leaderboard 1 shows everyone.
 DEFAULT_MIN_GAMES = MIN_RANKED_GAMES
 
+# MVP rate needs a much higher floor than the rating board. A player with six
+# games and two MVPs sits at 33% on nothing but variance, so a low floor makes
+# the board a list of small samples. !mvprate <n> overrides it.
+MVP_RATE_MIN_GAMES = 50
+MVP_RATE_LIMIT = 15  # keeps the embed inside Discord's 4096-char description
+
 
 class LeaderboardView(ExpiringView):
     """◀ ▶ pagination for the leaderboard. Snapshots the ranking so paging
@@ -502,6 +508,20 @@ class Leaderboard(commands.Cog):
         if opposed:
             match_id, match = opposed[-1]  # their most recent meeting, in full
             await ctx.send(embed=match_embeds.match_summary(match, match_id))
+
+    @commands.hybrid_command(aliases=["mvps"], help="rank players by how often they're the MVP")
+    @commands.cooldown(1, 5, commands.BucketType.channel)
+    async def mvprate(self, ctx, min_games: int = MVP_RATE_MIN_GAMES):
+        # Career, not seasonal: MVP rate is a slow stat and a season's worth of
+        # games is far too few for it to mean anything.
+        book = self._career_book()
+        counts = self.store.mvp_counts(MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS, self.store.merge_map())
+        rows = [(r.name, counts.get(r.handle, 0), r.games) for r in book.leaderboard(min_games=max(1, min_games))]
+        if not rows:
+            await ctx.send(f"Nobody has {min_games} games yet.")
+            return
+        rows.sort(key=lambda row: row[1] / row[2], reverse=True)
+        await ctx.send(embed=match_embeds.mvp_rates(rows[:MVP_RATE_LIMIT], max(1, min_games)))
 
     @commands.hybrid_command(help="show win rates by unit pick")
     @commands.cooldown(1, 5, commands.BucketType.channel)

@@ -481,6 +481,20 @@ def proposed_match(match: ProposedMatch, option_index: int = 0, option_count: in
     return embed
 
 
+def mvp_rates(rows: list[tuple[str, int, int]], min_games: int) -> discord.Embed:
+    """`rows` is (name, mvps, games), already filtered and sorted by rate.
+
+    One player in eight is the MVP, so 12.5% is the average — the footer says
+    so, because a bare percentage gives no sense of what's good."""
+    lines = [f"{'#':>2}  {'Player':<16} {'MVP%':>6} {'MVPs':>5} {'Games':>6}"]
+    for i, (name, mvps, games) in enumerate(rows, 1):
+        lines.append(f"{i:>2}. {name[:16]:<16} {100 * mvps / games:>5.1f}% {mvps:>5} {games:>6}")
+    embed = discord.Embed(title="Career MVP Rate", color=ACCENT)
+    embed.description = "```\n" + "\n".join(lines) + "\n```"
+    embed.set_footer(text=f"min {min_games} games · 12.5% is average (one MVP per 8-player game)")
+    return embed
+
+
 def unit_stats(records: dict[str, list[int]], min_games: int = 10) -> discord.Embed:
     rows = [(pick, wins, losses) for pick, (wins, losses) in records.items() if wins + losses >= min_games]
     rows.sort(key=lambda r: r[1] / (r[1] + r[2]), reverse=True)

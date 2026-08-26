@@ -5,7 +5,7 @@ import logging
 import discord
 from checks import is_bot_admin
 from discord.ext import commands
-from services import achievements, match_embeds
+from services import achievements, map_versions, match_embeds
 from services.achievements import AchievementCache
 from services.rating import (
     MIN_DURATION_SECONDS,
@@ -85,15 +85,16 @@ class MatchBrowserView(ExpiringView):
     """⏮ ◀ ▶ ⏭ browsing over a snapshot of match history (oldest→newest);
     opens on the newest game, ◀ steps back in time."""
 
-    def __init__(self, matches):
+    def __init__(self, matches, map_names: dict[str, str] | None = None):
         super().__init__()
         self.matches = matches
+        self.map_names = map_names or {}
         self.index = len(matches) - 1
         self._sync()
 
     def embed(self) -> discord.Embed:
         match_id, match = self.matches[self.index]
-        embed = match_embeds.match_summary(match, match_id)
+        embed = match_embeds.match_summary(match, match_id, map_label=map_versions.label(match, self.map_names))
         embed.set_footer(text=f"Match #{match_id} · {self.index + 1}/{len(self.matches)}")
         return embed
 
@@ -405,7 +406,7 @@ class Leaderboard(commands.Cog):
         if not matches:
             await ctx.send("No matches stored yet.")
             return
-        view = MatchBrowserView(matches)
+        view = MatchBrowserView(matches, self.store.map_version_names())
         if len(matches) == 1:
             await ctx.send(embed=view.embed())
             return
@@ -441,7 +442,8 @@ class Leaderboard(commands.Cog):
         await ctx.send(embed=match_embeds.h2h_summary(name1, name2, vs, together, opposed, group1, group2))
         if opposed:
             match_id, match = opposed[-1]  # their most recent meeting, in full
-            await ctx.send(embed=match_embeds.match_summary(match, match_id))
+            label = map_versions.label(match, self.store.map_version_names())
+            await ctx.send(embed=match_embeds.match_summary(match, match_id, map_label=label))
 
     @commands.hybrid_command(aliases=["mvps"], help="rank players by how often they're the MVP")
     @commands.cooldown(1, 5, commands.BucketType.channel)

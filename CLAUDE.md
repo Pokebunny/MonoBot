@@ -29,6 +29,16 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   moving the window, deleting nothing — past boards stay reconstructible.
   Only ratings are season-scoped; match history, profile stats and the
   achievement ledger are career-wide.
+- The **map** every game shows is not `matches.map_name`: every monobattle is
+  played on one arcade map whose name never changes. The rotation happens when
+  its author republishes it with new terrain, changing `matches.map_hash`, and
+  the terrain's real name exists only inside the published map file. It is
+  fetched once per hash from Blizzard's depot and cached in `map_versions`
+  (`services/map_versions.py`); unresolved versions fall back to the arcade
+  name. `scripts/backfill_map_hashes.py` fills hashes in for older games.
+  Per-map stats group on the map's **name** (`map_versions.group_by_map`),
+  never its hash — the same terrain is republished under new hashes — and
+  leave out games whose map isn't known.
 - `scripts/` (repo root) — one-shot utilities, e.g. `backfill_archive.py` to
   seed the database from a folder of replays (idempotent, dedupes by hash).
 

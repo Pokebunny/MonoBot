@@ -22,7 +22,7 @@ import statistics
 from collections import Counter, defaultdict
 
 import sc2reader
-from models.replay import UNIT_RACE, MatchPlayer, MonobattleMatch
+from models.replay import UNIT_RACE, MapVersion, MatchPlayer, MonobattleMatch
 
 logger = logging.getLogger(__name__)
 
@@ -571,6 +571,7 @@ def parse_replay(path: str) -> MonobattleMatch:
     return MonobattleMatch(
         file_name=os.path.basename(path),
         map_name=replay.map_name,
+        map_hash=replay.map_hash,
         played_at=replay.start_time,
         duration_seconds=replay.game_length.seconds,
         game_type=replay.real_type,
@@ -583,3 +584,69 @@ def parse_replay(path: str) -> MonobattleMatch:
         comeback_deficit=comeback_deficit,
         lead_changes=lead_changes,
     )
+
+
+# -- map versions ---------------------------------------------------------
+#
+# The arcade map carries the terrain's real name only as prose in its
+# published header, in two places the author keeps in sync (the loading-screen
+# tip and the long description), both shaped like
+#     Current Map: The Ashen Cradle <c val="80FFFF">(Created by KillerSmile)</c>
+# Formatting varies by version ("(made by me)", no author at all), so parse
+# leniently and treat an unrecognized header as simply unknown.
+_CURRENT_MAP_RE = re.compile(rb"Current Map:\s*([^\x00\x15\r\n]{1,200})")
+_TAG_RE = re.compile(r"<[^>]*>")
+_AUTHOR_RE = re.compile(r"^(?P<name>.+?)\s*\(\s*(?:created |made )?by\s+(?P<author>[^)]+)\)\s*$", re.IGNORECASE)
+
+# Published maps live in a per-region depot. Matches store only the hash, so
+# try the regions the community actually plays on, cheapest first.
+_DEPOT_REGIONS = ("us", "eu", "kr")
+_DEPOT_URL = "https://{region}-s2-depot.classic.blizzard.com/{map_hash}.s2ma"
+
+
+def _parse_current_map(header: bytes) -> tuple[str, str | None] | None:
+    """Terrain name (and author, when credited) from a published map's
+    DocumentHeader. Prefers a match that credits an author — both copies of
+    the line name the same map, but only one usually names its maker."""
+    best: tuple[str, str | None] | None = None
+    for raw in _CURRENT_MAP_RE.findall(header):
+        # Cut at the first line-break tag: the description continues into
+        # unrelated prose ("<n/><n/>Join us on discord: ...").
+        text = _TAG_RE.sub("", raw.decode("utf8", "replace").split("<n/>")[0]).strip()
+        if not text:
+            continue
+        author = None
+        credited = _AUTHOR_RE.match(text)
+        if credited:
+            text, author = credited.group("name").strip(), credited.group("author").strip()
+        if not text:
+            continue
+        if best is None or (best[1] is None and author is not None):
+            best = (text, author)
+    return best
+
+
+def fetch_map_version(map_hash: str) -> MapVersion | None:
+    """Download the published map behind a replay's map_hash and read the
+    terrain's name out of it. Network call — cache the result by hash (see
+    MatchStore.record_map_version) rather than calling it per match. None
+    when the map can't be fetched or names no terrain."""
+    for region in _DEPOT_REGIONS:
+        url = _DEPOT_URL.format(region=region, map_hash=map_hash)
+        try:
+            archive = sc2reader.load_map(url).archive
+        except Exception:
+            logger.debug("No map %s in the %s depot", map_hash[:12], region, exc_info=True)
+            continue
+        try:
+            found = _parse_current_map(archive.read_file(b"DocumentHeader"))
+        except Exception:
+            logger.warning("Could not read the header of map %s", map_hash[:12], exc_info=True)
+            return None
+        if found is None:
+            logger.info("Map %s names no current map in its header", map_hash[:12])
+            return None
+        name, author = found
+        return MapVersion(map_hash=map_hash, name=name, author=author)
+    logger.info("Map %s not found in any depot", map_hash[:12])
+    return None

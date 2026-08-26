@@ -58,7 +58,11 @@ def match_summary(
     match: MonobattleMatch,
     match_id: int | None = None,
     rating_deltas: dict[str, tuple[int, int]] | None = None,
+    map_label: str | None = None,
 ) -> discord.Embed:
+    """map_label is the terrain the game was actually played on (see
+    services.map_versions); without it the title falls back to the arcade
+    map's name, which is the same for every monobattle."""
     if match.winning_team is not None and match.winner_confidence >= 1.0:
         color = ACCENT
     elif match.winning_team is not None:
@@ -66,7 +70,7 @@ def match_summary(
     else:
         color = ERROR
 
-    embed = discord.Embed(title=match.map_name, color=color)
+    embed = discord.Embed(title=map_label or match.map_name, color=color)
     embed.description = (
         f"{match.game_type} · {_PICK_MODE_LABELS.get(match.pick_mode, match.pick_mode)}"
         f" · {_duration(match.duration_seconds)}"

@@ -247,6 +247,13 @@ class Replays(commands.Cog):
                 else:
                     result = self.store.ingest(match, file_hash, uploaded_by=str(message.author.id))
                     stats[result.status] += 1
+        # Re-parsing recorded a map version for every game scanned, most of
+        # them for the first time (games stored before versions existed have
+        # no hash). Resolve them here in one pass — otherwise nothing names
+        # them until the next fresh upload happens to trigger it.
+        identified = await asyncio.to_thread(map_versions.resolve_pending, self.store)
+        if identified:
+            stats["maps identified"] = len(identified)
         granted = achievements.sweep_grants(self.store, self.achievements)
         if granted:
             stats["achievements granted quietly"] = granted

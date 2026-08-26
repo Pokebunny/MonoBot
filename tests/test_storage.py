@@ -298,6 +298,7 @@ class TestMigrations:
 
         s = MatchStore(path)
         assert s.handles_for("42") == ["h-A0"]  # links survived
+        assert s.get_match(1).map_hash == ""  # added by a later migration, unknown for old rows
         assert s.match_count() == 1
         stored_key = s._conn.execute("SELECT content_key FROM matches WHERE id = 1").fetchone()[0]
         assert stored_key == content_key(_match(roster=["A0"]))

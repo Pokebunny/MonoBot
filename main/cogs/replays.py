@@ -11,7 +11,7 @@ import discord
 from checks import is_bot_admin
 from discord.ext import commands
 from resources.config import CONFIG
-from services import achievements, match_embeds, replay_parser, storage
+from services import achievements, map_versions, match_embeds, replay_parser, storage
 from services.achievements import AchievementCache
 from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, match_rating_deltas
 from services.storage import MatchStore
@@ -63,7 +63,9 @@ class ConfirmWinnerView(ExpiringView):
             return
         self.store.confirm_winner(self.match_id, team)
         match = self.store.get_match(self.match_id)
-        embed = match_embeds.match_summary(match, self.match_id)
+        embed = match_embeds.match_summary(
+            match, self.match_id, map_label=map_versions.label(match, self.store.map_version_names())
+        )
         embed.set_footer(text=f"Match #{self.match_id} · confirmed by {interaction.user.display_name}")
         for child in self.children:
             child.disabled = True
@@ -168,7 +170,15 @@ class Replays(commands.Cog):
         season = self.store.season_containing(match.played_at.isoformat())
         history = self.store.season_matches(season) if season else self.store.all_matches()
         deltas = match_rating_deltas(history, result.match_id, self.store.merge_map())
-        embed = match_embeds.match_summary(match, result.match_id, rating_deltas=deltas)
+        # A new rotation shows up as a map version nobody has looked up yet;
+        # fetching it is one network call per version, not per upload.
+        await asyncio.to_thread(map_versions.resolve_pending, self.store)
+        embed = match_embeds.match_summary(
+            match,
+            result.match_id,
+            rating_deltas=deltas,
+            map_label=map_versions.label(match, self.store.map_version_names()),
+        )
         if result.status == "updated":
             embed.set_footer(text=f"Match #{result.match_id} · refined from a more complete recording")
         needs_confirmation = match.duration_seconds >= MIN_DURATION_SECONDS and (
@@ -251,9 +261,11 @@ class Replays(commands.Cog):
             await ctx.send("No matches waiting on confirmation.")
             return
         # Re-post the most recent few with confirm buttons.
+        names = self.store.map_version_names()
         for match_id, match in pending[-3:]:
             view = ConfirmWinnerView(self.store, match_id, self.achievements)
-            view.message = await ctx.send(embed=match_embeds.match_summary(match, match_id), view=view)
+            embed = match_embeds.match_summary(match, match_id, map_label=map_versions.label(match, names))
+            view.message = await ctx.send(embed=embed, view=view)
         if len(pending) > 3:
             await ctx.send(f"...and {len(pending) - 3} more. Confirm these and run !pending again.")
 

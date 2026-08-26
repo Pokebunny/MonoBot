@@ -89,9 +89,23 @@ class MatchPlayer(BaseModel):
     unit_counts: dict[str, int]  # normalized army-unit production counts
 
 
+class MapVersion(BaseModel):
+    """The terrain behind one published version of the arcade map. Every
+    monobattle is played on the same arcade map ("Monobattle LotV - Map
+    Rotation"), so map_name never varies; the rotation happens when the
+    author republishes with new terrain, which changes the map's hash. The
+    terrain's real name is only in the published map file — see
+    services.replay_parser.fetch_map_version."""
+
+    map_hash: str
+    name: str  # e.g. "The Ashen Cradle"
+    author: str | None = None  # terrain's credited author, when given
+
+
 class MonobattleMatch(BaseModel):
     file_name: str
-    map_name: str
+    map_name: str  # the arcade map's own name, identical for every game
+    map_hash: str = ""  # published-version hash; resolves to the real terrain
     played_at: datetime.datetime  # UTC
     duration_seconds: int
     game_type: str  # e.g. "4v4", from real_type

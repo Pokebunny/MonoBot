@@ -23,7 +23,7 @@ import os
 import sqlite3
 from typing import NamedTuple
 
-from models.replay import MatchPlayer, MonobattleMatch
+from models.replay import MapVersion, MatchPlayer, MonobattleMatch
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS matches (
     content_key TEXT NOT NULL UNIQUE,
     file_name TEXT NOT NULL,
     map_name TEXT NOT NULL,
+    map_hash TEXT NOT NULL DEFAULT '',
     played_at TEXT NOT NULL,
     duration_seconds INTEGER NOT NULL,
     game_type TEXT NOT NULL,
@@ -174,6 +175,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_seasons_open
 -- Season 1 opens at the dawn of time so all pre-seasons history belongs to it.
 INSERT OR IGNORE INTO seasons (id, name, started_at) VALUES (1, 'Season 1', '0001-01-01T00:00:00');
 
+-- The terrain behind each published version of the arcade map. Every game is
+-- played on the same arcade map, so matches.map_name is always "Monobattle
+-- LotV - Map Rotation"; the rotation happens when the author republishes with
+-- new terrain, changing matches.map_hash. The terrain's real name lives only
+-- in the published map file, so it is fetched once per hash over the network
+-- and cached here (name NULL = fetched, but the header named no map — a
+-- negative cache, so a mute version isn't re-fetched forever).
+CREATE TABLE IF NOT EXISTS map_versions (
+    map_hash TEXT PRIMARY KEY,
+    name TEXT,
+    author TEXT,
+    checked_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Deployment facts that are data, not code. achievement_epoch is stamped the
 -- first time this DB is opened by achievement-aware code: moment achievements
 -- only count games played after it, so each deployment gets its own launch
@@ -196,10 +211,10 @@ def content_key(match: MonobattleMatch) -> str:
     players' recordings of the same game differ in bytes and length (they may
     leave at different times) but share the start time and full roster.
     Minute precision absorbs sub-second clock differences between clients."""
-    return _content_key_raw(match.played_at, [p.name for p in match.players])
+    return content_key_for(match.played_at, [p.name for p in match.players])
 
 
-def _content_key_raw(played_at: datetime.datetime, names: list[str]) -> str:
+def content_key_for(played_at: datetime.datetime, names: list[str]) -> str:
     minute = played_at.replace(second=0, microsecond=0)
     return hashlib.sha256(f"{minute.isoformat()}|{'|'.join(sorted(names))}".encode()).hexdigest()
 
@@ -212,7 +227,7 @@ def _migration_1_content_key(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE matches ADD COLUMN content_key TEXT")
         for row in conn.execute("SELECT id, played_at FROM matches").fetchall():
             names = [r["name"] for r in conn.execute("SELECT name FROM match_players WHERE match_id = ?", (row["id"],))]
-            key = _content_key_raw(datetime.datetime.fromisoformat(row["played_at"]), names)
+            key = content_key_for(datetime.datetime.fromisoformat(row["played_at"]), names)
             conn.execute("UPDATE matches SET content_key = ? WHERE id = ?", (key, row["id"]))
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_matches_content_key ON matches(content_key)")
 
@@ -316,6 +331,24 @@ def _migration_10_seasons(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT OR IGNORE INTO seasons (id, name, started_at) VALUES (1, 'Season 1', '0001-01-01T00:00:00')")
 
 
+def _migration_11_map_versions(conn: sqlite3.Connection) -> None:
+    """Record which published version of the arcade map each game was played
+    on, and cache the terrain name behind each version. Existing rows keep an
+    empty hash (they were parsed before it was read) until
+    scripts/backfill_map_hashes.py fills them in from the replay archive."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(matches)")}
+    if "map_hash" not in cols:
+        conn.execute("ALTER TABLE matches ADD COLUMN map_hash TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS map_versions (
+               map_hash TEXT PRIMARY KEY,
+               name TEXT,
+               author TEXT,
+               checked_at TEXT NOT NULL DEFAULT (datetime('now'))
+           )"""
+    )
+
+
 _MIGRATIONS = {
     1: _migration_1_content_key,
     2: _migration_2_replay_channels,
@@ -327,6 +360,7 @@ _MIGRATIONS = {
     8: _migration_8_achievements,
     9: _migration_9_lost_all_bases,
     10: _migration_10_seasons,
+    11: _migration_11_map_versions,
 }
 
 
@@ -394,10 +428,10 @@ class MatchStore:
         try:
             cur = self._conn.execute(
                 """INSERT INTO matches
-                   (file_hash, content_key, file_name, map_name, played_at, duration_seconds,
+                   (file_hash, content_key, file_name, map_name, map_hash, played_at, duration_seconds,
                     game_type, pick_mode, pick_phase_seconds, winning_team,
                     winner_confidence, winner_method, comeback_deficit, lead_changes, uploaded_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (file_hash, key, *self._match_columns(match), uploaded_by),
             )
         except sqlite3.IntegrityError:
@@ -425,6 +459,7 @@ class MatchStore:
         return (
             match.file_name,
             match.map_name,
+            match.map_hash,
             match.played_at.isoformat(),
             match.duration_seconds,
             match.game_type,
@@ -475,7 +510,7 @@ class MatchStore:
     ) -> None:
         self._conn.execute(
             """UPDATE matches SET
-                 file_hash = ?, content_key = ?, file_name = ?, map_name = ?, played_at = ?,
+                 file_hash = ?, content_key = ?, file_name = ?, map_name = ?, map_hash = ?, played_at = ?,
                  duration_seconds = ?, game_type = ?, pick_mode = ?, pick_phase_seconds = ?,
                  winning_team = ?, winner_confidence = ?, winner_method = ?,
                  comeback_deficit = ?, lead_changes = ?, uploaded_by = ?
@@ -503,6 +538,60 @@ class MatchStore:
         self._replace_match(row["id"], match, file_hash, row["content_key"], row["uploaded_by"])
         self.change_count += 1
         return True
+
+    # -- map versions ----------------------------------------------------
+
+    def record_map_version(self, map_hash: str, version: MapVersion | None) -> None:
+        """Cache what the published map behind map_hash calls its terrain.
+        None records the lookup itself (name NULL) so a version whose header
+        names no map isn't fetched again on every upload."""
+        self._conn.execute(
+            """INSERT INTO map_versions (map_hash, name, author, checked_at)
+               VALUES (?, ?, ?, datetime('now'))
+               ON CONFLICT(map_hash) DO UPDATE SET
+                 name = excluded.name, author = excluded.author, checked_at = excluded.checked_at""",
+            (map_hash, version.name if version else None, version.author if version else None),
+        )
+        self._conn.commit()
+        self.change_count += 1
+
+    def unresolved_map_hashes(self) -> list[str]:
+        """Map versions seen in history that have never been looked up."""
+        rows = self._conn.execute(
+            """SELECT DISTINCT m.map_hash FROM matches m
+               LEFT JOIN map_versions v ON v.map_hash = m.map_hash
+               WHERE m.map_hash != '' AND v.map_hash IS NULL"""
+        ).fetchall()
+        return [r["map_hash"] for r in rows]
+
+    def map_version_names(self) -> dict[str, str]:
+        """hash -> terrain name, for every version resolved so far. Callers
+        fall back to the match's own map_name for anything missing."""
+        rows = self._conn.execute("SELECT map_hash, name FROM map_versions WHERE name IS NOT NULL").fetchall()
+        return {r["map_hash"]: r["name"] for r in rows}
+
+    def set_map_hash(self, match_id: int, map_hash: str) -> None:
+        """Backfill the published-version hash of a game stored before it was
+        recorded (see scripts/backfill_map_hashes.py)."""
+        self._conn.execute("UPDATE matches SET map_hash = ? WHERE id = ?", (map_hash, match_id))
+        self._conn.commit()
+        self.change_count += 1
+
+    def match_ids_missing_map_hash(self) -> list[tuple[int, str, str]]:
+        """(id, played_at, content_key) of every stored game with no version
+        hash yet, oldest first."""
+        rows = self._conn.execute(
+            "SELECT id, played_at, content_key FROM matches WHERE map_hash = '' ORDER BY played_at"
+        ).fetchall()
+        return [(r["id"], r["played_at"], r["content_key"]) for r in rows]
+
+    def map_hash_samples(self) -> list[tuple[str, str]]:
+        """(played_at, map_hash) for every game whose version is known,
+        oldest first — the timeline of which map was live when."""
+        rows = self._conn.execute(
+            "SELECT played_at, map_hash FROM matches WHERE map_hash != '' ORDER BY played_at"
+        ).fetchall()
+        return [(r["played_at"], r["map_hash"]) for r in rows]
 
     def link_player(self, discord_id: str, sc2_name: str) -> LinkResult:
         """Claim an SC2 display name and bind its account handle if the name
@@ -1080,6 +1169,7 @@ class MatchStore:
         return MonobattleMatch(
             file_name=row["file_name"],
             map_name=row["map_name"],
+            map_hash=row["map_hash"],
             played_at=datetime.datetime.fromisoformat(row["played_at"]),
             duration_seconds=row["duration_seconds"],
             game_type=row["game_type"],

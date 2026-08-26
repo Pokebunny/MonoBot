@@ -22,6 +22,9 @@ def _match(matches, number):
 def test_basic_metadata(matches):
     m = _match(matches, 714)
     assert m.map_name == "Monobattle LotV - Map Rotation"
+    # Every game shares that arcade name; the hash is what says which terrain
+    # was published at the time (see services/map_versions.py).
+    assert len(m.map_hash) == 64
     assert m.game_type == "4v4"
     assert len(m.players) == 8
     assert len(m.team(1)) == 4

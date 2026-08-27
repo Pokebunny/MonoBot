@@ -1,7 +1,9 @@
 """The real map behind a monobattle: reading it out of a published arcade
 map, caching it per version, and labelling matches with it."""
 
+import asyncio
 import datetime
+import sqlite3
 
 import pytest
 from models.replay import MapVersion, MatchPlayer, MonobattleMatch
@@ -142,6 +144,41 @@ class TestResolvePending:
         monkeypatch.setattr(map_versions.replay_parser, "fetch_map_version", lambda h: None)
         assert map_versions.resolve_pending(store) == []
         assert map_versions.label(match, store.map_version_names()) == "Monobattle LotV - Map Rotation"
+
+
+class TestResolveFromTheBot:
+    """The bot resolves map versions while handling an upload. The store's
+    sqlite connection belongs to the thread that created it, so the DB half
+    of the work has to stay on the event-loop thread."""
+
+    def test_async_resolver_records_versions(self, store, monkeypatch):
+        store.ingest(_match(map_hash=ASHEN), hash_replay(b"a"))
+        monkeypatch.setattr(
+            map_versions.replay_parser,
+            "fetch_map_version",
+            lambda h: MapVersion(map_hash=h, name="The Ashen Cradle", author="KillerSmile"),
+        )
+        resolved = asyncio.run(map_versions.resolve_pending_async(store))
+        assert [v.name for v in resolved] == ["The Ashen Cradle"]
+        assert store.map_version_names() == {ASHEN: "The Ashen Cradle"}
+
+    def test_async_resolver_caches_a_failed_lookup(self, store, monkeypatch):
+        store.ingest(_match(map_hash=ASHEN), hash_replay(b"a"))
+        monkeypatch.setattr(map_versions.replay_parser, "fetch_map_version", lambda h: None)
+        assert asyncio.run(map_versions.resolve_pending_async(store)) == []
+        assert store.unresolved_map_hashes() == []
+
+    def test_blocking_resolver_cannot_be_thrown_at_a_worker_thread(self, store):
+        """Why resolve_pending_async exists: handing the whole store to
+        asyncio.to_thread raises, which once took the match summary down with
+        it (the upload posted nothing at all)."""
+        store.ingest(_match(map_hash=ASHEN), hash_replay(b"a"))
+
+        async def off_thread():
+            await asyncio.to_thread(map_versions.resolve_pending, store)
+
+        with pytest.raises(sqlite3.ProgrammingError):
+            asyncio.run(off_thread())
 
 
 class TestGrouping:

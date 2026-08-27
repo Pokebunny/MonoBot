@@ -171,8 +171,13 @@ class Replays(commands.Cog):
         history = self.store.season_matches(season) if season else self.store.all_matches()
         deltas = match_rating_deltas(history, result.match_id, self.store.merge_map())
         # A new rotation shows up as a map version nobody has looked up yet;
-        # fetching it is one network call per version, not per upload.
-        await asyncio.to_thread(map_versions.resolve_pending, self.store)
+        # fetching it is one network call per version, not per upload. Never
+        # let it stop the summary going out — the map's name is a garnish,
+        # posting the match is the job.
+        try:
+            await map_versions.resolve_pending_async(self.store)
+        except Exception:
+            logger.exception("Could not resolve the map for %s", attachment.filename)
         embed = match_embeds.match_summary(
             match,
             result.match_id,
@@ -251,9 +256,12 @@ class Replays(commands.Cog):
         # them for the first time (games stored before versions existed have
         # no hash). Resolve them here in one pass — otherwise nothing names
         # them until the next fresh upload happens to trigger it.
-        identified = await asyncio.to_thread(map_versions.resolve_pending, self.store)
-        if identified:
-            stats["maps identified"] = len(identified)
+        try:
+            identified = await map_versions.resolve_pending_async(self.store)
+            if identified:
+                stats["maps identified"] = len(identified)
+        except Exception:
+            logger.exception("Could not resolve maps after scanning %s", target)
         granted = achievements.sweep_grants(self.store, self.achievements)
         if granted:
             stats["achievements granted quietly"] = granted

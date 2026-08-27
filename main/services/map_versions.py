@@ -8,6 +8,7 @@ once per hash (network) and cached in the DB — see
 replay_parser.fetch_map_version and MatchStore.record_map_version.
 """
 
+import asyncio
 import logging
 from collections.abc import Iterable
 
@@ -20,8 +21,12 @@ logger = logging.getLogger(__name__)
 def resolve_pending(store) -> list[MapVersion]:
     """Look up every map version seen in history that has never been fetched,
     caching each result (including failures). Returns the ones that named a
-    map. Safe to call on every upload: a version is fetched exactly once, and
-    an unreachable depot just leaves it unresolved for next time."""
+    map. A version is fetched exactly once, and an unreachable depot just
+    leaves it unresolved for next time.
+
+    Blocking, for scripts. The bot must use resolve_pending_async instead:
+    this touches the store, and a MatchStore's sqlite connection belongs to
+    the thread that created it, so this cannot be run via asyncio.to_thread."""
     resolved = []
     for map_hash in store.unresolved_map_hashes():
         version = replay_parser.fetch_map_version(map_hash)
@@ -42,6 +47,21 @@ def label(match: MonobattleMatch, names: dict[str, str]) -> str:
     the arcade map's own name (which is all older, un-backfilled matches
     have)."""
     return named(match, names) or match.map_name
+
+
+async def resolve_pending_async(store) -> list[MapVersion]:
+    """resolve_pending for the bot: only the depot download goes to a worker
+    thread. The DB calls stay on the event-loop thread, because that is where
+    the store's sqlite connection was created and sqlite refuses to be used
+    from any other one."""
+    resolved = []
+    for map_hash in store.unresolved_map_hashes():
+        version = await asyncio.to_thread(replay_parser.fetch_map_version, map_hash)
+        store.record_map_version(map_hash, version)
+        if version is not None:
+            logger.info("Map version %s is %s", map_hash[:12], version.name)
+            resolved.append(version)
+    return resolved
 
 
 def canonical(name: str) -> str:

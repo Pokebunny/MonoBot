@@ -440,10 +440,6 @@ class Leaderboard(commands.Cog):
             await ctx.send(f"**{name1}** and **{name2}** haven't shared a decided game yet.")
             return
         await ctx.send(embed=match_embeds.h2h_summary(name1, name2, vs, together, opposed, group1, group2))
-        if opposed:
-            match_id, match = opposed[-1]  # their most recent meeting, in full
-            label = map_versions.label(match, self.store.map_version_names())
-            await ctx.send(embed=match_embeds.match_summary(match, match_id, map_label=label))
 
     @commands.hybrid_command(aliases=["mvps"], help="rank players by how often they're the MVP")
     @commands.cooldown(1, 5, commands.BucketType.channel)

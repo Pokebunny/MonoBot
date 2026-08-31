@@ -14,6 +14,8 @@ from models.replay import MatchPlayer, MonobattleMatch
 
 # Leader must be at least this many standard deviations above the lobby mean.
 MIN_Z_SCORE = 1.5
+# Value-lost prior for Best Trader's ratio (see the spec below).
+TRADE_PRIOR = 1000
 MAX_AWARDS = 2
 
 
@@ -47,9 +49,19 @@ SPECS = [
         "best_trader",
         "⚖️",
         "Best Trader",
+        # Kills per value lost, against a prior of TRADE_PRIOR lost. A raw
+        # ratio is unusable at the top of the scale -- losing nothing divides
+        # by zero, and 3,150 kills for 50 lost is 63x -- so the award used to
+        # require 1,000 value lost, which excluded the very games it should
+        # crown: a player who killed 13,900 and lost nothing wasn't even in
+        # the running. The prior is added to EVERY player's losses instead of
+        # being a floor under a few, so a flawless game beats a smaller
+        # efficient one (10,000 for nothing = 10.0x, 5,000 for 400 = 3.6x)
+        # and a player who barely fought scores near zero rather than
+        # infinity (200 for nothing = 0.2x). No eligibility gate needed.
         lambda p: (
-            (p.resources_killed / p.resources_lost)
-            if p.resources_killed and p.resources_lost and p.resources_lost >= 1000
+            (p.resources_killed / (p.resources_lost + TRADE_PRIOR))
+            if p.resources_killed is not None and p.resources_lost is not None
             else None
         ),
         2.0,

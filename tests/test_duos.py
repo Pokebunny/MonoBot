@@ -125,17 +125,17 @@ def _rows():
     return sorted(duo_records(matches).values(), key=lambda d: d.synergy, reverse=True)
 
 
-def test_board_leads_with_win_rate_by_default():
-    embed = duo_board(_rows(), by_synergy=False)
-    assert "**100%**" in embed.description
-    assert "!duos synergy sorts the other way" in embed.footer.text
-
-
-def test_board_leads_with_synergy_when_asked():
-    embed = duo_board(_rows(), by_synergy=True)
+def test_board_leads_with_synergy_by_default():
+    embed = duo_board(_rows())
     top = embed.description.splitlines()[0]
     assert "3-0" in top and "100%" in top
     assert top.index("+") < top.index("3-0")  # synergy is the headline number
+    assert "!duos raw sorts the other way" in embed.footer.text
+
+
+def test_board_leads_with_win_rate_when_asked():
+    embed = duo_board(_rows(), by_synergy=False)
+    assert "**100%**" in embed.description
     assert "!duos sorts the other way" in embed.footer.text
 
 
@@ -152,13 +152,16 @@ def test_empty_board_says_so():
 @pytest.mark.parametrize(
     "query, expected",
     [
-        ("", (DUO_MIN_GAMES, False)),
-        ("30", (30, False)),
-        ("synergy", (DUO_MIN_GAMES, True)),
+        ("", (DUO_MIN_GAMES, True)),
+        ("30", (30, True)),
+        ("raw", (DUO_MIN_GAMES, False)),
+        ("winrate", (DUO_MIN_GAMES, False)),
+        ("30 raw", (30, False)),
+        ("Raw 5", (5, False)),
+        ("synergy", (DUO_MIN_GAMES, True)),  # asking for the default is fine
         ("chemistry", (DUO_MIN_GAMES, True)),
-        ("30 synergy", (30, True)),
-        ("Synergy 5", (5, True)),
-        ("0", (1, False)),  # a floor of zero would divide by nothing
+        ("raw synergy", (DUO_MIN_GAMES, True)),  # last word wins
+        ("0", (1, True)),  # a floor of zero would divide by nothing
     ],
 )
 def test_duo_query_parsing(query, expected):

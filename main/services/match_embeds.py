@@ -536,16 +536,16 @@ def duo_board(
     page: int = 0,
     min_games: int = 1,
     display_names: dict[str, str] | None = None,
-    by_synergy: bool = False,
+    by_synergy: bool = True,
 ) -> discord.Embed:
     """`rows` is pre-sorted; `by_synergy` only says which number to lead with.
 
-    Both orderings are on offer because they answer different questions and
-    neither is the whole answer. Raw win rate is what people mean by "best
-    pair", but it mostly ranks whoever is individually good — the top of the
-    board is largely one strong player and whoever they queue with. Synergy is
-    the honest measure of the pair itself, and its cost is that a duo can
-    climb it while losing, by losing less than the model expected.
+    Synergy leads by default because it is the only one of the two numbers
+    that is about the pair: raw win rate mostly ranks whoever is individually
+    good, so its top is largely one strong player and whoever they queue with.
+    The cost of the default is that a duo can climb synergy while losing, by
+    losing less than the model expected — which is why the plain record rides
+    along on every row, and why the other sort is one word away.
 
     Career, all seasons, and labelled as such: a pair needs many games
     together before their record says anything, and one season never holds
@@ -572,7 +572,7 @@ def duo_board(
         else "win rate together · +/- is wins above what the ratings predicted"
     )
     note = f"min {min_games} games together · " if min_games > 1 else ""
-    other = "!duos" if by_synergy else "!duos synergy"
+    other = "!duos raw" if by_synergy else "!duos"
     embed.set_footer(text=f"Career · {note}{meaning} · {other} sorts the other way · Page {page + 1}/{pages}")
     return embed
 

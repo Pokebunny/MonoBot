@@ -34,7 +34,10 @@ MVP_RATE_MIN_GAMES = 50
 # so the floor is high; !duos <n> overrides it.
 DUO_MIN_GAMES = 15
 
-# Words that flip !duos from raw win rate to wins-above-expected.
+# Words that flip !duos from wins-above-expected to raw win rate, and the
+# ones that ask for the default back (accepted so nobody has to remember which
+# way round it is).
+_RAW_WORDS = frozenset({"raw", "winrate", "wins", "rate", "record"})
 _SYNERGY_WORDS = frozenset({"synergy", "chemistry", "expected", "adjusted"})
 
 
@@ -482,7 +485,7 @@ class Leaderboard(commands.Cog):
 
     @commands.hybrid_command(
         aliases=["pairs", "duo"],
-        help="rank the best pairs of teammates — !duos synergy sorts by chemistry instead of win rate",
+        help="rank the best pairs of teammates by chemistry — !duos raw sorts by plain win rate instead",
     )
     @commands.cooldown(1, 5, commands.BucketType.channel)
     async def duos(self, ctx, *, query: str = ""):
@@ -507,14 +510,16 @@ class Leaderboard(commands.Cog):
 
     @staticmethod
     def _parse_duo_query(query: str) -> tuple[int, bool]:
-        """Split '!duos [min_games] [synergy]'. Win rate is the default sort
-        because it is what people mean by 'best pair'; synergy is the truer
-        measure of the pair itself but ranks a duo that loses gracefully above
-        one that wins, so it is opt-in rather than the headline."""
-        min_games, by_synergy = DUO_MIN_GAMES, False
+        """Split '!duos [min_games] [raw]'. Synergy is the default sort: it is
+        the only one of the two that measures the pair rather than its halves,
+        so it answers the question the board is named after. Raw win rate is a
+        word away for anyone who wants the plain record."""
+        min_games, by_synergy = DUO_MIN_GAMES, True
         for token in query.lower().split():
             if token.isdigit():
                 min_games = max(1, int(token))
+            elif token in _RAW_WORDS:
+                by_synergy = False
             elif token in _SYNERGY_WORDS:
                 by_synergy = True
         return min_games, by_synergy

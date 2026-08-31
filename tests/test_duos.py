@@ -125,18 +125,29 @@ def _rows():
     return sorted(duo_records(matches).values(), key=lambda d: d.synergy, reverse=True)
 
 
-def test_board_leads_with_synergy_by_default():
-    embed = duo_board(_rows())
+def test_board_leads_with_the_duo_rating_by_default():
+    rows = _rows()
+    embed = duo_board(rows)
     top = embed.description.splitlines()[0]
+    assert f"**{rows[0].display_rating}**" in top
     assert "3-0" in top and "100%" in top
-    assert top.index("+") < top.index("3-0")  # synergy is the headline number
-    assert "!duos raw sorts the other way" in embed.footer.text
+    assert "Duo Rating" in embed.title
+    assert "!duos raw" in embed.footer.text and "!duos synergy" in embed.footer.text
 
 
 def test_board_leads_with_win_rate_when_asked():
-    embed = duo_board(_rows(), by_synergy=False)
+    embed = duo_board(_rows(), sort="raw")
     assert "**100%**" in embed.description
-    assert "!duos sorts the other way" in embed.footer.text
+    assert "Win Rate" in embed.title
+    assert "rated " in embed.description  # the rating still rides along
+
+
+def test_board_leads_with_synergy_when_asked():
+    embed = duo_board(_rows(), sort="synergy")
+    top = embed.description.splitlines()[0]
+    assert top.index("+") < top.index("3-0")
+    assert "Chemistry" in embed.title
+    assert "does not repeat" in embed.footer.text  # labelled honestly
 
 
 def test_board_uses_display_names_for_both_halves():
@@ -152,17 +163,53 @@ def test_empty_board_says_so():
 @pytest.mark.parametrize(
     "query, expected",
     [
-        ("", (DUO_MIN_GAMES, True)),
-        ("30", (30, True)),
-        ("raw", (DUO_MIN_GAMES, False)),
-        ("winrate", (DUO_MIN_GAMES, False)),
-        ("30 raw", (30, False)),
-        ("Raw 5", (5, False)),
-        ("synergy", (DUO_MIN_GAMES, True)),  # asking for the default is fine
-        ("chemistry", (DUO_MIN_GAMES, True)),
-        ("raw synergy", (DUO_MIN_GAMES, True)),  # last word wins
-        ("0", (1, True)),  # a floor of zero would divide by nothing
+        ("", (DUO_MIN_GAMES, "rating")),
+        ("30", (30, "rating")),
+        ("raw", (DUO_MIN_GAMES, "raw")),
+        ("winrate", (DUO_MIN_GAMES, "raw")),
+        ("30 raw", (30, "raw")),
+        ("Raw 5", (5, "raw")),
+        ("synergy", (DUO_MIN_GAMES, "synergy")),
+        ("chemistry", (DUO_MIN_GAMES, "synergy")),
+        ("rating", (DUO_MIN_GAMES, "rating")),  # asking for the default is fine
+        ("raw synergy", (DUO_MIN_GAMES, "synergy")),  # last word wins
+        ("0", (1, "rating")),  # a floor of zero would divide by nothing
     ],
 )
 def test_duo_query_parsing(query, expected):
     assert Leaderboard._parse_duo_query(query) == expected
+
+
+def test_a_duo_rating_rises_with_wins_and_falls_with_losses():
+    winners = duo_records([_match(1, minutes=i) for i in range(6)])[("A1", "A2")]
+    losers = duo_records([_match(1, minutes=i) for i in range(6)])[("B1", "B2")]
+    assert winners.display_rating > losers.display_rating
+    assert winners.ordinal > losers.ordinal
+
+
+def test_a_fresh_duo_starts_at_the_model_prior():
+    duo = duo_records([_match(1)])[("A1", "A2")]
+    # One game in, sigma has barely moved off the prior, so the pair is still
+    # provisional-looking rather than sitting at a confident rating.
+    assert duo.sigma > 6.0
+
+
+def test_duo_rating_beats_a_weaker_pair_that_won_the_same_number():
+    # Both pairs go 4-0, but one did it against a side the ratings had learned
+    # to respect. Raw win rate can't tell them apart; the duo rating can.
+    strong = ["S1", "S2", "S3", "S4"]
+    weak = ["W1", "W2", "W3", "W4"]
+    history = [_match(1, team1=strong, team2=weak, minutes=i) for i in range(10)]
+    easy = [_match(1, team1=["A1", "A2", "X1", "X2"], team2=weak, minutes=20 + i) for i in range(4)]
+    hard = [_match(1, team1=["B1", "B2", "X3", "X4"], team2=strong, minutes=40 + i) for i in range(4)]
+    records = duo_records(history + easy + hard)
+    easy_duo, hard_duo = records[("A1", "A2")], records[("B1", "B2")]
+    assert easy_duo.win_rate == hard_duo.win_rate == 1.0
+    assert hard_duo.ordinal > easy_duo.ordinal
+
+
+def test_display_rating_is_on_the_player_scale():
+    # The entity covers two roster slots, so the shown number is halved to be
+    # comparable with the two ladder ratings beside the players' names.
+    duo = duo_records([_match(1)])[("A1", "A2")]
+    assert duo.display_rating == round(duo.ordinal / 2 * 40 + 1000)

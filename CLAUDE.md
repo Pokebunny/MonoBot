@@ -30,13 +30,19 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   Only ratings are season-scoped; match history, profile stats and the
   achievement ledger are career-wide.
 - **Pair stats** (`!duos`, the teammate half of `!h2h`) come from
-  `rating.duo_records`, which walks history chronologically and banks each
-  pair's *expected* wins from the model's pre-match prediction. Synergy =
-  wins - expected, and it is deliberately a shrunk estimate: a duo's wins also
-  lift their own ratings. Synergy is the default sort because it is the only
-  measure of the pair rather than its halves; raw win rate is still one word
-  away (`!duos raw`), since synergy can rank a losing pair above a winning
-  one.
+  `rating.duo_records`, one chronological walk that gives each pair three
+  numbers. The headline is the pair's **own rating**: the duo is rated as a
+  single entity standing in for its two roster slots, with its other two
+  teammates and the four opponents entering at their individual ratings, so it
+  is opponent-adjusted. Also banked are the raw record and *synergy* (wins
+  minus the model's summed pre-match win probability). Synergy is kept as an
+  opt-in curiosity and labelled as one — measured over this history it does
+  not repeat (split-half r < 0, and adding it to a win prediction never helps
+  out of sample), whereas the duo rating does (split-half r ~ +0.5, and ~ +0.4
+  on the part left after regressing out the two players' combined skill).
+  Ranking on a level holds up where ranking on a residual does not; keep it
+  that way. Career-wide and cached in `DuoCache`, since the walk does twelve
+  model updates per match.
 - The **map** every game shows is not `matches.map_name`: every monobattle is
   played on one arcade map whose name never changes. The rotation happens when
   its author republishes it with new terrain, changing `matches.map_hash`, and

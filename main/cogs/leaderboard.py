@@ -11,9 +11,9 @@ from services.rating import (
     MIN_DURATION_SECONDS,
     MIN_RANKED_GAMES,
     MIN_WINNER_CONFIDENCE,
+    DuoCache,
     RatingBook,
     RatingCache,
-    duo_records,
 )
 from services.storage import MatchStore
 from views import ExpiringView, PagedBoardView
@@ -34,11 +34,13 @@ MVP_RATE_MIN_GAMES = 50
 # so the floor is high; !duos <n> overrides it.
 DUO_MIN_GAMES = 15
 
-# Words that flip !duos from wins-above-expected to raw win rate, and the
-# ones that ask for the default back (accepted so nobody has to remember which
-# way round it is).
-_RAW_WORDS = frozenset({"raw", "winrate", "wins", "rate", "record"})
-_SYNERGY_WORDS = frozenset({"synergy", "chemistry", "expected", "adjusted"})
+# Words that pick a !duos sort. Rating is the default, so its own words only
+# exist so nobody has to remember which way round it is.
+_DUO_SORTS = {
+    **dict.fromkeys(("rating", "rated", "strength", "best"), "rating"),
+    **dict.fromkeys(("raw", "winrate", "wins", "rate", "record"), "raw"),
+    **dict.fromkeys(("synergy", "chemistry", "expected", "adjusted"), "synergy"),
+}
 
 
 class CatalogView(ExpiringView):
@@ -184,7 +186,10 @@ class Leaderboard(commands.Cog):
             client.rating_cache = RatingCache(client.match_store)
         if not hasattr(client, "achievement_cache"):
             client.achievement_cache = AchievementCache(client.match_store)
+        if not hasattr(client, "duo_cache"):
+            client.duo_cache = DuoCache(client.match_store)
         self.store: MatchStore = client.match_store
+        self.duos_cache: DuoCache = client.duo_cache
         self.ratings: RatingCache = client.rating_cache
         self.achievements: AchievementCache = client.achievement_cache
         achievements.ensure_seeded(self.store, self.achievements)
@@ -460,7 +465,7 @@ class Leaderboard(commands.Cog):
         so either argument order finds the same row."""
         merge = self.store.merge_map()
         pair = tuple(sorted({merge.get(group1[0], group1[0]), merge.get(group2[0], group2[0])}))
-        return self._duo_records().get(pair)
+        return self.duos_cache.records().get(pair)
 
     @commands.hybrid_command(aliases=["mvps"], help="rank players by how often they're the MVP")
     @commands.cooldown(1, 5, commands.BucketType.channel)
@@ -485,44 +490,40 @@ class Leaderboard(commands.Cog):
 
     @commands.hybrid_command(
         aliases=["pairs", "duo"],
-        help="rank the best pairs of teammates by chemistry — !duos raw sorts by plain win rate instead",
+        help="rank the best pairs of teammates — !duos raw and !duos synergy sort other ways",
     )
     @commands.cooldown(1, 5, commands.BucketType.channel)
     async def duos(self, ctx, *, query: str = ""):
-        min_games, by_synergy = self._parse_duo_query(query)
-        rows = [d for d in self._duo_records().values() if d.games >= min_games]
+        min_games, sort = self._parse_duo_query(query)
+        rows = [d for d in self.duos_cache.records().values() if d.games >= min_games]
         if not rows:
             await ctx.send(f"No pair has played {min_games} games together yet.")
             return
-        rows.sort(key=(lambda d: d.synergy) if by_synergy else (lambda d: (d.win_rate, d.games)), reverse=True)
+        keys = {
+            "rating": lambda d: d.ordinal,
+            "raw": lambda d: (d.win_rate, d.games),
+            "synergy": lambda d: d.synergy,
+        }
+        rows.sort(key=keys[sort], reverse=True)
         names = {h: self._shown_name(ctx, h, n) for d in rows for h, n in zip(d.handles, d.names)}
         view = PagedBoardView(
-            lambda page: match_embeds.duo_board(rows, page, min_games, names, by_synergy),
+            lambda page: match_embeds.duo_board(rows, page, min_games, names, sort),
             match_embeds.page_count(rows),
         )
         await self._send_board(ctx, view)
 
-    def _duo_records(self):
-        """Every pair's shared record, career-wide. Rebuilt per call — it is a
-        replay of history like any other board read, and pairs are far too
-        many to want a cache of."""
-        return duo_records((m for _, m in self.store.all_matches()), self.store.merge_map())
-
     @staticmethod
-    def _parse_duo_query(query: str) -> tuple[int, bool]:
-        """Split '!duos [min_games] [raw]'. Synergy is the default sort: it is
-        the only one of the two that measures the pair rather than its halves,
-        so it answers the question the board is named after. Raw win rate is a
-        word away for anyone who wants the plain record."""
-        min_games, by_synergy = DUO_MIN_GAMES, True
+    def _parse_duo_query(query: str) -> tuple[int, str]:
+        """Split '!duos [min_games] [sort]'. The pair's own rating is the
+        default: it is the only one of the three sorts that is both about the
+        pair and stable enough to rank on (see match_embeds.duo_board)."""
+        min_games, sort = DUO_MIN_GAMES, "rating"
         for token in query.lower().split():
             if token.isdigit():
                 min_games = max(1, int(token))
-            elif token in _RAW_WORDS:
-                by_synergy = False
-            elif token in _SYNERGY_WORDS:
-                by_synergy = True
-        return min_games, by_synergy
+            elif token in _DUO_SORTS:
+                sort = _DUO_SORTS[token]
+        return min_games, sort
 
     async def _send_board(self, ctx, view: PagedBoardView):
         """Post a paged board, hiding the arrows when there's only one page."""

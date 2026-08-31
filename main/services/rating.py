@@ -82,7 +82,9 @@ def duo_records(matches, merge_map: dict[str, str] | None = None) -> dict[tuple[
     the model believed BEFORE it — the same walk RatingBook.from_matches does,
     with one extra prediction per match to bank the pair's expected wins.
     Unrateable games are skipped, so a pair's record here matches the one the
-    ladder counts."""
+    ladder counts.
+
+    Each pair also carries a rating of its own; see _rate_duo."""
     book = RatingBook(merge_map)
     records: dict[tuple[str, str], DuoRecord] = {}
     for match in sorted(matches, key=lambda m: m.played_at):
@@ -94,25 +96,52 @@ def duo_records(matches, merge_map: dict[str, str] | None = None) -> dict[tuple[
 
 def _tally_duos(book: "RatingBook", match: MonobattleMatch, records: dict[tuple[str, str], DuoRecord]) -> None:
     """Credit one rateable match to every pair of teammates in it. Called
-    before the match is rated, so the prediction uses pre-match ratings."""
+    before the match is rated, so both the prediction and the individual
+    ratings used here are the pre-match ones."""
     team_numbers = sorted({p.team for p in match.players})
     sides = [match.team(n) for n in team_numbers]
     probability = predict_win_probability(*[[_prior(book, p) for p in side] for side in sides])
-    for number, side, chance in zip(team_numbers, sides, (probability, 1 - probability)):
+    # By canonical handle: merged accounts are one person, so a pair is counted
+    # once however either of them was logged in.
+    rosters = [{book.canonical(p.toon_handle): p.name for p in side} for side in sides]
+    solo = {
+        book.canonical(p.toon_handle): _model.create_rating(list(_prior(book, p)), name=book.canonical(p.toon_handle))
+        for p in match.players
+    }
+    for index, (number, roster, chance) in enumerate(zip(team_numbers, rosters, (probability, 1 - probability))):
         won = number == match.winning_team
-        # By canonical handle: merged accounts are one person, so a pair is
-        # counted once however either of them was logged in.
-        players = {book.canonical(p.toon_handle): p.name for p in side}
-        for pair in itertools.combinations(sorted(players), 2):
+        opponents = [solo[h] for h in rosters[1 - index]]
+        for pair in itertools.combinations(sorted(roster), 2):
             record = records.get(pair)
             if record is None:
-                record = records[pair] = DuoRecord(handles=pair, names=pair)
-            record.names = (players[pair[0]], players[pair[1]])  # latest names win
+                record = records[pair] = DuoRecord(handles=pair, names=pair, mu=DEFAULT_MU, sigma=DEFAULT_SIGMA)
+            record.names = (roster[pair[0]], roster[pair[1]])  # latest names win
             record.expected_wins += chance
             if won:
                 record.wins += 1
             else:
                 record.losses += 1
+            _rate_duo(record, [solo[h] for h in roster if h not in pair], opponents, won)
+
+
+def _rate_duo(record: DuoRecord, teammates: list, opponents: list, won: bool) -> None:
+    """Update the pair's own rating from one game.
+
+    The pair is rated as a single entity standing in for its two roster slots:
+    its side of the match is [the pair] + their other two teammates, against
+    the four opponents, everyone else entering at their individual rating of
+    the moment. So the number answers "how strong is this pair" — opponent-
+    adjusted the way raw win rate is not, and a level rather than a residual,
+    which is why it holds up across halves of history where wins-above-
+    expected does not.
+
+    It is mostly, but not only, the two players' individual skill: with the
+    combined skill regressed out, what is left still correlates across halves,
+    so a little of it is the pair itself."""
+    entity = _model.create_rating([record.mu, record.sigma], name=str(record.handles))
+    ranks = [0, 1] if won else [1, 0]
+    updated = _model.rate([[entity] + teammates, opponents], ranks=ranks)[0][0]
+    record.mu, record.sigma = updated.mu, updated.sigma
 
 
 def _prior(book: "RatingBook", player) -> tuple[float, float]:
@@ -239,3 +268,25 @@ class RatingCache:
             self._version = self._store.change_count
             self._season_id = season_id
         return self._book
+
+
+class DuoCache:
+    """duo_records for a store, rebuilt only when the store changes.
+
+    Career-wide and not season-scoped, for the same reason MVP rate isn't: a
+    pair needs a lot of games together before their record says anything, and
+    one season never holds enough of them. Cached because the walk rates every
+    pair in every game — twelve model updates per match, an order more work
+    than the ladder's own book — and both !duos and !h2h read it."""
+
+    def __init__(self, store):
+        self._store = store
+        self._records: dict[tuple[str, str], DuoRecord] | None = None
+        self._version = -1
+
+    def records(self) -> dict[tuple[str, str], DuoRecord]:
+        if self._records is None or self._version != self._store.change_count:
+            merge_map = self._store.merge_map() if hasattr(self._store, "merge_map") else None
+            self._records = duo_records((m for _, m in self._store.all_matches()), merge_map)
+            self._version = self._store.change_count
+        return self._records

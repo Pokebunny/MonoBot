@@ -40,6 +40,8 @@ class DuoRecord(BaseModel):
 
     handles: tuple[str, str]  # canonical handles, sorted; one entry per pair
     names: tuple[str, str]  # latest display name seen for each, same order
+    mu: float  # the PAIR's own rating, fit on their games together
+    sigma: float
     wins: int = 0
     losses: int = 0
     expected_wins: float = 0.0
@@ -47,6 +49,19 @@ class DuoRecord(BaseModel):
     @property
     def games(self) -> int:
         return self.wins + self.losses
+
+    @property
+    def ordinal(self) -> float:
+        """Conservative estimate of the pair's strength; the board's sort key."""
+        return self.mu - 3 * self.sigma
+
+    @property
+    def display_rating(self) -> int:
+        """The pair's rating on the same scale a player's is shown in. Halved
+        because the entity covers two roster slots, so it reads as "this pair
+        plays like two players of about this rating" — directly comparable to
+        the two numbers on the ladder next to their names."""
+        return round(self.ordinal / 2 * 40 + 1000)
 
     @property
     def win_rate(self) -> float:

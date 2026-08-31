@@ -422,10 +422,10 @@ def h2h_summary(
     group2: list[str],
     duo: DuoRecord | None = None,
 ) -> discord.Embed:
-    """`duo` is this pair's entry from rating.duo_records, when they have one:
-    the teamed record alone can't separate a good duo from two good players,
-    so the synergy line says how the pair did against what their ratings
-    predicted. None when they've never been on the same team."""
+    """`duo` is this pair's entry from rating.duo_records, when they have one.
+    The teamed record alone can't separate a strong pair from a pair that drew
+    easy opposition, so the second line gives the pair's own rating — the same
+    number !duos ranks on. None when they've never been on the same team."""
     embed = discord.Embed(title=f"{name1} vs {name2}", color=ACCENT)
     total_vs = vs[0] + vs[1]
     if total_vs:
@@ -440,11 +440,7 @@ def h2h_summary(
     if total_team:
         value = f"{together[0]}-{together[1]} together ({100 * together[0] / total_team:.0f}%)"
         if duo is not None:
-            verdict = "better" if duo.synergy >= 0 else "worse"
-            value += (
-                f"\n**{duo.synergy:+.1f}** wins vs expected — {verdict} together than their ratings predict"
-                f" (expected {duo.expected_wins:.1f} of {duo.games})"
-            )
+            value += f"\nDuo rating **{duo.display_rating}** — they play like two players of about that rating"
         embed.add_field(name="As teammates", value=value, inline=False)
     g1, g2 = set(group1), set(group2)
     lines = []
@@ -536,16 +532,19 @@ def duo_board(
     page: int = 0,
     min_games: int = 1,
     display_names: dict[str, str] | None = None,
-    by_synergy: bool = True,
+    sort: str = "rating",
 ) -> discord.Embed:
-    """`rows` is pre-sorted; `by_synergy` only says which number to lead with.
+    """`rows` is pre-sorted; `sort` only says which number to lead with and how
+    to label the board. One of "rating", "raw" or "synergy".
 
-    Synergy leads by default because it is the only one of the two numbers
-    that is about the pair: raw win rate mostly ranks whoever is individually
-    good, so its top is largely one strong player and whoever they queue with.
-    The cost of the default is that a duo can climb synergy while losing, by
-    losing less than the model expected — which is why the plain record rides
-    along on every row, and why the other sort is one word away.
+    Rating leads by default because it is the only one of the three that is
+    both about the pair and stable. Raw win rate ignores who they played, so
+    it mostly ranks whoever is individually good. Synergy — wins above what
+    the ratings predicted — is a residual, and measured over this history it
+    does not repeat: a pair's synergy in one half of their games does not
+    predict the other half, and adding it to a win prediction never helps. The
+    pair's own rating is a level rather than a residual, and it does hold up
+    across halves, so it is the one that earns the headline.
 
     Career, all seasons, and labelled as such: a pair needs many games
     together before their record says anything, and one season never holds
@@ -557,23 +556,28 @@ def duo_board(
     lines = []
     for i, duo in enumerate(rows[start : start + BOARD_PAGE_SIZE], start + 1):
         first, second = (display_names.get(h, n) for h, n in zip(duo.handles, duo.names))
-        record = f"{duo.wins}-{duo.losses}"
-        if by_synergy:
-            lead, rest = f"{duo.synergy:+.1f}", f"{record}, {duo.win_rate:.0%}"
+        record = f"{duo.wins}-{duo.losses}, {duo.win_rate:.0%}"
+        if sort == "synergy":
+            lead, rest = f"{duo.synergy:+.1f}", record
+        elif sort == "raw":
+            lead, rest = f"{duo.win_rate:.0%}", f"{duo.wins}-{duo.losses}, rated {duo.display_rating}"
         else:
-            lead, rest = f"{duo.win_rate:.0%}", f"{record}, {duo.synergy:+.1f} vs expected"
+            lead, rest = f"{duo.display_rating}", record
         lines.append(f"`{i:>2}` **{first}** + **{second}** — **{lead}** ({rest})")
-    sort_name = "Chemistry" if by_synergy else "Win Rate"
-    embed = discord.Embed(title=f"Best Duos — {sort_name}", color=ACCENT)
+    titles = {"rating": "Duo Rating", "raw": "Win Rate", "synergy": "Chemistry"}
+    embed = discord.Embed(title=f"Best Duos — {titles.get(sort, 'Duo Rating')}", color=ACCENT)
     embed.description = "\n".join(lines) or "*No pair has played enough games together yet.*"
-    meaning = (
-        "wins above what the ratings predicted"
-        if by_synergy
-        else "win rate together · +/- is wins above what the ratings predicted"
-    )
+    meanings = {
+        "rating": "the pair rated as one unit, adjusted for who they played",
+        "raw": "win rate together, ignoring who they played",
+        "synergy": "wins above what the ratings predicted — a fun number, but it does not repeat",
+    }
+    others = {"rating": "!duos raw · !duos synergy", "raw": "!duos · !duos synergy", "synergy": "!duos · !duos raw"}
     note = f"min {min_games} games together · " if min_games > 1 else ""
-    other = "!duos raw" if by_synergy else "!duos"
-    embed.set_footer(text=f"Career · {note}{meaning} · {other} sorts the other way · Page {page + 1}/{pages}")
+    embed.set_footer(
+        text=f"Career · {note}{meanings.get(sort, meanings['rating'])} · "
+        f"{others.get(sort, others['rating'])} · Page {page + 1}/{pages}"
+    )
     return embed
 
 

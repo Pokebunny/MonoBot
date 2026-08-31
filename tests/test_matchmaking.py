@@ -101,11 +101,21 @@ class _Response:
         self.message = content
 
 
+class _Message:
+    def __init__(self):
+        self.deleted = False
+
+    async def delete(self):
+        self.deleted = True
+
+
 class _Interaction:
     def __init__(self, user_id="1"):
         self.user = types.SimpleNamespace(id=user_id)
         self.response = _Response()
         self.channel = object()
+        self.guild = object()
+        self.message = _Message()
 
 
 class _Store:
@@ -117,12 +127,20 @@ class _Store:
 
 
 class _Cog:
-    def __init__(self, store):
+    def __init__(self, store, stored_ids=(), resolved=None):
         self.store = store
         self.reposted = None
+        self.stored_ids = list(stored_ids)
+        self.resolved = list(resolved) if resolved is not None else None
 
     async def post_match(self, channel, users):
         self.reposted = users
+
+    def stored_roster_ids(self):
+        return self.stored_ids
+
+    def resolve_roster(self, guild):
+        return list(self.resolved or [])
 
 
 def _view(store, option_count=3):
@@ -166,3 +184,33 @@ class TestNewTeamsButton:
         asyncio.run(view.new_teams.callback(interaction))
         assert "Only a player in this match" in interaction.response.message
         assert view.index == 0
+
+
+class TestRestoredAfterRestart:
+    """A deploy restarts the bot under proposals still sitting in chat. The
+    view is persistent so the click still dispatches; what it lost is the
+    ranked options, so it re-balances the stored roster instead."""
+
+    def test_rebalances_from_the_stored_roster(self):
+        users = [types.SimpleNamespace(id=str(i)) for i in range(8)]
+        cog = _Cog(_Store(count=5), stored_ids=[str(i) for i in range(8)], resolved=users)
+        view = ProposedMatchView(cog)  # no users, no options: restored
+        interaction = _Interaction()
+        asyncio.run(view.new_teams.callback(interaction))
+        assert cog.reposted == users
+        assert interaction.message.deleted  # the pre-restart proposal goes away
+
+    def test_says_so_when_the_roster_cannot_be_resolved(self):
+        cog = _Cog(_Store(count=5), stored_ids=["1"], resolved=[])
+        view = ProposedMatchView(cog)
+        interaction = _Interaction()
+        asyncio.run(view.new_teams.callback(interaction))
+        assert "run `!teams`" in interaction.response.message
+        assert cog.reposted is None
+
+    def test_permission_falls_back_to_the_stored_roster(self):
+        cog = _Cog(_Store(count=5), stored_ids=["7"], resolved=[])
+        view = ProposedMatchView(cog)
+        interaction = _Interaction(user_id="stranger")
+        asyncio.run(view.new_teams.callback(interaction))
+        assert "Only a player in this match" in interaction.response.message

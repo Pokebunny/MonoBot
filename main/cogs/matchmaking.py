@@ -31,6 +31,10 @@ SHUFFLE_OPTIONS = 8
 # so a message posted before a restart can still be found and cleaned up.
 QUEUE_MSG_META_KEY = "queue_message"
 
+# meta key holding the roster of the live proposal (comma-separated Discord
+# ids), so New teams still works on a proposal posted before the last restart.
+MATCH_ROSTER_META_KEY = "match_roster"
+
 
 def _reset_time() -> dt.time | None:
     """The configured daily queue-reset time, or None if it's disabled or
@@ -86,28 +90,38 @@ class ProposedMatchView(discord.ui.View):
     never what someone wants after a game, and before one there is nothing to
     re-balance from.
 
-    State is in-memory only (the ranked options, the current index, and the
-    match count when this was posted) — a restart drops it and the button goes
-    inert, which is fine: the match is a fleeting proposal, not stored. Only a
-    player in the match may touch it.
+    The view is persistent (custom_id + registered via client.add_view on cog
+    load) because deploys restart the bot under proposals that are still sitting
+    in chat, and a click on one used to fail silently with nothing logged. What
+    a restart does drop is the in-memory half — the ranked options and the index
+    — so a restored view has nothing to cycle and goes straight to re-balancing,
+    reading the roster back from MATCH_ROSTER_META_KEY.
+
+    Only a player in the match may touch it.
     """
 
     def __init__(
         self,
         cog: "Matchmaking",
-        users: list[discord.abc.User],
-        options: list[ProposedMatch],
-        timeout: float = 600,
+        users: list[discord.abc.User] | None = None,
+        options: list[ProposedMatch] | None = None,
     ):
-        super().__init__(timeout=timeout)
+        super().__init__(timeout=None)
         self.cog = cog
-        self.users = users  # kept so a re-balance can re-read live ratings
-        self.options = options
+        self.users = list(users or [])  # kept so a re-balance can re-read live ratings
+        self.options = list(options or [])
         self.index = 0
-        self.player_ids = {str(u.id) for u in users}
         # Games stored when this was posted; a higher count later means a
         # replay went up since, so the ranked options are stale.
         self.games_at_post = cog.store.match_count()
+
+    @property
+    def player_ids(self) -> set[str]:
+        """Who may touch the button. Falls back to the stored roster for a
+        restored view, whose users were lost with the restart."""
+        if self.users:
+            return {str(u.id) for u in self.users}
+        return set(self.cog.stored_roster_ids())
 
     def embed(self) -> discord.Embed:
         return match_embeds.proposed_match(self.options[self.index], self.index, len(self.options))
@@ -118,17 +132,19 @@ class ProposedMatchView(discord.ui.View):
         await interaction.response.send_message(f"Only a player in this match can {action} the teams.", ephemeral=True)
         return False
 
-    @discord.ui.button(label="New teams", style=discord.ButtonStyle.primary, emoji="🔀")
+    @discord.ui.button(
+        label="New teams", style=discord.ButtonStyle.primary, emoji="🔀", custom_id="monobot:match:newteams"
+    )
     async def new_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._players_only(interaction, "re-team"):
             return
+        if not self.options:
+            # Restored view: the ranked splits went with the restart, so the
+            # only thing left to offer is a fresh balance of the same roster.
+            await self._rebalance(interaction, drop_message=True)
+            return
         if self.cog.store.match_count() > self.games_at_post:
-            # Re-balance. Repost at the bottom of the channel rather than
-            # editing in place: by now the old message has scrolled away
-            # under the games that were just played. post_match deletes this
-            # one, so only one proposal ever stands.
-            await interaction.response.defer()
-            await self.cog.post_match(interaction.channel, self.users)
+            await self._rebalance(interaction)
             return
         if len(self.options) <= 1:
             await interaction.response.send_message(
@@ -138,6 +154,27 @@ class ProposedMatchView(discord.ui.View):
             return
         self.index = (self.index + 1) % len(self.options)
         await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    async def _rebalance(self, interaction: discord.Interaction, drop_message: bool = False):
+        """Re-split from current ratings. Reposts at the bottom of the channel
+        rather than editing in place: by now the old message has scrolled away
+        under the games that were just played. post_match deletes the previous
+        proposal, except a restored one it never had a handle on — hence
+        drop_message."""
+        users = self.users or self.cog.resolve_roster(interaction.guild)
+        if not users:
+            await interaction.response.send_message(
+                "This match is from before my last restart and I've lost its roster — run `!teams` to post fresh ones.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer()
+        await self.cog.post_match(interaction.channel, users)
+        if drop_message:
+            try:
+                await interaction.message.delete()
+            except discord.HTTPException:
+                pass
 
 
 class Matchmaking(commands.Cog):
@@ -161,6 +198,8 @@ class Matchmaking(commands.Cog):
         # Register the persistent view so Join/Leave buttons on queue messages
         # from before the last restart still dispatch here.
         self.client.add_view(QueueView(self))
+        # Same for New teams on a proposal that outlived the restart.
+        self.client.add_view(ProposedMatchView(self))
         reset_at = _reset_time()
         if reset_at is not None:
             self.daily_reset.change_interval(time=reset_at)
@@ -401,6 +440,7 @@ class Matchmaking(commands.Cog):
         players = [self._queued_player(u) for u in users]
         options = ranked_matches(players, limit=SHUFFLE_OPTIONS)
         self.last_roster = list(users)
+        self.store.set_meta(MATCH_ROSTER_META_KEY, ",".join(str(u.id) for u in users))
         view = ProposedMatchView(self, list(users), options)
         content = None
         if announce:
@@ -412,6 +452,18 @@ class Matchmaking(commands.Cog):
             allowed_mentions=discord.AllowedMentions(users=announce),
         )
         await self._clear_match_message(keep=message)
+
+    def stored_roster_ids(self) -> list[str]:
+        """Discord ids of the live proposal's roster, as last posted."""
+        return [i for i in (self.store.get_meta(MATCH_ROSTER_META_KEY) or "").split(",") if i]
+
+    def resolve_roster(self, guild: discord.Guild | None) -> list[discord.abc.User]:
+        """The stored roster as members of `guild`. Empty if it can't be fully
+        resolved — re-teaming a partial roster would silently drop players."""
+        if guild is None:
+            return []
+        members = [guild.get_member(int(i)) for i in self.stored_roster_ids()]
+        return [m for m in members if m is not None] if all(m is not None for m in members) else []
 
     async def _clear_match_message(self, keep: discord.Message | None = None):
         """Delete the previous proposal so exactly one set of teams is live and

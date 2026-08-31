@@ -5,9 +5,10 @@ native team support). openskill is isolated behind this module the same way
 sc2reader is behind replay_parser.
 """
 
+import itertools
 import logging
 
-from models.rating import PlayerRating
+from models.rating import DuoRecord, PlayerRating
 from models.replay import MonobattleMatch
 from openskill.models import PlackettLuce
 
@@ -70,6 +71,55 @@ def match_rating_deltas(matches, match_id: int, merge_map: dict[str, str] | None
             p.toon_handle: (before[p.toon_handle], book.rating_for(p.toon_handle).display_rating) for p in match.players
         }
     return {}
+
+
+def duo_records(matches, merge_map: dict[str, str] | None = None) -> dict[tuple[str, str], DuoRecord]:
+    """Every pair that has played on the same team, keyed by their two
+    canonical handles (sorted). `matches` is an iterable of MonobattleMatch,
+    e.g. (m for _, m in store.all_matches()).
+
+    Ratings are replayed chronologically so each game is scored against what
+    the model believed BEFORE it — the same walk RatingBook.from_matches does,
+    with one extra prediction per match to bank the pair's expected wins.
+    Unrateable games are skipped, so a pair's record here matches the one the
+    ladder counts."""
+    book = RatingBook(merge_map)
+    records: dict[tuple[str, str], DuoRecord] = {}
+    for match in sorted(matches, key=lambda m: m.played_at):
+        if book.is_rateable(match):
+            _tally_duos(book, match, records)
+        book.rate_match(match)
+    return records
+
+
+def _tally_duos(book: "RatingBook", match: MonobattleMatch, records: dict[tuple[str, str], DuoRecord]) -> None:
+    """Credit one rateable match to every pair of teammates in it. Called
+    before the match is rated, so the prediction uses pre-match ratings."""
+    team_numbers = sorted({p.team for p in match.players})
+    sides = [match.team(n) for n in team_numbers]
+    probability = predict_win_probability(*[[_prior(book, p) for p in side] for side in sides])
+    for number, side, chance in zip(team_numbers, sides, (probability, 1 - probability)):
+        won = number == match.winning_team
+        # By canonical handle: merged accounts are one person, so a pair is
+        # counted once however either of them was logged in.
+        players = {book.canonical(p.toon_handle): p.name for p in side}
+        for pair in itertools.combinations(sorted(players), 2):
+            record = records.get(pair)
+            if record is None:
+                record = records[pair] = DuoRecord(handles=pair, names=pair)
+            record.names = (players[pair[0]], players[pair[1]])  # latest names win
+            record.expected_wins += chance
+            if won:
+                record.wins += 1
+            else:
+                record.losses += 1
+
+
+def _prior(book: "RatingBook", player) -> tuple[float, float]:
+    """A player's (mu, sigma) going into a match — the model's prior for
+    anyone who hasn't played yet."""
+    rating = book.rating_for(player.toon_handle)
+    return (rating.mu, rating.sigma) if rating is not None else (DEFAULT_MU, DEFAULT_SIGMA)
 
 
 class RatingBook:

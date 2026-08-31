@@ -29,3 +29,33 @@ class PlayerRating(BaseModel):
     @property
     def games(self) -> int:
         return self.wins + self.losses
+
+
+class DuoRecord(BaseModel):
+    """How one pair of teammates has done together. `expected_wins` is the sum
+    of the model's pre-match win probability over their shared games, so it
+    already accounts for both players' skill, their other two teammates and
+    the opposition — the gap between it and `wins` is what the pair did that
+    their parts don't explain."""
+
+    handles: tuple[str, str]  # canonical handles, sorted; one entry per pair
+    names: tuple[str, str]  # latest display name seen for each, same order
+    wins: int = 0
+    losses: int = 0
+    expected_wins: float = 0.0
+
+    @property
+    def games(self) -> int:
+        return self.wins + self.losses
+
+    @property
+    def win_rate(self) -> float:
+        return self.wins / self.games if self.games else 0.0
+
+    @property
+    def synergy(self) -> float:
+        """Wins above expectation. Positive means the pair beats the sum of
+        its parts. It is a shrunk estimate, not a pure one: winning together a
+        lot also lifts both players' individual ratings, which raises
+        `expected_wins` and pulls this back toward zero."""
+        return self.wins - self.expected_wins

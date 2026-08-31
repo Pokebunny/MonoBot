@@ -29,6 +29,13 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   moving the window, deleting nothing — past boards stay reconstructible.
   Only ratings are season-scoped; match history, profile stats and the
   achievement ledger are career-wide.
+- **Pair stats** (`!duos`, the teammate half of `!h2h`) come from
+  `rating.duo_records`, which walks history chronologically and banks each
+  pair's *expected* wins from the model's pre-match prediction. Synergy =
+  wins - expected, and it is deliberately a shrunk estimate: a duo's wins also
+  lift their own ratings. Boards offer both sorts because neither is the whole
+  answer — raw win rate mostly ranks whoever is individually strong, and
+  synergy can rank a losing pair above a winning one.
 - The **map** every game shows is not `matches.map_name`: every monobattle is
   played on one arcade map whose name never changes. The rotation happens when
   its author republishes it with new terrain, changing `matches.map_hash`, and

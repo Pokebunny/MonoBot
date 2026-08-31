@@ -13,6 +13,7 @@ from services.rating import (
     MIN_WINNER_CONFIDENCE,
     RatingBook,
     RatingCache,
+    duo_records,
 )
 from services.storage import MatchStore
 from views import ExpiringView, PagedBoardView
@@ -27,6 +28,14 @@ DEFAULT_MIN_GAMES = MIN_RANKED_GAMES
 # games and two MVPs sits at 33% on nothing but variance, so a low floor makes
 # the board a list of small samples. !mvprate <n> overrides it.
 MVP_RATE_MIN_GAMES = 50
+
+# Games a pair must have played together to make the duo board. Pairs are far
+# noisier than players — most of a duo's record is the other two teammates —
+# so the floor is high; !duos <n> overrides it.
+DUO_MIN_GAMES = 15
+
+# Words that flip !duos from raw win rate to wins-above-expected.
+_SYNERGY_WORDS = frozenset({"synergy", "chemistry", "expected", "adjusted"})
 
 
 class CatalogView(ExpiringView):
@@ -439,7 +448,16 @@ class Leaderboard(commands.Cog):
         if not (sum(vs) + sum(together)):
             await ctx.send(f"**{name1}** and **{name2}** haven't shared a decided game yet.")
             return
-        await ctx.send(embed=match_embeds.h2h_summary(name1, name2, vs, together, opposed, group1, group2))
+        duo = self._duo_for(group1, group2) if sum(together) else None
+        await ctx.send(embed=match_embeds.h2h_summary(name1, name2, vs, together, opposed, group1, group2, duo))
+
+    def _duo_for(self, group1: list[str], group2: list[str]):
+        """This pair's entry on the duo board, or None if they've never been
+        teamed. Keyed the way duo_records keys them: canonical handles sorted,
+        so either argument order finds the same row."""
+        merge = self.store.merge_map()
+        pair = tuple(sorted({merge.get(group1[0], group1[0]), merge.get(group2[0], group2[0])}))
+        return self._duo_records().get(pair)
 
     @commands.hybrid_command(aliases=["mvps"], help="rank players by how often they're the MVP")
     @commands.cooldown(1, 5, commands.BucketType.channel)
@@ -461,6 +479,45 @@ class Leaderboard(commands.Cog):
             match_embeds.page_count(rows),
         )
         await self._send_board(ctx, view)
+
+    @commands.hybrid_command(
+        aliases=["pairs", "duo"],
+        help="rank the best pairs of teammates — !duos synergy sorts by chemistry instead of win rate",
+    )
+    @commands.cooldown(1, 5, commands.BucketType.channel)
+    async def duos(self, ctx, *, query: str = ""):
+        min_games, by_synergy = self._parse_duo_query(query)
+        rows = [d for d in self._duo_records().values() if d.games >= min_games]
+        if not rows:
+            await ctx.send(f"No pair has played {min_games} games together yet.")
+            return
+        rows.sort(key=(lambda d: d.synergy) if by_synergy else (lambda d: (d.win_rate, d.games)), reverse=True)
+        names = {h: self._shown_name(ctx, h, n) for d in rows for h, n in zip(d.handles, d.names)}
+        view = PagedBoardView(
+            lambda page: match_embeds.duo_board(rows, page, min_games, names, by_synergy),
+            match_embeds.page_count(rows),
+        )
+        await self._send_board(ctx, view)
+
+    def _duo_records(self):
+        """Every pair's shared record, career-wide. Rebuilt per call — it is a
+        replay of history like any other board read, and pairs are far too
+        many to want a cache of."""
+        return duo_records((m for _, m in self.store.all_matches()), self.store.merge_map())
+
+    @staticmethod
+    def _parse_duo_query(query: str) -> tuple[int, bool]:
+        """Split '!duos [min_games] [synergy]'. Win rate is the default sort
+        because it is what people mean by 'best pair'; synergy is the truer
+        measure of the pair itself but ranks a duo that loses gracefully above
+        one that wins, so it is opt-in rather than the headline."""
+        min_games, by_synergy = DUO_MIN_GAMES, False
+        for token in query.lower().split():
+            if token.isdigit():
+                min_games = max(1, int(token))
+            elif token in _SYNERGY_WORDS:
+                by_synergy = True
+        return min_games, by_synergy
 
     async def _send_board(self, ctx, view: PagedBoardView):
         """Post a paged board, hiding the arrows when there's only one page."""

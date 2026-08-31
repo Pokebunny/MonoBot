@@ -2,7 +2,7 @@
 
 import discord
 from models.matchmaking import ProposedMatch, QueuedPlayer
-from models.rating import PlayerRating
+from models.rating import DuoRecord, PlayerRating
 from models.replay import MatchPlayer, MonobattleMatch
 from services.achievements import RARITIES, RARITY_EMOJI, AchievementSpec, Earned, is_secret
 from services.achievements import SPECS as ACHIEVEMENT_SPECS
@@ -420,7 +420,12 @@ def h2h_summary(
     opposed: list[tuple[int, MonobattleMatch]],
     group1: list[str],
     group2: list[str],
+    duo: DuoRecord | None = None,
 ) -> discord.Embed:
+    """`duo` is this pair's entry from rating.duo_records, when they have one:
+    the teamed record alone can't separate a good duo from two good players,
+    so the synergy line says how the pair did against what their ratings
+    predicted. None when they've never been on the same team."""
     embed = discord.Embed(title=f"{name1} vs {name2}", color=ACCENT)
     total_vs = vs[0] + vs[1]
     if total_vs:
@@ -433,11 +438,14 @@ def h2h_summary(
         embed.add_field(name="Head-to-head", value="No decided games on opposite teams yet.", inline=False)
     total_team = together[0] + together[1]
     if total_team:
-        embed.add_field(
-            name="As teammates",
-            value=f"{together[0]}-{together[1]} together ({100 * together[0] / total_team:.0f}%)",
-            inline=False,
-        )
+        value = f"{together[0]}-{together[1]} together ({100 * together[0] / total_team:.0f}%)"
+        if duo is not None:
+            verdict = "better" if duo.synergy >= 0 else "worse"
+            value += (
+                f"\n**{duo.synergy:+.1f}** wins vs expected — {verdict} together than their ratings predict"
+                f" (expected {duo.expected_wins:.1f} of {duo.games})"
+            )
+        embed.add_field(name="As teammates", value=value, inline=False)
     g1, g2 = set(group1), set(group2)
     lines = []
     for match_id, match in opposed[-5:]:
@@ -520,6 +528,52 @@ def mvp_rates(
     embed.set_footer(
         text=f"Career · all seasons · {note}12.5% is average (one MVP per 8-player game) · Page {page + 1}/{pages}"
     )
+    return embed
+
+
+def duo_board(
+    rows: list[DuoRecord],
+    page: int = 0,
+    min_games: int = 1,
+    display_names: dict[str, str] | None = None,
+    by_synergy: bool = False,
+) -> discord.Embed:
+    """`rows` is pre-sorted; `by_synergy` only says which number to lead with.
+
+    Both orderings are on offer because they answer different questions and
+    neither is the whole answer. Raw win rate is what people mean by "best
+    pair", but it mostly ranks whoever is individually good — the top of the
+    board is largely one strong player and whoever they queue with. Synergy is
+    the honest measure of the pair itself, and its cost is that a duo can
+    climb it while losing, by losing less than the model expected.
+
+    Career, all seasons, and labelled as such: a pair needs many games
+    together before their record says anything, and one season never holds
+    enough of them."""
+    display_names = display_names or {}
+    pages = page_count(rows)
+    page = max(0, min(page, pages - 1))
+    start = page * BOARD_PAGE_SIZE
+    lines = []
+    for i, duo in enumerate(rows[start : start + BOARD_PAGE_SIZE], start + 1):
+        first, second = (display_names.get(h, n) for h, n in zip(duo.handles, duo.names))
+        record = f"{duo.wins}-{duo.losses}"
+        if by_synergy:
+            lead, rest = f"{duo.synergy:+.1f}", f"{record}, {duo.win_rate:.0%}"
+        else:
+            lead, rest = f"{duo.win_rate:.0%}", f"{record}, {duo.synergy:+.1f} vs expected"
+        lines.append(f"`{i:>2}` **{first}** + **{second}** — **{lead}** ({rest})")
+    sort_name = "Chemistry" if by_synergy else "Win Rate"
+    embed = discord.Embed(title=f"Best Duos — {sort_name}", color=ACCENT)
+    embed.description = "\n".join(lines) or "*No pair has played enough games together yet.*"
+    meaning = (
+        "wins above what the ratings predicted"
+        if by_synergy
+        else "win rate together · +/- is wins above what the ratings predicted"
+    )
+    note = f"min {min_games} games together · " if min_games > 1 else ""
+    other = "!duos" if by_synergy else "!duos synergy"
+    embed.set_footer(text=f"Career · {note}{meaning} · {other} sorts the other way · Page {page + 1}/{pages}")
     return embed
 
 

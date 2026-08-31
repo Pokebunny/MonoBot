@@ -72,18 +72,24 @@ class QueueView(discord.ui.View):
 class ProposedMatchView(discord.ui.View):
     """The teams announced when the queue fills.
 
-    Two buttons, deliberately distinct:
+    One button, **New teams**, which does whichever of two things the moment
+    calls for:
 
-    - **Shuffle** cycles the alternatives that were ranked when the match was
-      posted — same ratings, different split.
-    - **Re-balance** throws those away and re-splits the roster from the
-      players' *current* ratings, so replays uploaded since the match formed
-      count. Groups often play a couple of games before re-teaming, and the
-      stale options no longer reflect where anyone stands.
+    - No games since this was posted: cycle the alternatives that were ranked
+      at the time — same ratings, different split, edited in place.
+    - A game has been played since: throw those away and re-split the roster
+      from the players' *current* ratings, so the replay that just went up
+      counts. Groups play a couple of games before re-teaming, and by then the
+      ranked options no longer reflect where anyone stands.
 
-    State is in-memory only (the ranked options and current index) — a restart
-    drops it and the buttons go inert, which is fine: the match is a fleeting
-    proposal, not stored. Only a player in the match may touch either button.
+    Asking which one they meant would be a worse button. The stale options are
+    never what someone wants after a game, and before one there is nothing to
+    re-balance from.
+
+    State is in-memory only (the ranked options, the current index, and the
+    match count when this was posted) — a restart drops it and the button goes
+    inert, which is fine: the match is a fleeting proposal, not stored. Only a
+    player in the match may touch it.
     """
 
     def __init__(
@@ -99,8 +105,9 @@ class ProposedMatchView(discord.ui.View):
         self.options = options
         self.index = 0
         self.player_ids = {str(u.id) for u in users}
-        if len(options) <= 1:
-            self.shuffle.disabled = True
+        # Games stored when this was posted; a higher count later means a
+        # replay went up since, so the ranked options are stale.
+        self.games_at_post = cog.store.match_count()
 
     def embed(self) -> discord.Embed:
         return match_embeds.proposed_match(self.options[self.index], self.index, len(self.options))
@@ -111,22 +118,26 @@ class ProposedMatchView(discord.ui.View):
         await interaction.response.send_message(f"Only a player in this match can {action} the teams.", ephemeral=True)
         return False
 
-    @discord.ui.button(label="Shuffle", style=discord.ButtonStyle.secondary, emoji="🔀")
-    async def shuffle(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await self._players_only(interaction, "shuffle"):
+    @discord.ui.button(label="New teams", style=discord.ButtonStyle.primary, emoji="🔀")
+    async def new_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._players_only(interaction, "re-team"):
+            return
+        if self.cog.store.match_count() > self.games_at_post:
+            # Re-balance. Repost at the bottom of the channel rather than
+            # editing in place: by now the old message has scrolled away
+            # under the games that were just played. post_match deletes this
+            # one, so only one proposal ever stands.
+            await interaction.response.defer()
+            await self.cog.post_match(interaction.channel, self.users)
+            return
+        if len(self.options) <= 1:
+            await interaction.response.send_message(
+                "This roster only splits one sensible way, and no games have been played since.",
+                ephemeral=True,
+            )
             return
         self.index = (self.index + 1) % len(self.options)
         await interaction.response.edit_message(embed=self.embed(), view=self)
-
-    @discord.ui.button(label="Re-balance", style=discord.ButtonStyle.primary, emoji="🔄")
-    async def rebalance(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await self._players_only(interaction, "re-balance"):
-            return
-        # Repost at the bottom of the channel rather than editing in place:
-        # by now the old message has scrolled away under the games that were
-        # just played. post_match deletes this one, so only one stands.
-        await interaction.response.defer()
-        await self.cog.post_match(interaction.channel, self.users)
 
 
 class Matchmaking(commands.Cog):
@@ -140,7 +151,7 @@ class Matchmaking(commands.Cog):
         self.ratings: RatingCache = client.rating_cache
         self.queue: dict[str, discord.abc.User] = {}
         self.queue_message: discord.Message | None = None  # the live queue embed
-        # The last roster to get teams, so !teams and Re-balance can re-split
+        # The last roster to get teams, so !teams and New teams can re-split
         # it without anyone re-queuing. Users, not QueuedPlayers: ratings are
         # looked up fresh each time so re-teaming picks up recent games.
         self.last_roster: list[discord.abc.User] = []
@@ -383,7 +394,7 @@ class Matchmaking(commands.Cog):
         the bottom of the channel, superseding any previous one.
 
         The ratings are read here rather than passed in, so every route into
-        this (queue filling, Re-balance, !teams) reflects games played since
+        this (queue filling, New teams, !teams) reflects games played since
         the last split. `announce` mentions the players — on for a freshly
         formed match, off for a re-team, where everyone is already watching
         and eight pings per re-roll would be spam."""

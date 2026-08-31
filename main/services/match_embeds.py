@@ -476,7 +476,7 @@ def proposed_match(match: ProposedMatch, option_index: int = 0, option_count: in
     fav = match.team1_win_probability
     description = f"Balance: **{match.fairness:.0%}** (Team 1 win chance ≈ {fav:.0%})"
     if option_count > 1:
-        description += f"\nOption {option_index + 1} of {option_count} — 🔀 Shuffle for another split."
+        description += f"\nOption {option_index + 1} of {option_count} — 🔀 New teams for another split."
     embed = discord.Embed(title="Match found!", description=description, color=ACCENT)
     n1, v1 = _team_field("Team 1", match.team1)
     n2, v2 = _team_field("Team 2", match.team2)

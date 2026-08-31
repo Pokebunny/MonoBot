@@ -1,4 +1,8 @@
+import asyncio
+import types
+
 import pytest
+from cogs.matchmaking import ProposedMatchView
 from models.matchmaking import QueuedPlayer
 from services.matchmaking import balance_teams, ranked_matches
 from services.rating import DEFAULT_MU, DEFAULT_SIGMA, predict_win_probability
@@ -78,3 +82,87 @@ def test_ranked_matches_limit_caps_the_list():
 def test_ranked_matches_single_split_for_a_pair():
     options = ranked_matches([_p("a"), _p("b")])
     assert len(options) == 1  # nothing to shuffle through
+
+
+class _Response:
+    """Records what the view did with the interaction."""
+
+    def __init__(self):
+        self.edited = self.deferred = False
+        self.message = None
+
+    async def edit_message(self, **kwargs):
+        self.edited = True
+
+    async def defer(self):
+        self.deferred = True
+
+    async def send_message(self, content, ephemeral=False):
+        self.message = content
+
+
+class _Interaction:
+    def __init__(self, user_id="1"):
+        self.user = types.SimpleNamespace(id=user_id)
+        self.response = _Response()
+        self.channel = object()
+
+
+class _Store:
+    def __init__(self, count=0):
+        self.count = count
+
+    def match_count(self):
+        return self.count
+
+
+class _Cog:
+    def __init__(self, store):
+        self.store = store
+        self.reposted = None
+
+    async def post_match(self, channel, users):
+        self.reposted = users
+
+
+def _view(store, option_count=3):
+    """A posted match between eight players, with `option_count` splits ranked."""
+    players = [_p(f"p{i}") for i in range(8)]
+    options = ranked_matches(players, limit=option_count)
+    users = [types.SimpleNamespace(id=str(i)) for i in range(8)]
+    return ProposedMatchView(_Cog(store), users, options), users
+
+
+class TestNewTeamsButton:
+    """One button: cycle the ranked splits until a game is played, re-balance
+    from live ratings afterwards."""
+
+    def test_cycles_splits_when_nothing_has_been_played(self):
+        view, _ = _view(_Store(count=5))
+        interaction = _Interaction()
+        asyncio.run(view.new_teams.callback(interaction))
+        assert view.index == 1
+        assert interaction.response.edited  # edited in place, not reposted
+        assert view.cog.reposted is None
+
+    def test_rebalances_once_a_game_is_stored(self):
+        store = _Store(count=5)
+        view, users = _view(store)
+        store.count += 1  # a replay went up while the teams sat there
+        interaction = _Interaction()
+        asyncio.run(view.new_teams.callback(interaction))
+        assert view.cog.reposted == users  # re-split from current ratings
+        assert view.index == 0  # the stale options were not cycled
+
+    def test_single_split_and_no_games_says_so(self):
+        view, _ = _view(_Store(count=5), option_count=1)
+        interaction = _Interaction()
+        asyncio.run(view.new_teams.callback(interaction))
+        assert "no games have been played since" in interaction.response.message
+
+    def test_only_players_in_the_match_may_re_team(self):
+        view, _ = _view(_Store(count=5))
+        interaction = _Interaction(user_id="stranger")
+        asyncio.run(view.new_teams.callback(interaction))
+        assert "Only a player in this match" in interaction.response.message
+        assert view.index == 0

@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS replay_channels (
 );
 
 -- Achievement unlocks are a LEDGER, not derived state: once granted, a badge
--- is never revoked by later data corrections or threshold tuning (services/
+-- is revoked only by a deliberate reconcile, never as a side effect (services/
 -- achievements.py derives candidate state; this records what was announced).
 -- handle is the canonical post-merge handle at grant time; reads must span a
 -- player's whole merge group. earned_at = played_at of the unlocking match.
@@ -768,13 +768,28 @@ class MatchStore:
 
     def record_unlocks(self, rows: list[tuple[str, str, str]]) -> None:
         """Append (handle, key, earned_at_iso) rows to the unlock ledger.
-        Append-only and idempotent: re-granting an already-held badge is a
-        no-op, and nothing here ever deletes — unlocks are never revoked."""
+        Idempotent: re-granting an already-held badge is a no-op. Deleting is
+        a separate, deliberate call — see revoke_unlocks."""
         self._conn.executemany(
             "INSERT OR IGNORE INTO achievement_unlocks (handle, key, earned_at) VALUES (?, ?, ?)",
             rows,
         )
         self._conn.commit()
+
+    def revoke_unlocks(self, rows: list[tuple[str, str]]) -> int:
+        """Delete specific (handle, key) unlocks. Returns rows removed.
+
+        Deliberately takes an explicit list rather than a rule: the derived
+        engine is NOT the authority on what is held (Chronicler is granted
+        from upload counts and can never be re-derived), so "delete whatever
+        the engine wouldn't grant" would strip valid badges. The caller works
+        out the list — see engine.reconcile, which excludes grant-only specs."""
+        if not rows:
+            return 0
+        cur = self._conn.executemany("DELETE FROM achievement_unlocks WHERE handle = ? AND key = ?", rows)
+        self._conn.commit()
+        self.change_count += 1
+        return cur.rowcount
 
     def unlocks_for(self, handles: list[str]) -> list[tuple[str, str]]:
         """(key, earned_at) unlocked by any handle in a merge group, deduped

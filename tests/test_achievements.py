@@ -13,6 +13,7 @@ from services.achievements import (
     is_secret,
     ledger_for_group,
     ledger_holder_counts,
+    reconcile,
     sweep_grants,
     sweep_new_unlocks,
 )
@@ -641,3 +642,84 @@ def test_achievement_sweep_keeps_secret_recipes_hidden():
     embed = achievement_sweep([("h1", Earned(secret, AFTER_EPOCH))], {"h1": "Ann"})
     assert secret.name in embed.description
     assert secret.description.lower() not in embed.description.lower()
+
+
+# -- reconcile -----------------------------------------------------------
+
+
+def test_reconcile_revokes_what_the_rules_no_longer_award(tmp_path):
+    store = MatchStore(str(tmp_path / "t.db"))
+    store.ingest(_match(), hash_replay(b"one"))
+    cache = AchievementCache(store)
+    reconcile(store, cache)
+    # A badge nobody can derive: the rules "changed" out from under it.
+    store.record_unlocks([("A1", "the_closer", AFTER_EPOCH.isoformat())])
+    granted, revoked = reconcile(store, cache)
+    assert granted == []
+    assert [(h, s.key) for h, s in revoked] == [("A1", "the_closer")]
+    assert "the_closer" not in {k for k, _ in store.unlocks_for(["A1"])}
+
+
+def test_reconcile_never_revokes_a_grant_only_badge(tmp_path):
+    """Chronicler is granted from upload counts and its check is always False,
+    so the engine cannot see it. Reconciling must not read that as 'lost it'."""
+    store = MatchStore(str(tmp_path / "t.db"))
+    store.ingest(_match(), hash_replay(b"one"))
+    cache = AchievementCache(store)
+    reconcile(store, cache)
+    store.record_unlocks([("A1", "chronicler", AFTER_EPOCH.isoformat())])
+    _granted, revoked = reconcile(store, cache)
+    assert revoked == []
+    assert "chronicler" in {k for k, _ in store.unlocks_for(["A1"])}
+
+
+def test_reconcile_is_idempotent(tmp_path):
+    store = MatchStore(str(tmp_path / "t.db"))
+    store.ingest(_match(), hash_replay(b"one"))
+    cache = AchievementCache(store)
+    reconcile(store, cache)
+    assert reconcile(store, cache) == ([], [])
+
+
+def test_revoke_unlocks_only_removes_the_rows_named(tmp_path):
+    store = MatchStore(str(tmp_path / "t.db"))
+    store.record_unlocks([("A1", "the_closer", AFTER_EPOCH.isoformat()), ("A1", "blitz", AFTER_EPOCH.isoformat())])
+    assert store.revoke_unlocks([("A1", "the_closer")]) == 1
+    assert {k for k, _ in store.unlocks_for(["A1"])} == {"blitz"}
+
+
+def test_sweep_embed_lists_removals_separately():
+    from services.match_embeds import achievement_sweep
+
+    spec = SPECS_BY_KEY["the_closer"]
+    embed = achievement_sweep([], {"h1": "Ann"}, [("h1", spec)])
+    assert "No longer earned" in [f.name for f in embed.fields]
+    assert "Ann" in embed.fields[0].value
+    assert spec.name in embed.fields[0].value
+
+
+# -- the property that makes revoking safe -------------------------------
+
+
+def test_lobby_context_ignores_games_played_later():
+    """Overqualified's underdog is judged on the record BEFORE the game. If a
+    later match could change it, the badge would flicker on and off under a
+    reconciling ledger — which is exactly what it used to do."""
+    early = _series(
+        20,
+        players=[_player(f"A{i}", 1, pick="Roach") for i in range(1, 5)]
+        + [_player(f"B{i}", 2, pick="Marine") for i in range(1, 5)],
+    )
+    book_then = _book(early)
+    keys_then = {h: set(v) for h, v in book_then.earned.items()}
+    later = early + _series(
+        20,
+        winning_team=2,
+        start=AFTER_EPOCH + datetime.timedelta(days=9),
+        players=[_player(f"A{i}", 1, pick="Roach") for i in range(1, 5)]
+        + [_player(f"B{i}", 2, pick="Marine") for i in range(1, 5)],
+    )
+    book_later = _book(later)
+    # Whatever the extra games grant, they must never REMOVE an earlier badge.
+    for handle, keys in keys_then.items():
+        assert keys <= set(book_later.earned.get(handle, {})), handle

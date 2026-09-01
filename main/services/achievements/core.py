@@ -409,6 +409,11 @@ class AchievementSpec(NamedTuple):
     # set drawn from a known universe ("win with all 42 units" can say WHICH
     # units are left). None where a count says it all ("play 47 more games").
     detail: Callable[[PlayerHistory], list[str]] | None = None
+    # Granted from outside the match history (Chronicler counts uploads), so
+    # `check` can never see it. The reconciler must never revoke one of these:
+    # "the engine wouldn't grant it" means "the engine cannot tell", not "the
+    # holder no longer qualifies". See engine.reconcile.
+    grant_only: bool = False
 
 
 class Earned(NamedTuple):
@@ -418,6 +423,11 @@ class Earned(NamedTuple):
 
 def is_secret(spec: AchievementSpec) -> bool:
     return spec.secret
+
+
+def is_grant_only(spec: AchievementSpec) -> bool:
+    """True when the ledger, not the engine, is the authority on this badge."""
+    return spec.grant_only
 
 
 def _career(attr: str, target: float) -> tuple[Callable, Callable]:
@@ -452,10 +462,10 @@ def _live(attr: str, target: float) -> tuple[Callable, Callable]:
     )
 
 
-def _spec(key, name, emoji, rarity, description, checks, secret=False) -> AchievementSpec:
+def _spec(key, name, emoji, rarity, description, checks, secret=False, grant_only=False) -> AchievementSpec:
     check, progress, *rest = checks
     detail = rest[0] if rest else None
-    return AchievementSpec(key, name, emoji, rarity, description, check, progress, secret, detail)
+    return AchievementSpec(key, name, emoji, rarity, description, check, progress, secret, detail, grant_only)
 
 
 def _race_wins(race: str, target: int) -> tuple[Callable, Callable, Callable]:

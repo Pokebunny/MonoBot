@@ -107,13 +107,15 @@ class Replays(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        """Announce achievements that a deploy's rule changes just handed out.
+        """Announce what a deploy's rule changes did to the ledger — both the
+        badges it handed out and the ones it took back.
 
-        A sweep normally grants nothing — everyone's badges are already in the
-        ledger — so this is silent on an ordinary restart. It only speaks when
-        the rules moved under the existing history (a threshold re-based, a
-        new achievement added), which otherwise lands invisibly: people would
-        find a new badge on their profile with no idea why.
+        A reconcile normally does nothing at all — the ledger already agrees
+        with the rules — so this is silent on an ordinary restart. It speaks
+        when the rules moved under the existing history, which otherwise lands
+        invisibly: people would find a badge appear or vanish with no idea
+        why. Announcing the removals is the whole reason revoking is
+        acceptable; a silent one is just a bug report waiting to happen.
 
         on_ready fires again on every gateway reconnect, so the flag keeps one
         process to one announcement."""
@@ -121,15 +123,15 @@ class Replays(commands.Cog):
             return
         self._swept = True
         try:
-            granted = achievements.sweep_new_unlocks(self.store, self.achievements)
+            granted, revoked = achievements.reconcile(self.store, self.achievements)
         except Exception:
-            logger.exception("Achievement sweep on startup failed")
+            logger.exception("Achievement reconcile on startup failed")
             return
-        if not granted:
+        if not (granted or revoked):
             return
-        logger.info("Startup sweep granted %d achievements", len(granted))
-        names = {h: (self.store.aliases_for_handles([h]) or [h])[0] for h, _ in granted}
-        embed = match_embeds.achievement_sweep(granted, names)
+        logger.info("Startup reconcile: %d granted, %d revoked", len(granted), len(revoked))
+        names = {h: (self.store.aliases_for_handles([h]) or [h])[0] for h, _ in list(granted) + list(revoked)}
+        embed = match_embeds.achievement_sweep(granted, names, revoked)
         for channel_id in sorted(self._watched_channels()):
             channel = self.client.get_channel(channel_id)
             if channel is None:
@@ -137,7 +139,7 @@ class Replays(commands.Cog):
             try:
                 await channel.send(embed=embed)
             except discord.HTTPException:
-                logger.exception("Could not announce the achievement sweep in %s", channel_id)
+                logger.exception("Could not announce the achievement reconcile in %s", channel_id)
 
     def _watched_channels(self) -> set[int]:
         """Channels watched for replays: the runtime !watchreplays set plus

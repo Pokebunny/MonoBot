@@ -27,10 +27,10 @@ SPECS: list[AchievementSpec] = [
     # for. Epic rungs may be held; Legendary rungs must be years out.
     #
     # Rungs step ~2-2.5x and each rarity lands in a holder band measured over
-    # the 132 players in the community DB: Common >=25%, Uncommon 10-25%,
-    # Rare 4-10%, Epic 1-4%, Legendary unheld. Rarity only ever moves UP --
-    # the unlock ledger is append-only and grandfathered, so demoting a held
-    # badge would cheapen something players already show off.
+    # the community DB: Common >=25%, Uncommon 10-25%, Rare 4-10%, Epic 1-4%,
+    # Legendary unheld. Rarity is display-only and moves in both directions --
+    # it is re-tuned against how often a badge actually turns up, which is a
+    # label change and never touches the ledger.
     # -- career: volume ---------------------------------------------------
     _spec("first_game", "Fresh Meat", "🐣", "Common", "Play your first monobattle", _career("games", 1)),
     _spec("settling_in", "Settling In", "🏕️", "Common", "Play 10 games", _career("games", 10)),
@@ -180,6 +180,7 @@ SPECS: list[AchievementSpec] = [
         "Rare",
         f"Upload {CHRONICLER_UPLOADS} replays",
         (lambda h: False, None),  # granted from upload counts, never derived
+        grant_only=True,  # ...so the reconciler must not read that as "lost it"
     ),
     # -- career: calendar -------------------------------------------------
     _spec(

@@ -75,18 +75,19 @@ class AchievementBook:
         self.histories: dict[str, PlayerHistory] = {}
         self.earned: dict[str, dict[str, Earned]] = {}  # handle -> key -> Earned
         self._last_countable_at: datetime.datetime | None = None
-        # Dynamic unit win-rate table (see _compute_unit_winrates): rankable
-        # units -> win rate, for Overqualified's lobby-worst check.
-        self._unit_winrates: dict[str, float] = {}
+        # Running unit record (pick -> [wins, games]) for Overqualified's
+        # lobby-worst check, advanced match by match. NOT a table over all of
+        # history: scoring a July lobby with September's win rates lets a game
+        # someone else plays today decide who was the underdog back then, so
+        # the badge would appear and disappear under a reconciling ledger.
+        self._unit_counts: dict[str, list[int]] = {}
 
     @classmethod
     def from_matches(
         cls, matches, merge_map: dict[str, str] | None = None, epoch: datetime.datetime | None = None
     ) -> "AchievementBook":
         book = cls(merge_map, epoch)
-        ordered = sorted(matches, key=lambda m: _naive(m.played_at))
-        book._compute_unit_winrates(ordered)
-        for match in ordered:
+        for match in sorted(matches, key=lambda m: _naive(m.played_at)):
             if is_countable(match):
                 book._tally_match(match)
         return book
@@ -94,22 +95,34 @@ class AchievementBook:
     def canonical(self, handle: str) -> str:
         return self._merge.get(handle, handle)
 
-    def _compute_unit_winrates(self, matches) -> None:
-        """Unit win rates, pulled live from match history — no hardcoded rates.
-        Only units with enough games are rankable. Recomputed on every rebuild,
-        so Overqualified's table tracks the meta on its own."""
-        rates = _unit_win_rates(matches)
-        self._unit_winrates = {pick: wr for pick, (wr, games) in rates.items() if games >= MIN_UNIT_GAMES_FOR_RANKING}
+    def _advance_unit_record(self, match: MonobattleMatch) -> None:
+        """Fold one match into the running unit record. Called AFTER the match
+        is scored, so a game never helps decide its own underdog."""
+        for p in match.players:
+            if not p.pick:
+                continue
+            c = self._unit_counts.setdefault(p.pick, [0, 0])
+            c[1] += 1
+            if p.team == match.winning_team:
+                c[0] += 1
+
+    def _rankable_winrates(self) -> dict[str, float]:
+        """Win rate for each unit with enough games to rank, as of now in the
+        walk. Units below the bar simply aren't rankable yet, which is why
+        Overqualified cannot be earned in the community's first weeks."""
+        return {pick: w / g for pick, (w, g) in self._unit_counts.items() if g >= MIN_UNIT_GAMES_FOR_RANKING}
 
     def _lobby_worst_picks(self, match: MonobattleMatch) -> set[str]:
-        """The lobby's lowest-win-rate pick(s) among rankable units. Being the
-        MVP on one of these means everyone else drew a better unit — a real
-        feat regardless of the unit's absolute win rate, so there's no floor."""
-        rated = {p.pick for p in match.players if p.pick in self._unit_winrates}
+        """The lobby's lowest-win-rate pick(s) among rankable units, judged on
+        the record BEFORE this match. Being the MVP on one of these means
+        everyone else drew a better unit — a real feat regardless of the
+        unit's absolute win rate, so there's no floor."""
+        rates = self._rankable_winrates()
+        rated = {p.pick for p in match.players if p.pick in rates}
         if not rated:
             return set()
-        worst = min(self._unit_winrates[pick] for pick in rated)
-        return {pick for pick in rated if self._unit_winrates[pick] == worst}
+        worst = min(rates[pick] for pick in rated)
+        return {pick for pick in rated if rates[pick] == worst}
 
     def _tally_match(self, match: MonobattleMatch) -> None:
         ctx = _match_context(match)
@@ -134,6 +147,7 @@ class AchievementBook:
             for spec in SPECS:
                 if spec.key not in unlocked and spec.check(history):
                     unlocked[spec.key] = Earned(spec, match.played_at)
+        self._advance_unit_record(match)
 
     # -- reads -----------------------------------------------------------
 
@@ -268,6 +282,42 @@ def sweep_grants(store, cache: AchievementCache) -> int:
     per-match announcements would be a wall of stale badges. Returns how many
     rows were granted."""
     return len(sweep_new_unlocks(store, cache))
+
+
+def reconcile(store, cache: AchievementCache) -> tuple[list[tuple[str, Earned]], list[tuple[str, AchievementSpec]]]:
+    """Bring the ledger in line with what the rules now say, both directions.
+    Returns (granted, revoked) for announcement.
+
+    Revoking is safe here for exactly two reasons, and both are load-bearing:
+
+    1. Grant-only specs are excluded. Chronicler comes from upload counts and
+       its check is `lambda h: False`, so "not derived" means "not visible",
+       not "not earned" — reconciling it would strip people who are well over
+       the bar.
+    2. The engine is reproducible. Every context a spec reads is computed from
+       the matches BEFORE the one being scored, so replaying the same history
+       twice gives the same answer. This was not true while Overqualified's
+       unit win-rate table spanned all of history (a game played today could
+       change who the underdog was in July), and that badge duly flickered on
+       and off; see AchievementBook._advance_unit_record.
+
+    Anything that breaks either property turns this from a correction into a
+    badge that randomly disappears, so weigh a new spec against both."""
+    book = cache.book()
+    granted = sweep_new_unlocks(store, cache)
+    revoked: list[tuple[str, AchievementSpec]] = []
+    rows: list[tuple[str, str]] = []
+    for handle, key in store.all_unlocks():
+        spec = SPECS_BY_KEY.get(key)
+        if spec is None or spec.grant_only:
+            continue  # unknown keys are someone else's business; grant-only is not ours
+        if key not in book.earned.get(book.canonical(handle), {}):
+            rows.append((handle, key))
+            revoked.append((book.canonical(handle), spec))
+    if rows:
+        store.revoke_unlocks(rows)
+        logger.info("Reconcile revoked %d unlocks", len(rows))
+    return granted, revoked
 
 
 def sweep_new_unlocks(store, cache: AchievementCache) -> list[tuple[str, Earned]]:

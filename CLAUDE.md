@@ -43,6 +43,17 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   Ranking on a level holds up where ranking on a residual does not; keep it
   that way. Career-wide and cached in `DuoCache`, since the walk does twelve
   model updates per match.
+- **Achievements** are derived from history but *held* in the
+  `achievement_unlocks` ledger, which is reconciled rather than append-only:
+  `achievements.reconcile` grants and revokes, and the startup hook announces
+  both (a silent revoke is a bug report waiting to happen). Revoking is only
+  safe while two properties hold — specs flagged `grant_only` are skipped
+  (Chronicler comes from upload counts, so "not derived" means "not visible"),
+  and every context a spec reads is computed from matches BEFORE the one being
+  scored. The second one was once false: Overqualified's unit win-rate table
+  spanned all of history, so a game played today changed who the underdog was
+  in July and the badge flickered on and off. Any new spec must satisfy both.
+  Rarity is display-only and may move either way.
 - The **map** every game shows is not `matches.map_name`: every monobattle is
   played on one arcade map whose name never changes. The rotation happens when
   its author republishes it with new terrain, changing `matches.map_hash`, and

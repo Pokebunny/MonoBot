@@ -376,9 +376,14 @@ def achievement_catalog(
     return embed
 
 
-def achievement_sweep(grants: list[tuple[str, Earned]], names: dict[str, str]) -> discord.Embed:
-    """Announcement for a batch of achievements granted by a rules change
-    rather than by a game — see achievements.sweep_new_unlocks.
+def achievement_sweep(
+    grants: list[tuple[str, Earned]],
+    names: dict[str, str],
+    losses: list[tuple[str, AchievementSpec]] | None = None,
+) -> discord.Embed:
+    """Announcement for what a rules change did to the ledger rather than what
+    a game did — see achievements.reconcile. `losses` are badges the new rules
+    no longer award, which the reconcile has just taken back.
 
     Grouped by achievement, not by player: one re-based threshold can hand the
     same badge to twenty people at once, and twenty near-identical lines read
@@ -407,8 +412,22 @@ def achievement_sweep(grants: list[tuple[str, Earned]], names: dict[str, str]) -
     if dropped:
         lines.append(f"*…and {dropped} more.*")
     embed = discord.Embed(title="Achievements updated", color=ACCENT)
-    embed.description = "\n\n".join(lines)
-    embed.set_footer(text="A rule changed, so these were awarded on the history that was already recorded.")
+    embed.description = "\n\n".join(lines) or "*No new achievements.*"
+    # Removals get their own field rather than a line in the list: a badge
+    # going away is the part people will want explained, and burying it under
+    # the grants is how it becomes "the bot ate my achievement".
+    if losses:
+        by_spec: dict[str, list[str]] = {}
+        specs: dict[str, AchievementSpec] = {}
+        for handle, spec in losses:
+            specs[spec.key] = spec
+            by_spec.setdefault(spec.key, []).append(names.get(handle, handle))
+        lost = [
+            f"{specs[k].emoji} **{specs[k].name}** — {', '.join(sorted(set(v), key=str.lower))}"
+            for k, v in sorted(by_spec.items(), key=lambda kv: -len(kv[1]))
+        ]
+        embed.add_field(name="No longer earned", value="\n".join(lost)[:1024], inline=False)
+    embed.set_footer(text="A rule changed, so the ledger was re-checked against the history already recorded.")
     return embed
 
 

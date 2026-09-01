@@ -2,11 +2,22 @@
 
 Split responsibilities: this package DERIVES achievement state from match
 history (a pure function, like ratings), but what a player HOLDS is the
-`achievement_unlocks` ledger in storage — an append-only record written when
-a crossing is first observed at ingest. The ledger is what profiles and the
-gallery show; it is never revoked by later data corrections, threshold
-tuning, or spec removal (grandfathering). The derived book supplies candidate
-state, progress bars, and the diff that decides what to grant and announce.
+`achievement_unlocks` ledger in storage — written when a crossing is first
+observed at ingest. The ledger is what profiles and the gallery show, and the
+derived book supplies candidate state, progress bars, and the diff that
+decides what to grant and announce.
+
+The ledger is RECONCILED, not append-only: `reconcile` brings it back in line
+with the rules in both directions and hands the caller both lists, so a badge
+is never taken away silently. Two properties make revoking safe, and both are
+load-bearing — a new spec that breaks either turns a correction into a badge
+that randomly disappears:
+- specs marked `grant_only` are never revoked, because "the engine did not
+  derive it" means "the engine cannot see it" (Chronicler counts uploads);
+- every context a spec reads comes from matches BEFORE the one being scored,
+  so replaying the same history twice gives the same answer.
+Rarity is only a label and moves in either direction; it never touches the
+ledger, so a re-tuned tier costs nobody a badge.
 
 Two kinds of spec, split by `Tally` view:
 - career achievements read `history.career` — accumulated over ALL stored
@@ -45,6 +56,7 @@ from services.achievements.core import (
     PlayerHistory,
     Tally,
     is_countable,
+    is_grant_only,
     is_secret,
 )
 from services.achievements.engine import (
@@ -55,6 +67,7 @@ from services.achievements.engine import (
     grant_new_unlocks,
     ledger_for_group,
     ledger_holder_counts,
+    reconcile,
     sweep_grants,
     sweep_new_unlocks,
 )
@@ -73,6 +86,7 @@ __all__ = [
     "Earned",
     "PlayerHistory",
     "Tally",
+    "is_grant_only",
     "is_secret",
     "is_countable",
     # catalogue
@@ -89,4 +103,5 @@ __all__ = [
     "sweep_new_unlocks",
     "ledger_for_group",
     "ledger_holder_counts",
+    "reconcile",
 ]

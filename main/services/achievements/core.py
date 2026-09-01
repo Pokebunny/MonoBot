@@ -52,6 +52,12 @@ UNDERDOG_UNITS = ("BroodLord", "Archon", "Queen")
 # reads as a real feat even when that unit isn't bad in absolute terms.
 MIN_UNIT_GAMES_FOR_RANKING = 10
 
+# Long enough that surviving on nothing, or without anti-air, is a real feat.
+# Measured in BATTLE time (see MonobattleMatch.battle_seconds): every duration
+# an achievement reads is fighting time, never the replay's length, so a badge
+# always agrees with the clock shown on the match summary.
+_LONG_GAME_SECONDS = 600
+
 # Chronicler is granted from upload counts, not match history (see the
 # replays cog); its check never fires in the derived engine.
 CHRONICLER_UPLOADS = 25
@@ -179,7 +185,7 @@ class Tally:
         won = player.team == match.winning_team
         now = _naive(match.played_at)
         self.games += 1
-        self.longest_game = max(self.longest_game, match.duration_seconds)
+        self.longest_game = max(self.longest_game, match.battle_seconds)
         if now.hour in _NIGHT_HOURS:
             self.night_games += 1
 
@@ -225,9 +231,9 @@ class Tally:
             self.loss_streak = 0
             self.streak += 1
             self.best_streak = max(self.best_streak, self.streak)
-            if self.fastest_win is None or match.duration_seconds < self.fastest_win:
-                self.fastest_win = match.duration_seconds
-            self.max_win_duration = max(self.max_win_duration, match.duration_seconds)
+            if self.fastest_win is None or match.battle_seconds < self.fastest_win:
+                self.fastest_win = match.battle_seconds
+            self.max_win_duration = max(self.max_win_duration, match.battle_seconds)
             if self._last_played is not None and _naive(match.played_at) - self._last_played >= datetime.timedelta(
                 days=30
             ):
@@ -358,7 +364,7 @@ class Tally:
             self.max_static_defense = max(self.max_static_defense, player.static_defense)
         if won and player.resources_floated is not None and player.resources_floated >= 5000:
             self.hoard_wins += 1  # won without ever spending the mountain of resources
-        if won and match.duration_seconds >= 600:
+        if won and match.battle_seconds >= _LONG_GAME_SECONDS:
             if player.resources_floated is not None and player.resources_floated < 200:
                 self.thrifty_wins += 1
             if player.pick in _NO_ANTI_AIR_PICKS:
@@ -372,7 +378,7 @@ class Tally:
                     self.team_grounded_wins += 1
         if (
             won
-            and match.duration_seconds >= 600
+            and match.battle_seconds >= _LONG_GAME_SECONDS
             and ctx.min_kills is not None
             and player.resources_killed == ctx.min_kills
         ):

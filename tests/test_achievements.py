@@ -37,7 +37,7 @@ def _player(name, team, pick="Zergling", kills=None, **kwargs):
     )
 
 
-def _match(winning_team=1, played_at=None, duration=900, players=None, **kwargs):
+def _match(winning_team=1, played_at=None, duration=900, players=None, pick_phase_seconds=60, **kwargs):
     players = players or [_player(f"A{i}", 1) for i in range(1, 5)] + [_player(f"B{i}", 2) for i in range(1, 5)]
     return MonobattleMatch(
         file_name="test.SC2Replay",
@@ -46,7 +46,7 @@ def _match(winning_team=1, played_at=None, duration=900, players=None, **kwargs)
         duration_seconds=duration,
         game_type="4v4",
         pick_mode="blind_random",
-        pick_phase_seconds=60,
+        pick_phase_seconds=pick_phase_seconds,
         players=players,
         winning_team=winning_team,
         winner_confidence=1.0,
@@ -570,3 +570,31 @@ def test_retired_spec_rows_are_kept_but_hidden(store):
     store.record_unlocks([("A1", "some_retired_key", "2026-01-01T00:00:00")])
     assert ledger_for_group(store, ["A1"]) == []
     assert store.unlock_count() == 1  # the row itself is never deleted
+
+
+def test_duration_achievements_measure_battle_time_not_replay_length():
+    """A drafted game whose replay runs 20:30 is 16:30 of actual fighting, so
+    it must not award The Closer — a badge has to agree with the clock the
+    match summary shows."""
+    match = _match(duration=1230, pick_phase_seconds=240)
+    assert match.battle_seconds == 990  # under the 20-minute bar
+    assert "the_closer" not in _keys(_book([match]), "A1")
+    assert "the_closer" in _keys(_book([_match(duration=1230, pick_phase_seconds=0)]), "A1")
+
+
+def test_blitz_measures_battle_time_too():
+    """The draft cuts the other way for speed: a 5:40 replay of a
+    blind-random game is a 4:37 win, which is a Blitz."""
+    match = _match(duration=340, pick_phase_seconds=63)
+    assert match.battle_seconds == 277
+    assert "blitz" in _keys(_book([match]), "A1")
+    assert "blitz" not in _keys(_book([_match(duration=340, pick_phase_seconds=0)]), "A1")
+
+
+def test_long_game_qualifiers_use_battle_time():
+    """'Win a 10+ minute game with the fewest kills' reads the same clock."""
+    losers = [_player(f"B{i}", 2, kills=9000) for i in range(1, 5)]
+    winners = [_player("A1", 1, kills=10)] + [_player(f"A{i}", 1, kills=9000) for i in range(2, 5)]
+    short = _match(duration=660, pick_phase_seconds=240, players=winners + losers)
+    assert short.battle_seconds == 420  # a 11:00 replay, but only 7:00 of game
+    assert "along_for_the_ride" not in _keys(_book([short]), "A1")

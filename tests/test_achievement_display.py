@@ -9,9 +9,13 @@ from services import match_embeds
 from services.achievements import SPECS_BY_KEY, Earned
 
 DT = datetime.datetime(2026, 1, 1)
-SECRET = SPECS_BY_KEY["one_man_army"]  # Legendary, secret
-SECRET_RECIPE = SECRET.description  # "Outkill the entire enemy team by yourself"
-OPEN = SPECS_BY_KEY["first_game"]  # Common, not secret
+SECRET = SPECS_BY_KEY["one_man_army"]  # secret: "Outkill the entire enemy team by yourself"
+SECRET_RECIPE = SECRET.description
+OPEN = SPECS_BY_KEY["first_game"]  # not secret
+# Take the tier from the spec, not a literal — rarities get re-tuned against
+# how often a badge actually turns up, and that must not break these gates.
+SECRET_TIER = SECRET.rarity
+OPEN_TIER = OPEN.rarity
 
 
 def _text(embed) -> str:
@@ -22,7 +26,7 @@ def _text(embed) -> str:
 
 
 def test_catalog_hides_undiscovered_secret_name():
-    embed = match_embeds.achievement_catalog("Legendary", earned_keys=set(), discovered_keys=set())
+    embed = match_embeds.achievement_catalog(SECRET_TIER, earned_keys=set(), discovered_keys=set())
     text = _text(embed)
     assert "One-Man Army" not in text
     assert SECRET_RECIPE not in text
@@ -32,7 +36,7 @@ def test_catalog_hides_undiscovered_secret_name():
 def test_catalog_shows_discovered_secret_name_but_masks_recipe():
     # Discovered by the community, but this viewer hasn't earned it.
     embed = match_embeds.achievement_catalog(
-        "Legendary", earned_keys=set(), discovered_keys={"one_man_army"}, private=True
+        SECRET_TIER, earned_keys=set(), discovered_keys={"one_man_army"}, private=True
     )
     text = _text(embed)
     assert "One-Man Army" in text
@@ -42,15 +46,15 @@ def test_catalog_shows_discovered_secret_name_but_masks_recipe():
 
 def test_catalog_reveals_recipe_only_when_earned_and_private():
     earned, discovered = {"one_man_army"}, {"one_man_army"}
-    private = match_embeds.achievement_catalog("Legendary", earned, discovered, private=True)
-    public = match_embeds.achievement_catalog("Legendary", earned, discovered, private=False)
+    private = match_embeds.achievement_catalog(SECRET_TIER, earned, discovered, private=True)
+    public = match_embeds.achievement_catalog(SECRET_TIER, earned, discovered, private=False)
     assert SECRET_RECIPE in _text(private)  # ephemeral view: the how is revealed
     assert SECRET_RECIPE not in _text(public)  # public !catalog: still masked
     assert "One-Man Army" in _text(public)  # ...but the name shows
 
 
 def test_catalog_lists_open_achievements_plainly():
-    embed = match_embeds.achievement_catalog("Common", earned_keys={"first_game"}, discovered_keys=set())
+    embed = match_embeds.achievement_catalog(OPEN_TIER, earned_keys={"first_game"}, discovered_keys=set())
     text = _text(embed)
     assert OPEN.description in text  # non-secret recipe always visible
     assert "✅" in text  # earned marker

@@ -267,16 +267,28 @@ def sweep_grants(store, cache: AchievementCache) -> int:
     silently — used after bulk writes (channel backfills, re-parses) where
     per-match announcements would be a wall of stale badges. Returns how many
     rows were granted."""
+    return len(sweep_new_unlocks(store, cache))
+
+
+def sweep_new_unlocks(store, cache: AchievementCache) -> list[tuple[str, Earned]]:
+    """sweep_grants, but returning what it granted as (canonical handle,
+    Earned) so a caller can announce it.
+
+    The normal sweep grants nothing: everyone's badges are already in the
+    ledger. It only returns rows when the RULES moved — a threshold re-based,
+    a new achievement added — which is exactly the change worth telling the
+    channel about, and why the deploy announcement hangs off this."""
     book = cache.book()
-    rows = []
+    rows, granted = [], []
     for handle, unlocked in book.earned.items():
         held = {key for key, _ in store.unlocks_for(store.merged_handles(handle))}
-        rows += [
-            (handle, key, _naive(earned.earned_at).isoformat()) for key, earned in unlocked.items() if key not in held
-        ]
+        for key, earned in unlocked.items():
+            if key not in held:
+                rows.append((handle, key, _naive(earned.earned_at).isoformat()))
+                granted.append((handle, earned))
     if rows:
         store.record_unlocks(rows)
-    return len(rows)
+    return granted
 
 
 def grant_new_unlocks(store, cache: AchievementCache, match: MonobattleMatch) -> list[tuple[str, Earned]]:

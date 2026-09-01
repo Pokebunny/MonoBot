@@ -7,12 +7,14 @@ from services.achievements import (
     SPECS_BY_KEY,
     AchievementBook,
     AchievementCache,
+    Earned,
     ensure_seeded,
     grant_new_unlocks,
     is_secret,
     ledger_for_group,
     ledger_holder_counts,
     sweep_grants,
+    sweep_new_unlocks,
 )
 from services.storage import MatchStore, hash_replay
 
@@ -598,3 +600,44 @@ def test_long_game_qualifiers_use_battle_time():
     short = _match(duration=660, pick_phase_seconds=240, players=winners + losers)
     assert short.battle_seconds == 420  # a 11:00 replay, but only 7:00 of game
     assert "along_for_the_ride" not in _keys(_book([short]), "A1")
+
+
+# -- deploy sweep announcement -------------------------------------------
+
+
+def test_sweep_new_unlocks_is_quiet_when_nothing_changed(tmp_path):
+    store = MatchStore(str(tmp_path / "t.db"))
+    store.ingest(_match(), hash_replay(b"one"))
+    cache = AchievementCache(store)
+    assert sweep_new_unlocks(store, cache)  # first sweep grants the backlog
+    assert sweep_new_unlocks(store, cache) == []  # a restart says nothing
+
+
+def test_sweep_new_unlocks_reports_what_it_granted(tmp_path):
+    store = MatchStore(str(tmp_path / "t.db"))
+    store.ingest(_match(), hash_replay(b"one"))
+    granted = sweep_new_unlocks(store, AchievementCache(store))
+    handles = {h for h, _ in granted}
+    assert "A1" in handles
+    assert all(isinstance(e.spec.key, str) for _, e in granted)
+
+
+def test_achievement_sweep_groups_by_achievement():
+    from services.match_embeds import achievement_sweep
+
+    spec = SPECS_BY_KEY["blitz"]
+    grants = [(h, Earned(spec, AFTER_EPOCH)) for h in ("h1", "h2", "h3")]
+    embed = achievement_sweep(grants, {"h1": "Ann", "h2": "Bo", "h3": "Cy"})
+    # One line for the achievement, one for its winners — not three lines.
+    assert embed.description.count("Blitz") == 1
+    assert "Ann, Bo, Cy" in embed.description
+
+
+def test_achievement_sweep_keeps_secret_recipes_hidden():
+    from services.achievements import is_secret
+    from services.match_embeds import achievement_sweep
+
+    secret = next(s for s in SPECS if is_secret(s))
+    embed = achievement_sweep([("h1", Earned(secret, AFTER_EPOCH))], {"h1": "Ann"})
+    assert secret.name in embed.description
+    assert secret.description.lower() not in embed.description.lower()

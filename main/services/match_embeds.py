@@ -376,6 +376,42 @@ def achievement_catalog(
     return embed
 
 
+def achievement_sweep(grants: list[tuple[str, Earned]], names: dict[str, str]) -> discord.Embed:
+    """Announcement for a batch of achievements granted by a rules change
+    rather than by a game — see achievements.sweep_new_unlocks.
+
+    Grouped by achievement, not by player: one re-based threshold can hand the
+    same badge to twenty people at once, and twenty near-identical lines read
+    as spam where one line with twenty names reads as news. Rarest first, same
+    as the per-match announcement.
+
+    Secrets name themselves and nothing else, for the same reason they do
+    there — the recipe would spoil the channel."""
+    by_key: dict[str, list[str]] = {}
+    specs: dict[str, AchievementSpec] = {}
+    for handle, earned in grants:
+        specs[earned.spec.key] = earned.spec
+        by_key.setdefault(earned.spec.key, []).append(names.get(handle, handle))
+    order = sorted(by_key, key=lambda k: (-RARITIES.index(specs[k].rarity), -len(by_key[k])))
+    lines, budget, dropped = [], 3900, 0
+    for key in order:
+        spec = specs[key]
+        who = sorted(set(by_key[key]), key=str.lower)
+        detail = "" if is_secret(spec) else f" — {spec.description.lower()}"
+        line = f"{RARITY_EMOJI[spec.rarity]} {spec.emoji} **{spec.name}**{detail}\n{', '.join(who)}"
+        if budget - len(line) < 0:
+            dropped += len(who)
+            continue
+        budget -= len(line) + 1
+        lines.append(line)
+    if dropped:
+        lines.append(f"*…and {dropped} more.*")
+    embed = discord.Embed(title="Achievements updated", color=ACCENT)
+    embed.description = "\n\n".join(lines)
+    embed.set_footer(text="A rule changed, so these were awarded on the history that was already recorded.")
+    return embed
+
+
 def achievement_unlocks(
     unlocks: list[tuple[str, Earned]], first_discovery_keys: frozenset[str] = frozenset()
 ) -> discord.Embed:

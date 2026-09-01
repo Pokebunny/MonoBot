@@ -56,6 +56,7 @@ from services.achievements.engine import (
     ledger_for_group,
     ledger_holder_counts,
     sweep_grants,
+    sweep_new_unlocks,
 )
 from services.achievements.specs import SECRET_KEYS, SPECS, SPECS_BY_KEY
 
@@ -85,6 +86,7 @@ __all__ = [
     "grant_direct",
     "grant_new_unlocks",
     "sweep_grants",
+    "sweep_new_unlocks",
     "ledger_for_group",
     "ledger_holder_counts",
 ]

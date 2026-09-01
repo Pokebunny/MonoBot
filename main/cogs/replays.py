@@ -103,6 +103,41 @@ class Replays(commands.Cog):
         # First run over an existing history: grant the career backfill
         # silently so the first upload doesn't announce years of badges.
         achievements.ensure_seeded(self.store, self.achievements)
+        self._swept = False
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Announce achievements that a deploy's rule changes just handed out.
+
+        A sweep normally grants nothing — everyone's badges are already in the
+        ledger — so this is silent on an ordinary restart. It only speaks when
+        the rules moved under the existing history (a threshold re-based, a
+        new achievement added), which otherwise lands invisibly: people would
+        find a new badge on their profile with no idea why.
+
+        on_ready fires again on every gateway reconnect, so the flag keeps one
+        process to one announcement."""
+        if self._swept:
+            return
+        self._swept = True
+        try:
+            granted = achievements.sweep_new_unlocks(self.store, self.achievements)
+        except Exception:
+            logger.exception("Achievement sweep on startup failed")
+            return
+        if not granted:
+            return
+        logger.info("Startup sweep granted %d achievements", len(granted))
+        names = {h: (self.store.aliases_for_handles([h]) or [h])[0] for h, _ in granted}
+        embed = match_embeds.achievement_sweep(granted, names)
+        for channel_id in sorted(self._watched_channels()):
+            channel = self.client.get_channel(channel_id)
+            if channel is None:
+                continue
+            try:
+                await channel.send(embed=embed)
+            except discord.HTTPException:
+                logger.exception("Could not announce the achievement sweep in %s", channel_id)
 
     def _watched_channels(self) -> set[int]:
         """Channels watched for replays: the runtime !watchreplays set plus

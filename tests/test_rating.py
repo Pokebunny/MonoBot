@@ -177,3 +177,25 @@ def test_rating_cache_follows_the_open_season(tmp_path):
         assert career.book().leaderboard(min_games=1)
     finally:
         store.close()
+
+
+def test_battle_seconds_excludes_the_pick_phase():
+    match = _match(1, duration=900)
+    match.pick_phase_seconds = 63  # a blind-random draft
+    assert match.battle_seconds == 837
+
+
+def test_battle_seconds_never_goes_negative():
+    # A handful of games end during the draft itself.
+    match = _match(1, duration=120)
+    match.pick_phase_seconds = 204
+    assert match.battle_seconds == 0
+
+
+def test_match_summary_shows_battle_time_not_replay_length():
+    from services.match_embeds import match_summary
+
+    match = _match(1, duration=900)
+    match.pick_phase_seconds = 240  # a drafted game: four minutes of picking
+    assert "11:00" in match_summary(match).description
+    assert "15:00" not in match_summary(match).description

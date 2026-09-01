@@ -73,7 +73,7 @@ def match_summary(
     embed = discord.Embed(title=map_label or match.map_name, color=color)
     embed.description = (
         f"{match.game_type} · {_PICK_MODE_LABELS.get(match.pick_mode, match.pick_mode)}"
-        f" · {_duration(match.duration_seconds)}"
+        f" · {_duration(match.battle_seconds)}"
         f" · <t:{int(match.played_at.timestamp())}:d>"
     )
 

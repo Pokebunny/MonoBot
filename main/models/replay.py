@@ -118,6 +118,19 @@ class MonobattleMatch(BaseModel):
     comeback_deficit: int | None = None  # winner's worst kill-value deficit
     lead_changes: int | None = None  # meaningful kill-lead flips over the game
 
+    @property
+    def battle_seconds(self) -> int:
+        """How long the fighting actually lasted: the replay's length less the
+        pick phase. This is what people mean by how long a game was — the
+        draft is dead time on the clock, and it is a whole minute of a
+        blind-random game and three to four minutes of a drafted one.
+
+        Clamped at zero for the handful of games that ended before the picks
+        were even finished. NOTE that the rating gate, the achievement ledger
+        and MatchStore's queries all still measure duration_seconds; moving
+        those would change which games rate and who holds which badge."""
+        return max(0, self.duration_seconds - self.pick_phase_seconds)
+
     def team(self, number: int) -> list[MatchPlayer]:
         return [p for p in self.players if p.team == number]
 

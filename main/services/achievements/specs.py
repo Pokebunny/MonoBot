@@ -253,7 +253,7 @@ SPECS: list[AchievementSpec] = [
         "Highway Robbery",
         "🦝",
         "Rare",
-        "Trade at 5x efficiency (2,000+ value lost)",
+        "Trade at 5x efficiency",
         _live("best_trade", 5.0),
     ),
     _spec(

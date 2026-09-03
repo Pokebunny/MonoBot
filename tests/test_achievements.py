@@ -723,3 +723,29 @@ def test_lobby_context_ignores_games_played_later():
     # Whatever the extra games grant, they must never REMOVE an earlier badge.
     for handle, keys in keys_then.items():
         assert keys <= set(book_later.earned.get(handle, {})), handle
+
+
+def test_highway_robbery_uses_the_ratio_the_award_prints():
+    """The badge said 5x while the Best Trader line beside it said 4.4x, on
+    the same two numbers — 13,650 destroyed for 2,100 lost is 6.5x raw but
+    4.4x once the prior is applied. One metric, so they can't disagree."""
+    trader = _player("A1", 1, kills=13650, resources_lost=2100)
+    others = [_player(f"A{i}", 1) for i in range(2, 5)] + [_player(f"B{i}", 2) for i in range(1, 5)]
+    book = _book([_match(players=[trader] + others)])
+    assert "highway_robbery" not in _keys(book, "A1")
+
+
+def test_highway_robbery_rewards_a_game_lost_almost_nothing():
+    """The old 2,000-lost floor excluded the very best games: trading well
+    while barely losing anything could not qualify at all."""
+    trader = _player("A1", 1, kills=12000, resources_lost=100)
+    others = [_player(f"A{i}", 1) for i in range(2, 5)] + [_player(f"B{i}", 2) for i in range(1, 5)]
+    book = _book([_match(players=[trader] + others)])
+    assert "highway_robbery" in _keys(book, "A1")
+
+
+def test_highway_robbery_still_needs_real_kills():
+    """A player who barely fought scores near zero rather than infinity."""
+    quiet = _player("A1", 1, kills=200, resources_lost=0)
+    others = [_player(f"A{i}", 1) for i in range(2, 5)] + [_player(f"B{i}", 2) for i in range(1, 5)]
+    assert "highway_robbery" not in _keys(_book([_match(players=[quiet] + others)]), "A1")

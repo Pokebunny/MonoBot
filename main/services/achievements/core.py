@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Callable, NamedTuple
 
 from models.replay import PICKABLE_UNITS, UNIT_RACE, MatchPlayer, MonobattleMatch
-from services.awards import TRADE_PRIOR
+from services.awards import trade_efficiency
 from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE
 
 RARITIES = ["Common", "Uncommon", "Rare", "Epic", "Legendary"]
@@ -339,15 +339,11 @@ class Tally:
             self.max_econ_killed = max(self.max_econ_killed, player.econ_killed)
         if player.tech_killed:
             self.max_tech_killed = max(self.max_tech_killed, player.tech_killed)
-        if player.resources_killed is not None and player.resources_lost is not None:
-            # The SAME ratio the Best Trader award prints, prior and all. It
-            # used to be a raw killed/lost behind a 2,000-lost floor, which
-            # made the badge disagree with the number shown beside it: 13,650
-            # for 2,100 is 6.5x raw but 4.4x as displayed, so the channel saw
-            # a 5x badge awarded on a 4.4x line. The floor also excluded the
-            # best games outright — trading well while losing almost nothing
-            # could not qualify at all.
-            self.best_trade = max(self.best_trade, player.resources_killed / (player.resources_lost + TRADE_PRIOR))
+        # The SAME function the Best Trader award prints, not a second formula
+        # over the same two numbers — see awards.trade_efficiency for why.
+        traded = trade_efficiency(player)
+        if traded is not None:
+            self.best_trade = max(self.best_trade, traded)
         if not won and player.resources_killed:
             self.max_kills_in_loss = max(self.max_kills_in_loss, player.resources_killed)
         if won and player.resources_lost is not None:

@@ -19,6 +19,30 @@ TRADE_PRIOR = 1000
 MAX_AWARDS = 2
 
 
+def trade_efficiency(player: MatchPlayer) -> float | None:
+    """Kills per value lost, against a prior of TRADE_PRIOR lost. None when
+    the stats weren't recorded.
+
+    A raw ratio is unusable at the top of the scale — losing nothing divides
+    by zero, and 3,150 kills for 50 lost is 63x — so this used to require
+    1,000 value lost, which excluded the very games it should crown: a player
+    who killed 13,900 and lost nothing wasn't in the running. The prior is
+    added to EVERY player's losses instead of being a floor under a few, so a
+    flawless game beats a smaller efficient one (10,000 for nothing = 10.0x,
+    5,000 for 400 = 3.6x) and a player who barely fought scores near zero
+    rather than infinity (200 for nothing = 0.2x). No eligibility gate needed.
+
+    Lives here, and is imported rather than reimplemented, because the Best
+    Trader award and the Highway Robbery achievement both read it. They were
+    once two formulas over the same two numbers, and duly disagreed: 13,650
+    destroyed for 2,100 lost is 6.5x raw but 4.4x with the prior, so a 5x
+    badge got announced on a line reading 4.4x. One function, one answer.
+    """
+    if player.resources_killed is None or player.resources_lost is None:
+        return None
+    return player.resources_killed / (player.resources_lost + TRADE_PRIOR)
+
+
 class AwardSpec(NamedTuple):
     key: str  # stable id, used for career aggregation
     emoji: str
@@ -49,21 +73,7 @@ SPECS = [
         "best_trader",
         "⚖️",
         "Best Trader",
-        # Kills per value lost, against a prior of TRADE_PRIOR lost. A raw
-        # ratio is unusable at the top of the scale -- losing nothing divides
-        # by zero, and 3,150 kills for 50 lost is 63x -- so the award used to
-        # require 1,000 value lost, which excluded the very games it should
-        # crown: a player who killed 13,900 and lost nothing wasn't even in
-        # the running. The prior is added to EVERY player's losses instead of
-        # being a floor under a few, so a flawless game beats a smaller
-        # efficient one (10,000 for nothing = 10.0x, 5,000 for 400 = 3.6x)
-        # and a player who barely fought scores near zero rather than
-        # infinity (200 for nothing = 0.2x). No eligibility gate needed.
-        lambda p: (
-            (p.resources_killed / (p.resources_lost + TRADE_PRIOR))
-            if p.resources_killed is not None and p.resources_lost is not None
-            else None
-        ),
+        trade_efficiency,
         2.0,
         lambda v: f"{v:.1f}x trade efficiency",
     ),

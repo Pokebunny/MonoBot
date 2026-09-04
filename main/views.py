@@ -10,6 +10,7 @@ don't show clickable-but-dead components.
 import logging
 
 import discord
+from services.identity import Person
 
 logger = logging.getLogger(__name__)
 
@@ -88,3 +89,43 @@ class PagedBoardView(ExpiringView):
     async def last(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = self.pages - 1
         await self._show(interaction)
+
+
+class PersonPickView(ExpiringView):
+    """Ask which player was meant, when a name is genuinely shared.
+
+    Only shown for real ambiguity — two accounts matching on the SAME strength
+    of evidence (see services.identity.ambiguous). A claimed name that also
+    happens to be some other account's old alias is NOT ambiguous, and asking
+    there would be noise.
+
+    `on_pick(interaction, person)` continues whatever the caller was doing."""
+
+    def __init__(self, people: list[Person], invoker_id: str, on_pick):
+        super().__init__()
+        self.add_item(_PersonSelect(people, invoker_id, on_pick))
+
+
+class _PersonSelect(discord.ui.Select):
+    def __init__(self, people: list[Person], invoker_id: str, on_pick):
+        self.people = {str(i): p for i, p in enumerate(people[:25])}
+        self.invoker_id = invoker_id
+        self.on_pick = on_pick
+        options = [
+            discord.SelectOption(
+                label=p.sc2_name[:100],
+                description=f"{p.games} games · {'linked' if p.discord_id else 'unlinked'} · …{p.handles[-1][-6:]}"
+                if p.handles
+                else f"{p.games} games",
+                value=key,
+            )
+            for key, p in self.people.items()
+        ]
+        super().__init__(placeholder="Which player?", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if str(interaction.user.id) != self.invoker_id:
+            await interaction.response.send_message("Only the person who ran this command can choose.", ephemeral=True)
+            return
+        self.view.stop()
+        await self.on_pick(interaction, self.people[self.values[0]])

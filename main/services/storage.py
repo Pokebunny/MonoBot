@@ -708,6 +708,36 @@ class MatchStore:
         ).fetchall()
         return [r["name"] for r in rows]
 
+    def handles_by_current_name(self, sc2_name: str) -> list[str]:
+        """Accounts whose CURRENT display name is this one — the name they were
+        called in their most recent game. Distinct from handles_for_name, which
+        also matches names an account has since abandoned: someone who renamed
+        away from a name has no claim on it any more, and someone who renamed
+        INTO it does. Ordered most-played first."""
+        rows = self._conn.execute(
+            """SELECT mp.toon_handle AS h, COUNT(*) AS games,
+                      (SELECT mp2.name FROM match_players mp2 JOIN matches m2 ON m2.id = mp2.match_id
+                        WHERE mp2.toon_handle = mp.toon_handle
+                        ORDER BY m2.played_at DESC LIMIT 1) AS current_name
+               FROM match_players mp
+               WHERE mp.toon_handle != ''
+               GROUP BY mp.toon_handle
+               HAVING current_name = ? COLLATE NOCASE
+               ORDER BY games DESC""",
+            (sc2_name,),
+        ).fetchall()
+        return [r["h"] for r in rows]
+
+    def game_count_for_handles(self, handles: list[str]) -> int:
+        """Games played by a whole merge group."""
+        if not handles:
+            return 0
+        placeholders = ",".join("?" * len(handles))
+        row = self._conn.execute(
+            f"SELECT COUNT(*) AS n FROM match_players WHERE toon_handle IN ({placeholders})", handles
+        ).fetchone()
+        return row["n"]
+
     def _try_bind(self, sc2_name: str) -> None:
         """Bind an unbound link for sc2_name iff the name maps to exactly one
         account across all stored matches (else it's ambiguous — leave it)."""

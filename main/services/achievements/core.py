@@ -59,6 +59,22 @@ MIN_UNIT_GAMES_FOR_RANKING = 10
 # always agrees with the clock shown on the match summary.
 _LONG_GAME_SECONDS = 600
 
+# Untouchable: a long win in which almost nothing of yours died. 500 sits
+# under the 10th percentile of value lost in a player-game (275), and over
+# the community's 703 games it lands on ~5% of players.
+UNTOUCHED_LOST_MAX = 500
+
+# Cartographer counts distinct TERRAIN NAMES, never map hashes — the same
+# terrain comes back under a new hash every time the author republishes, so
+# hashes would hand it out for one map played twice. A fixed target rather
+# than "every map in rotation": the rotation grows, and an all-maps badge
+# would revoke itself the moment a new terrain appeared.
+CARTOGRAPHER_MAPS = 5
+
+# A civil war needs a full-ish lobby to mean anything — 3v3s happen, and
+# three-a-side rolling one race is a much smaller coincidence.
+MIN_CIVIL_WAR_PLAYERS = 6
+
 # Chronicler is granted from upload counts, not match history (see the
 # replays cog); its check never fires in the derived engine.
 CHRONICLER_UPLOADS = 25
@@ -95,6 +111,7 @@ class _MatchContext:
     all_veterans: bool = False  # every player has 50+ prior games
     community_opening: bool = False  # first game after 6+ community-wide quiet hours
     worst_winrate_picks: set[str] = field(default_factory=set)  # lobby's lowest-winrate pick(s), if a real underdog
+    map_name: str | None = None  # resolved terrain name, None when unknown
 
 
 @dataclass
@@ -112,6 +129,7 @@ class Tally:
     units_won_by_race: dict[str, set[str]] = field(default_factory=dict)
     units_beaten: set[str] = field(default_factory=set)  # enemy picks defeated
     races_won: set[str] = field(default_factory=set)
+    maps_won: set[str] = field(default_factory=set)  # distinct terrains won on
     pure_race_wins: dict[str, int] = field(default_factory=dict)  # all-one-race team wins
     teammates: set[str] = field(default_factory=set)
     best_unit_wins: int = 0
@@ -125,6 +143,7 @@ class Tally:
     welcomes: int = 0  # games shared with someone playing their first game
     fresh_blood_wins: int = 0  # wins alongside 3+ first-timers
     veteran_lobbies: int = 0  # games where everyone had 50+ prior games
+    civil_wars: int = 0  # games where the whole lobby rolled one race
     mvps: int = 0
     losing_mvps: int = 0
     underdog_mvps: int = 0  # MVP while playing the lobby's worst unit by win rate
@@ -151,6 +170,7 @@ class Tally:
     triplet_wins: int = 0  # won with 3+ of the same unit on the team
     max_kills_in_loss: int = 0
     thrifty_wins: int = 0  # long wins with a near-zero median bank
+    untouched_wins: int = 0  # long wins where next to nothing of theirs died
     hoard_wins: int = 0  # wins while sitting on a huge median bank
     delivery_wins: int = 0  # wins with real drop play
     max_static_defense: int = 0  # most defensive structures in one real game
@@ -261,6 +281,8 @@ class Tally:
                 self.finders_keepers += 1
         if won:
             self.races_won.add(player.race)
+            if ctx.map_name:  # games whose terrain isn't resolved simply don't count
+                self.maps_won.add(ctx.map_name)
             self.units_beaten.update(q.pick for q in match.players if q.team != player.team and q.pick)
             team = match.team(player.team)
             if len(team) >= 3:
@@ -296,6 +318,9 @@ class Tally:
                 self.fresh_blood_wins += 1
         if ctx.all_veterans:
             self.veteran_lobbies += 1
+        lobby_races = {q.race for q in match.players}
+        if len(match.players) >= MIN_CIVIL_WAR_PLAYERS and all(lobby_races) and len(lobby_races) == 1:
+            self.civil_wars += 1
         if won and ctx.team_dup.get(player.team, 1) >= 2:
             self.twin_wins += 1
             if ctx.team_dup[player.team] >= 3:
@@ -371,6 +396,8 @@ class Tally:
         if won and match.battle_seconds >= _LONG_GAME_SECONDS:
             if player.resources_floated is not None and player.resources_floated < 200:
                 self.thrifty_wins += 1
+            if player.resources_lost is not None and player.resources_lost < UNTOUCHED_LOST_MAX:
+                self.untouched_wins += 1
             if player.pick in _NO_ANTI_AIR_PICKS:
                 enemy_air = sum(1 for q in match.players if q.team != player.team and q.pick in _AIR_PICKS)
                 if enemy_air >= 2:

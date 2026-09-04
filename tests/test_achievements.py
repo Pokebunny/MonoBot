@@ -65,8 +65,8 @@ def _series(n, winning_team=1, start=None, **kwargs):
     ]
 
 
-def _book(matches, merge_map=None):
-    return AchievementBook.from_matches(matches, merge_map, epoch=EPOCH)
+def _book(matches, merge_map=None, map_names=None):
+    return AchievementBook.from_matches(matches, merge_map, epoch=EPOCH, map_names=map_names)
 
 
 def _keys(book, handle):
@@ -749,3 +749,72 @@ def test_highway_robbery_still_needs_real_kills():
     quiet = _player("A1", 1, kills=200, resources_lost=0)
     others = [_player(f"A{i}", 1) for i in range(2, 5)] + [_player(f"B{i}", 2) for i in range(1, 5)]
     assert "highway_robbery" not in _keys(_book([_match(players=[quiet] + others)]), "A1")
+
+
+# -- Cartographer / Untouchable / Civil War ------------------------------
+
+
+def _win_on(hash_, at):
+    return _match(winning_team=1, played_at=at, map_hash=hash_)
+
+
+def test_cartographer_counts_terrains_not_hashes():
+    # Five wins, five hashes -- but the author republished the same three
+    # terrains, so this is three maps and the badge must not fire.
+    names = {"h1": "Riptide", "h2": "Riptide", "h3": "Enigma", "h4": "Enigma", "h5": "Alchemist"}
+    matches = [_win_on(h, AFTER_EPOCH + datetime.timedelta(hours=i)) for i, h in enumerate(names)]
+    assert "cartographer" not in _keys(_book(matches, map_names=names), "A1")
+
+    names = {f"h{i}": n for i, n in enumerate(("Riptide", "Enigma", "Alchemist", "Fortitude", "Shipwrecked"))}
+    matches = [_win_on(h, AFTER_EPOCH + datetime.timedelta(hours=i)) for i, h in enumerate(names)]
+    assert "cartographer" in _keys(_book(matches, map_names=names), "A1")
+
+
+def test_cartographer_ignores_unresolved_and_losses():
+    names = {f"h{i}": n for i, n in enumerate(("Riptide", "Enigma", "Alchemist", "Fortitude", "Shipwrecked"))}
+    matches = [_win_on(h, AFTER_EPOCH + datetime.timedelta(hours=i)) for i, h in enumerate(names)]
+    # No name table at all: nothing is known, so nothing counts.
+    assert "cartographer" not in _keys(_book(matches), "A1")
+    # The loser of all five saw the same terrain and gets nothing.
+    assert "cartographer" not in _keys(_book(matches, map_names=names), "B1")
+
+
+def _lost(name, team, lost, **kwargs):
+    return _player(name, team, resources_lost=lost, **kwargs)
+
+
+def _untouchable_match(lost=400, duration=900, winning_team=1):
+    players = [_lost("A1", 1, lost)] + [_player(f"A{i}", 1) for i in range(2, 5)]
+    players += [_player(f"B{i}", 2) for i in range(1, 5)]
+    return _match(winning_team=winning_team, duration=duration, players=players)
+
+
+def test_untouchable_needs_a_long_win_and_near_zero_losses():
+    assert "untouchable" in _keys(_book([_untouchable_match(lost=400)]), "A1")
+    assert "untouchable" not in _keys(_book([_untouchable_match(lost=600)]), "A1")
+    # 10 minutes of BATTLE time, so a 9-minute fight behind a 1-minute draft
+    # doesn't qualify however long the replay is.
+    assert "untouchable" not in _keys(_book([_untouchable_match(lost=400, duration=600)]), "A1")
+    assert "untouchable" not in _keys(_book([_untouchable_match(lost=400, winning_team=2)]), "A1")
+
+
+def test_untouchable_ignores_games_without_loss_stats():
+    # resources_lost is None on old parses -- absent must not read as zero.
+    assert "untouchable" not in _keys(_book([_untouchable_match(lost=None)]), "A1")
+
+
+def _lobby(races, winning_team=1):
+    players = [_player(f"A{i}", 1, race=races[i - 1]) for i in range(1, len(races) // 2 + 1)]
+    players += [_player(f"B{i}", 2, race=races[len(races) // 2 + i - 1]) for i in range(1, len(races) // 2 + 1)]
+    return _match(winning_team=winning_team, players=players)
+
+
+def test_civil_war_needs_the_whole_lobby_on_one_race():
+    assert "civil_war" in _keys(_book([_lobby(["Zerg"] * 8)]), "A1")
+    assert "civil_war" in _keys(_book([_lobby(["Zerg"] * 8)]), "B1")  # losers too: it's a lobby fact
+    assert "civil_war" not in _keys(_book([_lobby(["Zerg"] * 7 + ["Terran"])]), "A1")
+
+
+def test_civil_war_needs_a_full_lobby():
+    assert "civil_war" in _keys(_book([_lobby(["Protoss"] * 6)]), "A1")
+    assert "civil_war" not in _keys(_book([_lobby(["Protoss"] * 4)]), "A1")

@@ -45,7 +45,7 @@ def _unit_win_rates(matches) -> dict[str, tuple[float, int]]:
     return {pick: (w / g, g) for pick, (w, g) in counts.items() if g}
 
 
-def _match_context(match: MonobattleMatch) -> _MatchContext:
+def _match_context(match: MonobattleMatch, map_name: str | None = None) -> _MatchContext:
     scored = [p.resources_killed for p in match.players if p.resources_killed is not None]
     min_kills = min(scored) if len(scored) >= 6 else None
     team_kills: dict[int, int] = {}
@@ -56,7 +56,7 @@ def _match_context(match: MonobattleMatch) -> _MatchContext:
         n: max(Counter(p.pick for p in match.team(n) if p.pick).values(), default=1)
         for n in {p.team for p in match.players}
     }
-    return _MatchContext(match, match.mvp(), min_kills, team_kills, team_dup)
+    return _MatchContext(match, match.mvp(), min_kills, team_kills, team_dup, map_name=map_name)
 
 
 class AchievementBook:
@@ -69,9 +69,20 @@ class AchievementBook:
     before it feed only the career tally). None means every match counts as
     live — only sensible for tests or throwaway analysis."""
 
-    def __init__(self, merge_map: dict[str, str] | None = None, epoch: datetime.datetime | None = None):
+    def __init__(
+        self,
+        merge_map: dict[str, str] | None = None,
+        epoch: datetime.datetime | None = None,
+        map_names: dict[str, str] | None = None,
+    ):
         self._merge = merge_map or {}
         self._epoch = epoch
+        # map_hash -> terrain name (MatchStore.map_version_names). Cartographer
+        # counts terrains, and only resolved ones — an unresolved hash means
+        # "we don't know yet", which withholds the badge rather than granting
+        # it on a hash. Callers must pass the same table every rebuild, or a
+        # reconciling ledger would revoke what a previous build granted.
+        self._map_names = map_names or {}
         self.histories: dict[str, PlayerHistory] = {}
         self.earned: dict[str, dict[str, Earned]] = {}  # handle -> key -> Earned
         self._last_countable_at: datetime.datetime | None = None
@@ -84,9 +95,13 @@ class AchievementBook:
 
     @classmethod
     def from_matches(
-        cls, matches, merge_map: dict[str, str] | None = None, epoch: datetime.datetime | None = None
+        cls,
+        matches,
+        merge_map: dict[str, str] | None = None,
+        epoch: datetime.datetime | None = None,
+        map_names: dict[str, str] | None = None,
     ) -> "AchievementBook":
-        book = cls(merge_map, epoch)
+        book = cls(merge_map, epoch, map_names)
         for match in sorted(matches, key=lambda m: _naive(m.played_at)):
             if is_countable(match):
                 book._tally_match(match)
@@ -125,7 +140,7 @@ class AchievementBook:
         return {pick for pick in rated if rates[pick] == worst}
 
     def _tally_match(self, match: MonobattleMatch) -> None:
-        ctx = _match_context(match)
+        ctx = _match_context(match, self._map_names.get(match.map_hash))
         ctx.canonical = {p.toon_handle: self.canonical(p.toon_handle) for p in match.players}
         handles = set(ctx.canonical.values())
         ctx.newcomers = {h for h in handles if h not in self.histories}
@@ -214,7 +229,10 @@ class AchievementCache:
         if self._book is None or self._version != self._store.change_count:
             merge_map = self._store.merge_map() if hasattr(self._store, "merge_map") else None
             epoch = self._store.achievement_epoch() if hasattr(self._store, "achievement_epoch") else None
-            self._book = AchievementBook.from_matches((m for _, m in self._store.all_matches()), merge_map, epoch)
+            map_names = self._store.map_version_names() if hasattr(self._store, "map_version_names") else None
+            self._book = AchievementBook.from_matches(
+                (m for _, m in self._store.all_matches()), merge_map, epoch, map_names
+            )
             self._version = self._store.change_count
         return self._book
 

@@ -5,6 +5,7 @@ usually a one-line entry here plus, if it needs a new stat, a `Tally` field."""
 
 from models.replay import PICKABLE_UNITS
 from services.achievements.core import (
+    CARTOGRAPHER_MAPS,
     CHRONICLER_UPLOADS,
     RACES,
     UNDERDOG_UNITS,
@@ -106,6 +107,16 @@ SPECS: list[AchievementSpec] = [
         "Legendary",
         "Win with all 42 units",
         _career_set("units_won", PICKABLE_UNITS, 42),
+    ),
+    # Terrains, not map hashes -- see CARTOGRAPHER_MAPS. Deliberately a fixed
+    # 5 of however many are in rotation, so adding a map never revokes it.
+    _spec(
+        "cartographer",
+        "Cartographer",
+        "🗺️",
+        "Uncommon",
+        f"Win on {CARTOGRAPHER_MAPS} different maps",
+        _career_len("maps_won", CARTOGRAPHER_MAPS),
     ),
     _spec(
         "triple_threat",
@@ -265,6 +276,14 @@ SPECS: list[AchievementSpec] = [
         _live("max_lost_in_win", 30000),
     ),
     _spec(
+        "untouchable",
+        "Untouchable",
+        "🪶",
+        "Rare",
+        "Win a 10+ minute game losing under 500 value",
+        _live("untouched_wins", 1),
+    ),
+    _spec(
         "one_man_army",
         "One-Man Army",
         "🦾",
@@ -379,6 +398,14 @@ SPECS: list[AchievementSpec] = [
         "Rare",
         "Play a game where all eight players have 50+ games",
         _live("veteran_lobbies", 1),
+    ),
+    _spec(
+        "civil_war",
+        "Civil War",
+        "🤼",
+        "Rare",
+        "Play a game where the whole lobby is one race",
+        _live("civil_wars", 1),
     ),
     _spec(
         "marathon_session",

@@ -375,6 +375,10 @@ class Leaderboard(commands.Cog):
     @commands.hybrid_command(aliases=["ach"], help="show a player's achievements (yourself if no name given)")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def achievements(self, ctx, *, player: str | None = None):
+        # A slash invocation renders privately, which is what lets it unmask
+        # the recipes of secrets the VIEWER has earned (same gate as
+        # /gallery). Text !ach stays public, so it stays masked.
+        private = ctx.interaction is not None
         if player is None:
             group = self._own_group(ctx.author)
             if not group:
@@ -390,7 +394,18 @@ class Leaderboard(commands.Cog):
         earned = achievements.ledger_for_group(self.store, group)
         next_up = self.achievements.book().next_up(group[0], ensure_detail=True)
         holders = achievements.ledger_holder_counts(self.store, self.store.merge_map())
-        await ctx.send(embed=match_embeds.achievements_gallery(shown, earned, next_up, holders))
+        # Only the viewer's own secrets, so looking someone else up privately
+        # can't hand over a recipe you haven't earned yourself.
+        reveal = self._own_secret_keys(ctx.author) if private else set()
+        embed = match_embeds.achievements_gallery(shown, earned, next_up, holders, reveal)
+        await ctx.send(embed=embed, ephemeral=private)
+
+    def _own_secret_keys(self, author) -> set[str]:
+        """Keys of the secrets the invoking user holds, for recipe reveal."""
+        group = self._own_group(author)
+        if not group:
+            return set()
+        return {e.spec.key for e in achievements.ledger_for_group(self.store, group) if achievements.is_secret(e.spec)}
 
     @commands.hybrid_command(
         aliases=["catalog"], help="browse the full achievement gallery (secret recipes reveal only via /gallery)"

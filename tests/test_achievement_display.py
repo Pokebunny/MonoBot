@@ -92,3 +92,33 @@ def test_profile_masks_secret_recipe():
     assert "One-Man Army" in text  # name shown
     assert SECRET_RECIPE not in text  # recipe never on a public profile
     assert OPEN.description in text  # non-secret recipe fine
+    assert "reveals recipes" in (embed.footer.text or "")  # points at the private render
+
+
+def test_profile_reveals_own_secret_on_private_render():
+    # Gate 2 on the profile: the viewer earned it AND this render is ephemeral.
+    embed = match_embeds.achievements_gallery(
+        "Bob", [Earned(SECRET, DT), Earned(OPEN, DT)], next_up=[], reveal_keys={"one_man_army"}
+    )
+    text = _text(embed)
+    assert SECRET_RECIPE in text
+    assert "*secret:*" in text  # still tagged as a secret once unlocked
+    assert "reveals recipes" not in (embed.footer.text or "")  # nothing left masked
+
+
+def test_profile_keeps_masking_secrets_the_viewer_lacks():
+    # Looking someone else up privately must not hand over their recipes.
+    embed = match_embeds.achievements_gallery(
+        "Bob", [Earned(SECRET, DT), Earned(OPEN, DT)], next_up=[], reveal_keys={"some_other_secret"}
+    )
+    assert SECRET_RECIPE not in _text(embed)
+
+
+def test_catalog_tags_unlocked_secret_as_secret():
+    # Recipe revealed, but the badge must still read as a secret.
+    embed = match_embeds.achievement_catalog(
+        SECRET_TIER, earned_keys={"one_man_army"}, discovered_keys={"one_man_army"}, private=True
+    )
+    text = _text(embed)
+    assert SECRET_RECIPE in text
+    assert "*secret:*" in text

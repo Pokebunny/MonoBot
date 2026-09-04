@@ -187,6 +187,18 @@ def _canonical(name: str) -> str | None:
     return _NORMALIZE.get(name, name)
 
 
+def _canonical_killer(name: str) -> str:
+    """Normalize the name of a unit CREDITED WITH A KILL. Same mode-merging as
+    `_canonical` (a sieged tank is a tank), but deliberately NOT its noise
+    filter: `_canonical` drops workers, Interceptors, Locusts, Broodlings and
+    AutoTurrets because they can never be a player's PICK, and those are
+    exactly the killers worth telling apart here — a Carrier's damage is its
+    interceptors', and a cannon's kills are not the player's unit's."""
+    if name.endswith("Burrowed"):
+        name = name.removesuffix("Burrowed")
+    return _NORMALIZE.get(name, name)
+
+
 class _PlayerTally:
     """Per-player production evidence accumulated from replay events."""
 
@@ -220,6 +232,9 @@ class _PlayerTally:
         # same id, so a CC becoming an Orbital never looks like a loss.
         self.live_town_halls: set[int] = set()
         self.lost_all_bases = False  # was ever wiped down to zero town halls
+        # Enemy value destroyed, split by which of this player's unit types
+        # got the kill. See _tally_events for what does and doesn't land here.
+        self.kills_by_unit = Counter()
 
     def race(self, fallback: str) -> str:
         if self.worker_races:
@@ -291,6 +306,29 @@ _REPICK_BUTTON_CONTROL_ID = 107
 _KEEP_BUTTON_CONTROL_ID = 108
 
 
+def _credit_kill(tallies: dict[str, "_PlayerTally"], event, game_start: int) -> None:
+    """Credit one death to the enemy unit type that killed it, by the victim's
+    build cost. Skipped when the tracker records no killer (~11% of the value
+    of all deaths, almost all of it non-combat: Drones morphing into buildings,
+    templar merging into an Archon, Interceptors dying with their Carrier) and
+    when a player killed their own unit (a morph or a Baneling).
+
+    Measured over 300 replays: summed per player this reproduces the game's own
+    resources_killed with a median ratio of 1.00 (mean 0.97, sd 0.13), and no
+    pick is systematically under-credited — every unit's median lands between
+    0.97 and 1.04. See docs/kill-attribution.md."""
+    victim = event.unit
+    killer, killing_player = getattr(event, "killing_unit", None), getattr(event, "killing_player", None)
+    if victim is None or killer is None or killing_player is None or event.second < game_start:
+        return
+    owner = getattr(victim, "owner", None)
+    if owner is None or owner == killing_player:
+        return  # morphs and self-destructs are not kills
+    value = (getattr(victim, "minerals", 0) or 0) + (getattr(victim, "vespene", 0) or 0)
+    if value > 0:
+        tallies[killing_player.name].kills_by_unit[_canonical_killer(killer.name)] += value
+
+
 def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
     tallies: dict[str, _PlayerTally] = defaultdict(_PlayerTally)
     for event in replay.events:
@@ -333,6 +371,7 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
                 tally.live_town_halls.discard(event.unit.id)
                 if not tally.live_town_halls and event.second >= game_start:
                     tally.lost_all_bases = True
+            _credit_kill(tallies, event, game_start)
             continue
         # UnitBornEvent: instantly-created units. UnitDoneEvent: gradually
         # created ones (warp-ins, morph cocoons, archon merges, buildings).
@@ -557,6 +596,7 @@ def parse_replay(path: str) -> MonobattleMatch:
                     resources_floated=(
                         int(statistics.median(tally.floated_samples)) if tally.floated_samples else None
                     ),
+                    kills_by_unit=dict(tally.kills_by_unit),
                     drop_commands=tally.drop_commands,
                     static_defense=tally.static_defense,
                     bases_before_unit=sum(1 for s in tally.base_times if cutoff is None or s < cutoff),

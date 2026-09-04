@@ -64,8 +64,17 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   Per-map stats group on the map's **name** (`map_versions.group_by_map`),
   never its hash — the same terrain is republished under new hashes — and
   leave out games whose map isn't known.
+- **Kill attribution**: `match_players.kills_by_unit` credits destroyed value
+  to the unit type that killed it (`MatchPlayer.own_kills` for just the
+  player's pick, seeing through Carrier->Interceptor and the other spawners in
+  `PICK_KILLERS`). It is its OWN metric, not a breakdown of `resources_killed`:
+  the medians agree but a 5% tail under-attributes, concentrated in air picks.
+  Read `docs/kill-attribution.md` before setting any threshold on it, and treat
+  an empty dict as "not recorded" (pre-schema-12 parse), never as zero kills.
 - `scripts/` (repo root) — one-shot utilities, e.g. `backfill_archive.py` to
   seed the database from a folder of replays (idempotent, dedupes by hash).
+  `reparse_stored.py` re-applies parser improvements to stored games
+  (`MONOBOT_DB` picks the database).
 
 ## Conventions
 

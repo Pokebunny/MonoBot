@@ -272,11 +272,16 @@ def achievements_gallery(
     earned: list[Earned],
     next_up: list[tuple[AchievementSpec, float, float, list[str]]],
     holder_counts: dict[str, int] | None = None,
+    reveal_keys: set[str] | None = None,
 ) -> discord.Embed:
     """A player's earned achievements grouped by rarity (rarest first), plus
     their closest locked ones. holder_counts (key -> players holding it) adds
-    a live-rarity note to Epic+ lines."""
+    a live-rarity note to Epic+ lines. `reveal_keys` are secrets the VIEWER
+    has earned, unmasked here only on an ephemeral render (same gate as the
+    catalog) — callers must not pass any on a public one."""
     holder_counts = holder_counts or {}
+    reveal_keys = reveal_keys or set()
+    masked_any = False
     embed = discord.Embed(title=f"{shown_name} — achievements", color=ACCENT)
     if not earned:
         embed.description = "*Nothing yet — go play some games!*"
@@ -285,10 +290,18 @@ def achievements_gallery(
         for e in earned:
             if e.spec.rarity != rarity:
                 continue
-            # A profile is public, so a secret's how is never printed here
-            # (the recipe lives only in the ephemeral catalog). The name is
-            # fine — earning it means it's already community-discovered.
-            body = "🔒 *secret*" if is_secret(e.spec) else e.spec.description
+            # On a public profile a secret's how is never printed (the name
+            # is fine — earning it means it's already community-discovered).
+            # An ephemeral render unmasks the ones the viewer has earned. The
+            # 🔒 tag stays either way, so an unlocked secret still reads as
+            # one rather than looking like any other badge.
+            if not is_secret(e.spec):
+                body = e.spec.description
+            elif e.spec.key in reveal_keys:
+                body = f"🔒 *secret:* {e.spec.description}"
+            else:
+                body = "🔒 *secret*"
+                masked_any = True
             line = f"{e.spec.emoji} **{e.spec.name}** — {body}"
             holders = holder_counts.get(e.spec.key)
             if holders and rarity in ("Epic", "Legendary"):
@@ -316,7 +329,10 @@ def achievements_gallery(
             if missing:
                 lines.append(f"　↳ *still need:* {_missing_summary(missing)}")
         embed.add_field(name="🔒 Next up", value="\n".join(lines), inline=False)
-    embed.set_footer(text=f"{len(earned)}/{len(ACHIEVEMENT_SPECS)} unlocked · run /gallery to browse them all")
+    footer = f"{len(earned)}/{len(ACHIEVEMENT_SPECS)} unlocked · run /gallery to browse them all"
+    if masked_any:
+        footer += " · /achievements (slash) reveals recipes for secrets you've earned"
+    embed.set_footer(text=footer)
     return embed
 
 
@@ -344,10 +360,12 @@ def achievement_catalog(
         if is_secret(s) and s.key not in discovered_keys:
             lines.append("🔒 **???** — *undiscovered secret*")
             continue
-        if is_secret(s) and not (earned and private):
-            body = "🔒 *secret*"  # name shown, how hidden
-        else:
+        if not is_secret(s):
             body = s.description
+        elif earned and private:
+            body = f"🔒 *secret:* {s.description}"  # kept tagged once unlocked
+        else:
+            body = "🔒 *secret*"  # name shown, how hidden
         line = f"{mark} {s.emoji} **{s.name}** — {body}"
         holders = holder_counts.get(s.key)
         if holders and rarity in ("Epic", "Legendary"):

@@ -5,7 +5,7 @@ import logging
 import discord
 from checks import is_bot_admin
 from discord.ext import commands
-from services import achievements, map_versions, match_embeds
+from services import achievements, identity, map_versions, match_embeds
 from services.achievements import AchievementCache
 from services.rating import (
     MIN_DURATION_SECONDS,
@@ -16,7 +16,7 @@ from services.rating import (
     RatingCache,
 )
 from services.storage import MatchStore
-from views import ExpiringView, PagedBoardView
+from views import ExpiringView, PagedBoardView, PersonPickView
 
 logger = logging.getLogger(__name__)
 
@@ -269,21 +269,22 @@ class Leaderboard(commands.Cog):
         return self._book_for(None, career=True)
 
     def _resolve(self, player: str):
-        """Resolve a display name (current or former) to (career rating, this
-        season's rating or None, rank, board size, number of same-named
-        accounts), or None if no rated games ever. Names aren't unique, so pick
-        the most-active matching account."""
-        book = self._career_book()
-        rated, seen = [], set()
-        for h in self.store.handles_for_name(player):
-            r = book.rating_for(h)  # follows account merges
-            if r is not None and r.handle not in seen:
-                seen.add(r.handle)
-                rated.append(r)
-        if not rated:
+        """Resolve a typed name to (career rating, this season's rating or
+        None, rank, board size, number of OTHER people who share the name), or
+        None if no rated games ever. Who the name means is decided by
+        services.identity, not by raw game counts."""
+        people = identity.resolve(self.store, player)
+        if not people:
             return None
-        rated.sort(key=lambda r: r.games, reverse=True)
-        return (*self._with_season(rated[0]), len(rated))
+        return self._resolve_person(people[0], others=len(people))
+
+    def _resolve_person(self, person, others: int = 1):
+        """The same tuple, for an already-chosen person."""
+        book = self._career_book()
+        rating = next((r for r in (book.rating_for(h) for h in person.handles) if r is not None), None)
+        if rating is None:
+            return None
+        return (*self._with_season(rating), others)
 
     def _rank_of(self, book, rating) -> tuple[int | None, int]:
         """(rank among ranked players, size of the ranked board). Players
@@ -315,14 +316,11 @@ class Leaderboard(commands.Cog):
         return (*self._with_season(best), 1)
 
     async def _resolve_or_reply(self, ctx, player: str | None):
-        if player is None:
-            resolved = self._resolve_self(ctx.author)
-            if resolved is None:
-                await ctx.send("You haven't linked a rated SC2 account yet — use `!link <name>`, or pass a name.")
-            return resolved
-        resolved = self._resolve(player)
+        """Only for the no-name (yourself) case; named lookups go through
+        _person_or_pick so a shared name can ask."""
+        resolved = self._resolve_self(ctx.author)
         if resolved is None:
-            await ctx.send(f"No rated games found for **{player}**.")
+            await ctx.send("You haven't linked a rated SC2 account yet — use `!link <name>`, or pass a name.")
         return resolved
 
     def _profile_embed(self, ctx, resolved, player: str | None):
@@ -346,23 +344,58 @@ class Leaderboard(commands.Cog):
     @commands.hybrid_command(aliases=["rank"], help="show a player's full profile (yourself if no name given)")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def profile(self, ctx, *, player: str | None = None):
-        resolved = await self._resolve_or_reply(ctx, player)
-        if resolved is None:
+        if player is None:
+            resolved = await self._resolve_or_reply(ctx, None)
+            if resolved is not None:
+                await ctx.send(embed=self._profile_embed(ctx, resolved, player))
             return
-        n_accounts = resolved[-1]
-        await ctx.send(embed=self._profile_embed(ctx, resolved, player))
-        if n_accounts > 1:
-            await ctx.send(
-                f"*(Note: {n_accounts} different accounts have played as **{player}**; showing the most active.)*"
+
+        async def show(interaction, person):
+            resolved = self._resolve_person(person)
+            if resolved is None:
+                await interaction.response.edit_message(
+                    content=f"**{person.sc2_name}** has no rated games yet.", view=None
+                )
+                return
+            await interaction.response.edit_message(
+                content=None, embed=self._profile_embed(ctx, resolved, player), view=None
             )
 
+        picked = await self._person_or_pick(ctx, player, show)
+        if picked is None:
+            return
+        person, note = picked
+        resolved = self._resolve_person(person)
+        if resolved is None:
+            await ctx.send(f"No rated games found for **{player}**.")
+            return
+        await ctx.send(embed=self._profile_embed(ctx, resolved, player))
+        if note:
+            await ctx.send(note)
+
     def _group_for_name(self, player: str) -> tuple[str, list[str]]:
-        """A display name's most-active account and its full merge group."""
-        candidates = self.store.candidates_for_name(player)
-        if not candidates:
+        """A typed name's person: their display name and full merge group.
+        Precedence (claim > current name > former name) lives in
+        services.identity, so every command agrees on who a name means."""
+        people = identity.resolve(self.store, player)
+        if not people:
             return player, []
-        handle, name, _games = candidates[0]
-        return name, self.store.merged_handles(handle)
+        return people[0].sc2_name, list(people[0].handles)
+
+    async def _person_or_pick(self, ctx, query: str, on_pick):
+        """The person a name means, or None when the caller has been answered
+        already — either nothing matched, or the name is genuinely shared and
+        a picker went out. `on_pick(interaction, person)` resumes the command
+        once they choose."""
+        people = identity.resolve(self.store, query)
+        if not people:
+            await ctx.send(f"No games found for **{query}**.")
+            return None
+        if identity.ambiguous(people):
+            view = PersonPickView(people, str(ctx.author.id), on_pick)
+            view.message = await ctx.send(f"More than one player has played as **{query}** — which one?", view=view)
+            return None
+        return people[0], identity.others_note(people)
 
     def _own_group(self, author) -> list[str]:
         group: list[str] = []
@@ -386,19 +419,31 @@ class Leaderboard(commands.Cog):
                 return
             shown = ctx.author.display_name
         else:
-            name, group = self._group_for_name(player)
-            if not group:
-                await ctx.send(f"No games found for **{player}**.")
+
+            async def picked(interaction, person):
+                await interaction.response.edit_message(
+                    content=None,
+                    embed=self._achievement_embed(ctx, list(person.handles), person.sc2_name, private),
+                    view=None,
+                )
+
+            chosen = await self._person_or_pick(ctx, player, picked)
+            if chosen is None:
                 return
+            person, _note = chosen
+            group, name = list(person.handles), person.sc2_name
             shown = self._shown_name(ctx, group, name)
+        embed = self._achievement_embed(ctx, group, shown, private, author=ctx.author)
+        await ctx.send(embed=embed, ephemeral=private)
+
+    def _achievement_embed(self, ctx, group: list[str], shown: str, private: bool, author=None):
         earned = achievements.ledger_for_group(self.store, group)
         next_up = self.achievements.book().next_up(group[0], ensure_detail=True)
         holders = achievements.ledger_holder_counts(self.store, self.store.merge_map())
         # Only the viewer's own secrets, so looking someone else up privately
         # can't hand over a recipe you haven't earned yourself.
-        reveal = self._own_secret_keys(ctx.author) if private else set()
-        embed = match_embeds.achievements_gallery(shown, earned, next_up, holders, reveal)
-        await ctx.send(embed=embed, ephemeral=private)
+        reveal = self._own_secret_keys(author or ctx.author) if private else set()
+        return match_embeds.achievements_gallery(shown, earned, next_up, holders, reveal)
 
     def _own_secret_keys(self, author) -> set[str]:
         """Keys of the secrets the invoking user holds, for recipe reveal."""
@@ -429,11 +474,28 @@ class Leaderboard(commands.Cog):
     async def last(self, ctx, *, player: str | None = None):
         matches = self.store.all_matches()  # oldest first
         if player:
-            name, group = self._group_for_name(player)
-            if not group:
-                await ctx.send(f"No games found for **{player}**.")
+
+            async def picked(interaction, person):
+                handles = set(person.handles)
+                theirs = [
+                    (i, m) for i, m in self.store.all_matches() if any(p.toon_handle in handles for p in m.players)
+                ]
+                if not theirs:
+                    await interaction.response.edit_message(
+                        content=f"No games found for **{person.sc2_name}**.", view=None
+                    )
+                    return
+                browser = MatchBrowserView(theirs, self.store.map_version_names())
+                await interaction.response.edit_message(
+                    content=None, embed=browser.embed(), view=browser if len(theirs) > 1 else None
+                )
+                if len(theirs) > 1:
+                    browser.message = await interaction.original_response()
+
+            chosen = await self._person_or_pick(ctx, player, picked)
+            if chosen is None:
                 return
-            handles = set(group)
+            handles = set(chosen[0].handles)
             matches = [(i, m) for i, m in matches if any(p.toon_handle in handles for p in m.players)]
         if not matches:
             await ctx.send("No matches stored yet.")
@@ -447,6 +509,12 @@ class Leaderboard(commands.Cog):
     @commands.hybrid_command(help="head-to-head between two players — !h2h <name> means you vs them")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def h2h(self, ctx, player1: str, player2: str | None = None):
+        for name in (player1, player2):
+            if name and identity.ambiguous(identity.resolve(self.store, name)):
+                await ctx.send(
+                    f"More than one player has played as **{name}** — use their exact current name or Discord handle."
+                )
+                return
         name1, group1 = self._group_for_name(player1)
         if not group1:
             await ctx.send(f"No games found for **{player1}**.")

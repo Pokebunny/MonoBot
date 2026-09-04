@@ -14,10 +14,11 @@ from checks import is_bot_admin
 from discord.ext import commands, tasks
 from models.matchmaking import ProposedMatch, QueuedPlayer
 from resources.config import CONFIG
-from services import match_embeds
+from services import identity, match_embeds
 from services.matchmaking import ranked_matches
 from services.rating import DEFAULT_MU, DEFAULT_SIGMA, RatingCache
 from services.storage import MatchStore
+from views import PersonPickView
 
 logger = logging.getLogger(__name__)
 
@@ -332,16 +333,62 @@ class Matchmaking(commands.Cog):
         )
         await self._clear_old_queue_message(keep=self.queue_message)
 
+    async def _member_for(self, ctx, query: str, on_pick):
+        """A guild member from a typed name, resolved the same way every other
+        command resolves names: their claimed SC2 name first, then an account's
+        current in-game name, then an exact Discord name/nickname/mention/id.
+        No partial matching — queueing the wrong person is worse than being
+        told to type the whole name.
+
+        None when the caller has already been answered: nothing matched, the
+        name is shared and a picker went out, or the person isn't reachable."""
+        people = identity.resolve(self.store, query)
+        if identity.ambiguous(people):
+            view = PersonPickView(people, str(ctx.author.id), on_pick)
+            view.message = await ctx.send(f"More than one player has played as **{query}** — which one?", view=view)
+            return None
+        if people:
+            member = await self._member_of(ctx, people[0])
+            if member is not None:
+                return member
+        try:  # a Discord handle, mention or id rather than an SC2 name
+            return await commands.MemberConverter().convert(ctx, query)
+        except commands.BadArgument:
+            pass
+        if people and people[0].discord_id:
+            await ctx.send(f"**{people[0].sc2_name}** is linked, but isn't in this server.")
+        elif people:
+            await ctx.send(
+                f"**{people[0].sc2_name}** hasn't linked a Discord account yet — "
+                "they need to run `!link <their SC2 name>` before they can queue."
+            )
+        else:
+            await ctx.send(f"No player found matching **{query}**.")
+        return None
+
+    async def _member_of(self, ctx, person) -> discord.Member | None:
+        if person.discord_id is None or ctx.guild is None:
+            return None
+        return ctx.guild.get_member(int(person.discord_id))
+
     @commands.hybrid_command(aliases=["remove"], help="remove a player from the queue, e.g. a no-show (mods)")
     @is_bot_admin()
-    async def bump(self, ctx, member: discord.Member):
+    async def bump(self, ctx, *, player: str):
         # Admin-gated: players drop themselves with Leave, so this exists only
         # to clear someone else out, which shouldn't be open to everyone.
-        if self.queue.pop(str(member.id), None) is None:
-            await ctx.send(f"{member.display_name} isn't in the queue.")
-            return
+        async def picked(interaction, person):
+            member = await self._member_of(ctx, person)
+            await interaction.response.edit_message(content=await self._bump(member, person.sc2_name), view=None)
+
+        member = await self._member_for(ctx, player, picked)
+        if member is not None:
+            await ctx.send(await self._bump(member, member.display_name))
+
+    async def _bump(self, member, label: str) -> str:
+        if member is None or self.queue.pop(str(member.id), None) is None:
+            return f"{label} isn't in the queue."
         await self._refresh_message()
-        await ctx.send(f"Removed **{member.display_name}** from the queue.")
+        return f"Removed **{label}** from the queue."
 
     @commands.hybrid_command(help="re-post the last match with freshly balanced teams (optionally naming a new roster)")
     @commands.cooldown(1, 10, commands.BucketType.channel)
@@ -360,26 +407,45 @@ class Matchmaking(commands.Cog):
 
     @commands.hybrid_command(help="put a player into the queue (mods)")
     @is_bot_admin()
-    async def add(self, ctx, member: discord.Member):
+    async def add(self, ctx, *, player: str):
+        async def picked(interaction, person):
+            member = await self._member_of(ctx, person)
+            if member is None:
+                await interaction.response.edit_message(
+                    content=f"**{person.sc2_name}** isn't in this server.", view=None
+                )
+                return
+            message, roster = self._add(member)
+            await interaction.response.edit_message(content=message, view=None)
+            await self._refresh_message()
+            if roster:
+                await self.post_match(ctx.channel, roster, announce=True)
+
+        member = await self._member_for(ctx, player, picked)
+        if member is None:
+            return
+        message, roster = self._add(member)
+        await self._refresh_message()
+        await ctx.send(message)
+        if roster:
+            await self.post_match(ctx.channel, roster, announce=True)
+
+    def _add(self, member) -> tuple[str, list | None]:
+        """Queue a member; returns what to say and a roster if that filled it."""
         uid = str(member.id)
         # Same link requirement as the Join button: an unlinked player would
         # queue on the new-player default and quietly skew the balance, so say
         # so rather than adding them.
         if not self.store.sc2_names_for(uid):
-            await ctx.send(
+            return (
                 f"**{member.display_name}** hasn't linked an SC2 name yet — "
                 "they need to run `!link <their SC2 name>` before they can queue."
-            )
-            return
+            ), None
         if uid in self.queue:
-            await ctx.send(f"**{member.display_name}** is already in the queue.")
-            return
+            return f"**{member.display_name}** is already in the queue.", None
         self.queue[uid] = member
         roster = self._take_queue() if len(self.queue) >= QUEUE_TARGET else None
-        await self._refresh_message()
-        await ctx.send(f"Added **{member.display_name}** to the queue.")
-        if roster:
-            await self.post_match(ctx.channel, roster, announce=True)
+        return f"Added **{member.display_name}** to the queue.", roster
 
     @commands.hybrid_command(help="clear the matchmaking queue (mods)")
     @is_bot_admin()

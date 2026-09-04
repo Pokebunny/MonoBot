@@ -9,7 +9,8 @@ Usage (from repo root):
     uv run python scripts/reparse_stored.py [archive_dir]
 
 archive_dir defaults to main/resources/replays (where the bot archives
-uploads).
+uploads). Set MONOBOT_DB to refresh a database other than the default one --
+needed to backfill a snapshot or the deployed DB in place.
 """
 
 import glob
@@ -29,7 +30,7 @@ def main() -> None:
     paths = sorted(glob.glob(os.path.join(archive, "*.SC2Replay")))
     print(f"{len(paths)} archived replays")
 
-    store = MatchStore()
+    store = MatchStore(os.environ["MONOBOT_DB"]) if os.environ.get("MONOBOT_DB") else MatchStore()
     refreshed = not_stored = failed = 0
     for i, path in enumerate(paths):
         with open(path, "rb") as f:

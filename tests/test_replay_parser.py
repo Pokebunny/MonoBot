@@ -1,7 +1,9 @@
 import glob
 import os
+import statistics
 
 import pytest
+from models.replay import STATIC_DEFENSE_KILLERS, WORKER_KILLERS
 from services import replay_parser
 
 REPLAY_DIR = os.path.join(os.path.dirname(__file__), "..", "test_replays")
@@ -129,3 +131,60 @@ def test_mvp_from_kill_stats(matches):
     mvp = m.mvp()
     assert mvp.name == "Pokebunny"
     assert mvp.resources_killed > 30000
+
+
+# -- kill attribution ----------------------------------------------------
+
+
+def test_kills_by_unit_tracks_the_official_total(matches):
+    """Summed per player, attributed value reproduces the game's own
+    resources_killed -- in the CENTRE of the distribution. Measured over 300
+    replays: median 1.00, but a 5% tail lands under 0.70 (deaths the tracker
+    credits to nobody, concentrated in expensive air kills). So this pins the
+    median tightly and each individual only loosely; see
+    docs/kill-attribution.md before tightening either bound."""
+    ratios = [
+        sum(p.kills_by_unit.values()) / p.resources_killed
+        for m in matches.values()
+        for p in m.players
+        if p.resources_killed and p.resources_killed >= 5000
+    ]
+    assert ratios
+    assert 0.90 < statistics.median(ratios) < 1.10
+    assert all(0.3 < r < 1.5 for r in ratios), sorted(ratios)[:3]
+
+
+def test_kill_killer_names_are_normalized(matches):
+    # A sieged tank is a tank and a burrowed lurker is a lurker: mode variants
+    # must collapse the same way production counts do.
+    for m in matches.values():
+        for p in m.players:
+            for unit in p.kills_by_unit:
+                assert not unit.endswith("Burrowed"), unit
+                assert unit not in ("ThorAP", "SiegeTankSieged", "VikingAssault", "LiberatorAG"), unit
+
+
+def test_kills_attributed_to_spawned_children(matches):
+    # A Carrier never kills anything itself -- its interceptors do -- and the
+    # same holds for a Swarm Host's locusts and a Raven's turrets. own_kills
+    # has to see through that or those picks read as zero.
+    by_pick = {p.pick: p for m in matches.values() for p in m.players if p.kills_by_unit}
+    carrier = by_pick.get("Carrier")
+    if carrier is not None:
+        assert carrier.kills_by_unit.get("Interceptor", 0) > 0
+        assert carrier.own_kills >= carrier.kills_by_unit["Interceptor"]
+    swarm_host = by_pick.get("SwarmHost")
+    if swarm_host is not None:
+        assert swarm_host.kills_by_unit.get("Locust", 0) > 0
+        assert swarm_host.own_kills >= swarm_host.kills_by_unit["Locust"]
+
+
+def test_own_kills_excludes_static_defense_and_workers(matches):
+    checked = 0
+    for m in matches.values():
+        for p in m.players:
+            extra = sum(v for u, v in p.kills_by_unit.items() if u in STATIC_DEFENSE_KILLERS | WORKER_KILLERS)
+            if extra:
+                assert p.own_kills <= sum(p.kills_by_unit.values()) - extra
+                checked += 1
+    assert checked, "no player in the sample got a kill with a cannon or a worker"

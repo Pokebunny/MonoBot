@@ -68,6 +68,29 @@ _NOT_IN_PICK_POOL = frozenset({"Medivac", "Observer", "WarpPrism", "Overseer", "
 PICKABLE_UNITS = frozenset(UNIT_RACE) - _NOT_IN_PICK_POOL
 
 
+# Which killer unit types count as a pick's OWN damage. Most units kill under
+# their own name, so only the units whose damage is dealt by something else are
+# listed here -- measured over 300 replays (docs/kill-attribution.md), each of
+# these accounts for the bulk of that pick's credited value:
+#   Carrier 95% Interceptor · SwarmHost 92% Locust · Raven 70% AutoTurret ·
+#   BroodLord 70% broodlings · HighTemplar 59% (the rest are Archon merges)
+PICK_KILLERS = {
+    "Carrier": frozenset({"Carrier", "Interceptor"}),
+    "SwarmHost": frozenset({"SwarmHost", "Locust"}),
+    "BroodLord": frozenset({"BroodLord", "Broodling", "BroodlingEscort"}),
+    "Raven": frozenset({"Raven", "AutoTurret"}),
+    "HighTemplar": frozenset({"HighTemplar", "Archon"}),
+}
+
+# Kills that are NOT the player's army: their base defending itself, and
+# workers pulled to fight. Kept separate so a feature can ask for either.
+STATIC_DEFENSE_KILLERS = frozenset(
+    {"PhotonCannon", "SpineCrawler", "SpineCrawlerUprooted", "SporeCrawler",
+     "SporeCrawlerUprooted", "MissileTurret", "PlanetaryFortress", "Bunker"}
+)  # fmt: skip
+WORKER_KILLERS = frozenset({"Probe", "SCV", "Drone"})
+
+
 class MatchPlayer(BaseModel):
     name: str  # display name; NOT unique across SC2 accounts
     toon_handle: str  # SC2's unique account id, e.g. "1-S2-1-539205"
@@ -87,6 +110,28 @@ class MatchPlayer(BaseModel):
     orbitals: int | None = None  # Orbital Commands owned (Terran)
     lost_all_bases: bool | None = None  # was ever wiped down to zero town halls
     unit_counts: dict[str, int]  # normalized army-unit production counts
+    # Enemy value destroyed, keyed by which of this player's unit types killed
+    # it (their pick, but also cannons, workers, and spawned children like
+    # Interceptors or Locusts). Empty for games parsed before it was recorded.
+    # Its own metric, NOT a breakdown of resources_killed -- see
+    # docs/kill-attribution.md.
+    kills_by_unit: dict[str, int] = {}
+
+    @property
+    def own_kills(self) -> int:
+        """Enemy value destroyed by this player's PICK, excluding their static
+        defense, their workers, and anything else that got a kill for them.
+
+        Zero for a game parsed before attribution existed, so callers that need
+        to tell "no army kills" from "not recorded" should check kills_by_unit
+        directly. A few picks deal their damage through spells the tracker
+        credits to nobody (Infestor ~34% of its player's value, Sentry ~31%),
+        so this UNDERSTATES those specifically -- see docs/kill-attribution.md
+        before setting a threshold on one."""
+        if not self.pick:
+            return 0
+        killers = PICK_KILLERS.get(self.pick, frozenset({self.pick}))
+        return sum(v for unit, v in self.kills_by_unit.items() if unit in killers)
 
 
 class MapVersion(BaseModel):

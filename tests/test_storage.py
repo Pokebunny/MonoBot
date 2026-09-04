@@ -591,3 +591,34 @@ def test_season_boundary_is_utc_aware_like_played_at(store):
     store.ingest(_match(played_at=now, file_name="after.SC2Replay"), hash_replay(b"after"))
     assert len(store.season_matches(store.current_season())) == 1
     assert store.season_containing(now.isoformat()).name == "Season 2"
+
+
+def test_kills_by_unit_round_trips(store):
+    match = _match()
+    match.players[0].kills_by_unit = {"Zergling": 8200, "SpineCrawler": 250}
+    store.ingest(match, hash_replay(b"kills"))
+    stored = store.all_matches()[0][1]
+    assert stored.players[0].kills_by_unit == {"Zergling": 8200, "SpineCrawler": 250}
+    # A game parsed before attribution existed reads as empty, not as zeros.
+    assert stored.players[1].kills_by_unit == {}
+
+
+def test_kills_by_unit_column_is_added_to_an_older_db(tmp_path):
+    """Migration 12 is additive: an existing DB keeps its rows and gains the
+    column, since rebuilding would lose the user-written player_links."""
+    import sqlite3
+
+    path = str(tmp_path / "old.db")
+    store = MatchStore(path)
+    store.ingest(_match(), hash_replay(b"old"))
+    store.close()
+    conn = sqlite3.connect(path)
+    conn.execute("ALTER TABLE match_players DROP COLUMN kills_by_unit")
+    conn.execute("PRAGMA user_version = 11")
+    conn.commit()
+    conn.close()
+
+    reopened = MatchStore(path)  # migrates on open
+    assert reopened.match_count() == 1
+    assert reopened.all_matches()[0][1].players[0].kills_by_unit == {}
+    reopened.close()

@@ -151,7 +151,8 @@ class _Cog:
         self.sitting_out = []
         self.waitlist = []
         self.last_roster = []
-        self.match_message = self.summary_message = None
+        self.match_message = None
+        self.lineup_messages = []
 
     # The real lineup logic, run against this fake's state.
     lineup_for_next = Matchmaking.lineup_for_next

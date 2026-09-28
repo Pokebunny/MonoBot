@@ -567,6 +567,12 @@ def proposed_match(match: ProposedMatch, option_index: int = 0, option_count: in
     return embed
 
 
+def waiting_for_players(reason: str) -> discord.Embed:
+    """!teams couldn't fill the spots of players sitting out; `reason` says
+    how many more it needs. Goes out with the lineup buttons."""
+    return discord.Embed(title="Waiting for players", description=reason, color=ACCENT)
+
+
 SITTING_OUT_FIELD = "Sitting out next game"
 WAITLIST_FIELD = "Waitlist"
 

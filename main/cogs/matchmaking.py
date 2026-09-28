@@ -5,6 +5,7 @@ The queue is a single in-memory roster (one queue for the bot). discord.py
 runs interaction callbacks on one event-loop thread, so no locking is needed.
 """
 
+import collections
 import datetime as dt
 import logging
 import zoneinfo
@@ -227,7 +228,7 @@ class NextGameView(discord.ui.View):
         """Record the message this view went out on, so lineup changes made
         elsewhere are redrawn on it too."""
         if message is not None:
-            self.cog.summary_message = message
+            self.cog.lineup_messages.append(message)
 
     @discord.ui.button(
         label="Sit out", style=discord.ButtonStyle.secondary, emoji="🪑", custom_id="monobot:next:sitout"
@@ -274,7 +275,9 @@ class Matchmaking(commands.Cog):
         # looked up fresh each time so re-teaming picks up recent games.
         self.last_roster: list[discord.abc.User] = []
         self.match_message: discord.Message | None = None  # the live proposal
-        self.summary_message: discord.Message | None = None  # latest summary with NextGameView
+        # The latest few messages carrying NextGameView (summaries, a !teams
+        # still waiting on players), redrawn when the lineup changes.
+        self.lineup_messages: collections.deque[discord.Message] = collections.deque(maxlen=3)
         # When each queued player last pressed Join; they're dropped once it's
         # CONFIG.queue_timeout_minutes old.
         self.joined_at: dict[str, dt.datetime] = {}
@@ -506,7 +509,11 @@ class Matchmaking(commands.Cog):
         if not members:  # a named roster is taken as given; sit-outs only apply to the last one
             lineup = self.lineup_for_next(ctx.guild, roster)
             if isinstance(lineup, str):
-                await ctx.send(lineup)
+                # With the buttons, so whoever wants the spot can take it
+                # right here and the group can re-team once they have.
+                view = NextGameView(self)
+                embed = self.lineup_embed(match_embeds.waiting_for_players(lineup))
+                view.track(await ctx.send(embed=embed, view=view))
                 return
             roster, promoted = lineup
         if len(roster) < 2 or len(roster) % 2 != 0:
@@ -669,7 +676,7 @@ class Matchmaking(commands.Cog):
         proposal and the latest summary — except `skip`, which the caller
         has just redrawn itself. Reads each embed back off its message, so a
         summary keeps its own fields."""
-        for message in (self.match_message, self.summary_message):
+        for message in (self.match_message, *self.lineup_messages):
             if message is None or not message.embeds or (skip is not None and message.id == skip.id):
                 continue
             try:

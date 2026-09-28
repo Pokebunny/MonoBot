@@ -38,11 +38,20 @@ class ConfirmWinnerView(ExpiringView):
     via their linked SC2 name(s). Manual confirmation sets confidence to 1.0.
     Expires after 24h (a restart kills it anyway); !pending re-posts buttons."""
 
-    def __init__(self, store: MatchStore, match_id: int, achievements: AchievementCache | None = None):
+    def __init__(
+        self,
+        store: MatchStore,
+        match_id: int,
+        achievements: AchievementCache | None = None,
+        next_view: discord.ui.View | None = None,
+    ):
         super().__init__()
         self.store = store
         self.match_id = match_id
         self.achievements = achievements
+        # The current group's lineup buttons (NextGameView), swapped in once
+        # the winner is settled.
+        self.next_view = next_view
 
     def _is_participant(self, discord_id: str) -> bool:
         handles = set(self.store.handles_for(discord_id))
@@ -67,10 +76,15 @@ class ConfirmWinnerView(ExpiringView):
             match, self.match_id, map_label=map_versions.label(match, self.store.map_version_names())
         )
         embed.set_footer(text=f"Match #{self.match_id} · confirmed by {interaction.user.display_name}")
-        for child in self.children:
-            child.disabled = True
-        await interaction.response.edit_message(embed=embed, view=self)
         self.stop()
+        if self.next_view is not None:
+            embed = self.next_view.cog.lineup_embed(embed)
+            await interaction.response.edit_message(embed=embed, view=self.next_view)
+            self.next_view.track(interaction.message)
+        else:
+            for child in self.children:
+                child.disabled = True
+            await interaction.response.edit_message(embed=embed, view=self)
         if self.achievements:
             pre_discovered = self.store.discovered_keys()  # before grant, to spot community-first secrets
             unlocks = achievements.grant_new_unlocks(self.store, self.achievements, match)
@@ -226,9 +240,17 @@ class Replays(commands.Cog):
         needs_confirmation = match.duration_seconds >= MIN_DURATION_SECONDS and (
             match.winning_team is None or match.winner_confidence < MIN_WINNER_CONFIDENCE
         )
+        # The current group's game gets Sit out / Waitlist / New teams, since
+        # its summary is the message the players are looking at between games.
+        matchmaking = self.client.get_cog("Matchmaking")
+        next_view = matchmaking.next_game_view({p.toon_handle for p in match.players}) if matchmaking else None
+        if next_view is not None:
+            embed = matchmaking.lineup_embed(embed)
         if needs_confirmation:
-            view = ConfirmWinnerView(self.store, result.match_id, self.achievements)
+            view = ConfirmWinnerView(self.store, result.match_id, self.achievements, next_view)
             view.message = await channel.send(embed=embed, view=view)
+        elif next_view is not None:
+            next_view.track(await channel.send(embed=embed, view=next_view))
         else:
             await channel.send(embed=embed)
         pre_discovered = self.store.discovered_keys()  # before grant, to spot community-first secrets

@@ -3,7 +3,7 @@ import datetime as dt
 import types
 
 import pytest
-from cogs.matchmaking import AfkCheckView, Matchmaking, ProposedMatchView
+from cogs.matchmaking import AfkCheckView, Matchmaking, NextGameView, ProposedMatchView
 from models.matchmaking import QueuedPlayer
 from services.matchmaking import afk_due, balance_teams, next_roster, ranked_matches
 from services.rating import DEFAULT_MU, DEFAULT_SIGMA, predict_win_probability
@@ -150,10 +150,15 @@ class _Cog:
         self.promoted = None
         self.sitting_out = []
         self.waitlist = []
+        self.last_roster = []
+        self.match_message = self.summary_message = None
 
-    # The real swap logic, run against this fake's state.
+    # The real lineup logic, run against this fake's state.
     lineup_for_next = Matchmaking.lineup_for_next
     lineup_embed = Matchmaking.lineup_embed
+    toggle_lineup = Matchmaking.toggle_lineup
+    re_team = Matchmaking.re_team
+    _redraw_lineup = Matchmaking._redraw_lineup
 
     def save_lineup(self):
         pass
@@ -352,3 +357,30 @@ class TestSitOutAndWaitlist:
         asyncio.run(view.waitlist.callback(player))
         assert "Sit out" in player.response.message
         assert view.cog.sitting_out == [] and view.cog.waitlist == []
+
+
+class TestNextGameButtonsOnSummary:
+    """The same Sit out / Waitlist / New teams on the summary of the game just
+    played, acting on the live roster."""
+
+    def _view(self):
+        users = [types.SimpleNamespace(id=str(i)) for i in range(8)]
+        cog = _Cog(_Store(count=5), stored_ids=[u.id for u in users])
+        cog.last_roster = users
+        return NextGameView(cog), users
+
+    def test_sit_out_and_new_teams_swap_in_the_waitlister(self):
+        view, users = self._view()
+        asyncio.run(view.waitlist.callback(_Interaction(user_id="101")))
+        asyncio.run(view.sit_out.callback(_Interaction(user_id="3")))
+        interaction = _Interaction()
+        asyncio.run(view.new_teams.callback(interaction))
+        assert [u.id for u in view.cog.promoted] == ["101"]
+        assert not interaction.message.deleted  # the summary stays
+
+    def test_only_players_on_the_roster_may_re_team(self):
+        view, _ = self._view()
+        interaction = _Interaction(user_id="stranger")
+        asyncio.run(view.new_teams.callback(interaction))
+        assert "Only a player" in interaction.response.message
+        assert view.cog.reposted is None

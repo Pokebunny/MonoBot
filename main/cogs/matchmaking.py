@@ -214,14 +214,7 @@ class ProposedMatchView(discord.ui.View):
                 ephemeral=True,
             )
             return
-        lineup = self.cog.lineup_for_next(interaction.guild, users)
-        if isinstance(lineup, str):
-            await interaction.response.send_message(lineup, ephemeral=True)
-            return
-        users, promoted = lineup
-        await interaction.response.defer()
-        await self.cog.post_match(interaction.channel, users, promoted=promoted)
-        if drop_message:
+        if await self.cog.re_team(interaction, users) and drop_message:
             try:
                 await interaction.message.delete()
             except discord.HTTPException:
@@ -231,57 +224,62 @@ class ProposedMatchView(discord.ui.View):
         label="Sit out", style=discord.ButtonStyle.secondary, emoji="🪑", custom_id="monobot:match:sitout"
     )
     async def sit_out(self, interaction: discord.Interaction, button: discord.ui.Button):
-        uid = str(interaction.user.id)
-        if uid not in self.player_ids:
-            await interaction.response.send_message(
-                "Only a player in this match can sit out — press **Waitlist** to wait for a spot.", ephemeral=True
-            )
-            return
-        if uid in self.cog.sitting_out:
-            self.cog.sitting_out.remove(uid)
-            reply = "You're back in for the next game."
-        else:
-            self.cog.sitting_out.append(uid)
-            reply = "You'll sit out the next game; the first person on the waitlist takes your spot. Press again to change your mind."
-        await self._show_lineup_change(interaction, reply)
+        await self.cog.toggle_lineup(interaction, "sit_out", self.player_ids)
 
     @discord.ui.button(
         label="Waitlist", style=discord.ButtonStyle.secondary, emoji="⏳", custom_id="monobot:match:waitlist"
     )
     async def waitlist(self, interaction: discord.Interaction, button: discord.ui.Button):
-        uid = str(interaction.user.id)
-        if uid in self.player_ids:
-            await interaction.response.send_message(
-                "You're already in this match — press **Sit out** to give up your spot.", ephemeral=True
-            )
-            return
-        if uid in self.cog.waitlist:
-            self.cog.waitlist.remove(uid)
-            reply = "You've left the waitlist."
-        elif not self.cog.store.sc2_names_for(uid):
-            await interaction.response.send_message(
-                "You need to link your SC2 name before you can play. Run `!link <your SC2 name>` first.",
-                ephemeral=True,
-            )
-            return
-        else:
-            self.cog.waitlist.append(uid)
-            reply = (
-                f"You're #{len(self.cog.waitlist)} on the waitlist — you'll be pinged when a spot opens. "
-                "Press again to leave."
-            )
-        await self._show_lineup_change(interaction, reply)
+        await self.cog.toggle_lineup(interaction, "waitlist", self.player_ids)
 
-    async def _show_lineup_change(self, interaction: discord.Interaction, reply: str):
-        """Save a sit-out / waitlist change and redraw it on the message. Reads
-        the embed back off the message rather than rebuilding it, so this works
-        on a proposal restored after a restart too."""
-        self.cog.save_lineup()
-        await interaction.response.send_message(reply, ephemeral=True)
-        try:
-            await interaction.message.edit(embed=self.cog.lineup_embed(interaction.message.embeds[0]))
-        except discord.HTTPException, IndexError:
-            pass
+
+class NextGameView(discord.ui.View):
+    """Sit out / Waitlist / New teams on the summary of a game the current
+    group just played. Once a game starts nobody scrolls back up to the teams
+    message, but everyone sees the summary of the game they just finished, so
+    that's where handing over spots for the next one has to live.
+
+    Acts on the live roster (MATCH_ROSTER_META_KEY), not on the players in
+    the summarised game. Persistent like the proposal, so a deploy doesn't
+    kill the buttons on the summary everyone is looking at."""
+
+    def __init__(self, cog: "Matchmaking"):
+        super().__init__(timeout=None)
+        self.cog = cog
+
+    def track(self, message: discord.Message | None):
+        """Record the message this view went out on, so lineup changes made
+        elsewhere are redrawn on it too."""
+        if message is not None:
+            self.cog.summary_message = message
+
+    @discord.ui.button(
+        label="Sit out", style=discord.ButtonStyle.secondary, emoji="🪑", custom_id="monobot:next:sitout"
+    )
+    async def sit_out(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.toggle_lineup(interaction, "sit_out", set(self.cog.stored_roster_ids()))
+
+    @discord.ui.button(
+        label="Waitlist", style=discord.ButtonStyle.secondary, emoji="⏳", custom_id="monobot:next:waitlist"
+    )
+    async def waitlist(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.toggle_lineup(interaction, "waitlist", set(self.cog.stored_roster_ids()))
+
+    @discord.ui.button(
+        label="New teams", style=discord.ButtonStyle.primary, emoji="🔀", custom_id="monobot:next:newteams"
+    )
+    async def new_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if str(interaction.user.id) not in self.cog.stored_roster_ids():
+            await interaction.response.send_message("Only a player in this match can re-team.", ephemeral=True)
+            return
+        users = self.cog.last_roster or self.cog.resolve_roster(interaction.guild)
+        if not users:
+            await interaction.response.send_message(
+                "I've lost the roster since my last restart — run `!teams` to post fresh teams.", ephemeral=True
+            )
+            return
+        # The summary stays: it's the record of the game just played.
+        await self.cog.re_team(interaction, users)
 
 
 class Matchmaking(commands.Cog):
@@ -300,6 +298,7 @@ class Matchmaking(commands.Cog):
         # looked up fresh each time so re-teaming picks up recent games.
         self.last_roster: list[discord.abc.User] = []
         self.match_message: discord.Message | None = None  # the live proposal
+        self.summary_message: discord.Message | None = None  # latest summary with NextGameView
         # AFK check state. Each queued player's last sign of life (joining, or
         # answering a check), and the checks still awaiting an answer: their
         # deadline and the message carrying the button (None if it couldn't
@@ -314,8 +313,10 @@ class Matchmaking(commands.Cog):
         # Register the persistent view so Join/Leave buttons on queue messages
         # from before the last restart still dispatch here.
         self.client.add_view(QueueView(self))
-        # Same for New teams on a proposal that outlived the restart.
+        # Same for New teams on a proposal that outlived the restart, and the
+        # lineup buttons on match summaries.
         self.client.add_view(ProposedMatchView(self))
+        self.client.add_view(NextGameView(self))
         reset_at = _reset_time()
         if reset_at is not None:
             self.daily_reset.change_interval(time=reset_at)
@@ -614,7 +615,7 @@ class Matchmaking(commands.Cog):
         if waiting:
             self.waitlist.remove(uid)
             self.save_lineup()
-            await self._redraw_match_message()
+            await self._redraw_lineup()
         return f"Removed **{label}** from the {'queue' if queued else 'waitlist'}."
 
     @commands.hybrid_command(help="re-post the last match with freshly balanced teams (optionally naming a new roster)")
@@ -753,6 +754,7 @@ class Matchmaking(commands.Cog):
         self.sitting_out.clear()
         self.waitlist[:] = [uid for uid in self.waitlist if uid not in roster_ids]
         self.save_lineup()
+        await self._redraw_lineup()  # the summary still shows the old lineup
         if promoted and any(self.queue.pop(str(u.id), None) for u in promoted):
             await self._refresh_message()
         view = ProposedMatchView(self, list(users), options)
@@ -782,15 +784,85 @@ class Matchmaking(commands.Cog):
     def lineup_embed(self, embed: discord.Embed) -> discord.Embed:
         return match_embeds.with_lineup_changes(embed, self.sitting_out, self.waitlist)
 
-    async def _redraw_match_message(self):
-        """Redraw the lineup fields on the live proposal after a change made
-        away from its buttons (e.g. !bump)."""
-        if self.match_message is None or not self.match_message.embeds:
+    async def _redraw_lineup(self, skip: discord.Message | None = None):
+        """Redraw the lineup fields everywhere they're shown — the live
+        proposal and the latest summary — except `skip`, which the caller
+        has just redrawn itself. Reads each embed back off its message, so a
+        summary keeps its own fields."""
+        for message in (self.match_message, self.summary_message):
+            if message is None or not message.embeds or (skip is not None and message.id == skip.id):
+                continue
+            try:
+                await message.edit(embed=self.lineup_embed(message.embeds[0]))
+            except discord.HTTPException:
+                pass
+
+    async def toggle_lineup(self, interaction: discord.Interaction, action: str, roster_ids: set[str]):
+        """A Sit out ("sit_out") or Waitlist ("waitlist") press. Players in
+        `roster_ids` may sit out, anyone else may wait; pressing again undoes
+        either. Replies privately and redraws the lineup where it's shown."""
+        uid = str(interaction.user.id)
+        playing = uid in roster_ids
+        if action == "sit_out" and not playing:
+            reply = "Only a player in this match can sit out — press **Waitlist** to wait for a spot."
+            await interaction.response.send_message(reply, ephemeral=True)
             return
+        if action == "waitlist" and playing:
+            reply = "You're already in this match — press **Sit out** to give up your spot."
+            await interaction.response.send_message(reply, ephemeral=True)
+            return
+        if action == "sit_out" and uid in self.sitting_out:
+            self.sitting_out.remove(uid)
+            reply = "You're back in for the next game."
+        elif action == "sit_out":
+            self.sitting_out.append(uid)
+            reply = (
+                "You'll sit out the next game; the first person on the waitlist takes your spot. "
+                "Press again to change your mind."
+            )
+        elif uid in self.waitlist:
+            self.waitlist.remove(uid)
+            reply = "You've left the waitlist."
+        elif not self.store.sc2_names_for(uid):
+            reply = "You need to link your SC2 name before you can play. Run `!link <your SC2 name>` first."
+            await interaction.response.send_message(reply, ephemeral=True)
+            return
+        else:
+            self.waitlist.append(uid)
+            reply = (
+                f"You're #{len(self.waitlist)} on the waitlist — you'll be pinged when a spot opens. "
+                "Press again to leave."
+            )
+        self.save_lineup()
+        await interaction.response.send_message(reply, ephemeral=True)
         try:
-            await self.match_message.edit(embed=self.lineup_embed(self.match_message.embeds[0]))
-        except discord.HTTPException:
+            await interaction.message.edit(embed=self.lineup_embed(interaction.message.embeds[0]))
+        except discord.HTTPException, IndexError:
             pass
+        await self._redraw_lineup(skip=interaction.message)
+
+    async def re_team(self, interaction: discord.Interaction, users: list[discord.abc.User]) -> bool:
+        """Swap sit-outs for waitlisters and post fresh teams; answers the
+        interaction either way. False if the swap couldn't happen yet."""
+        lineup = self.lineup_for_next(interaction.guild, users)
+        if isinstance(lineup, str):
+            await interaction.response.send_message(lineup, ephemeral=True)
+            return False
+        users, promoted = lineup
+        await interaction.response.defer()
+        await self.post_match(interaction.channel, users, promoted=promoted)
+        return True
+
+    def next_game_view(self, handles: set[str]) -> NextGameView | None:
+        """Lineup buttons for the summary of a game with these players'
+        toon handles, if it was the current group's game — at least half the
+        live roster played in it. None for anyone else's game, where handing
+        over spots in this roster would make no sense."""
+        roster = self.stored_roster_ids()
+        if not roster:
+            return None
+        played = sum(1 for uid in roster if handles & set(self.store.handles_for(uid)))
+        return NextGameView(self) if played * 2 >= len(roster) else None
 
     def lineup_for_next(
         self, guild: discord.Guild | None, users: list[discord.abc.User]

@@ -32,6 +32,27 @@ def archive_replay(data: bytes, file_hash: str) -> None:
             f.write(data)
 
 
+# Discord's API occasionally 5xxs for a few seconds; wait this long before each retry.
+SEND_RETRY_DELAYS = (2, 5)
+
+
+async def send_with_retry(channel, **kwargs) -> discord.Message | None:
+    """channel.send, retried through transient Discord 5xx errors. Gives up
+    with a logged error and returns None rather than raising: by the time a
+    summary is posted the match is already stored, so a lost post must not
+    abort whatever the caller does next."""
+    for delay in (*SEND_RETRY_DELAYS, None):
+        try:
+            return await channel.send(**kwargs)
+        except discord.DiscordServerError:
+            if delay is None:
+                logger.exception("Giving up posting to channel %s", getattr(channel, "id", channel))
+                return None
+            logger.warning("Discord 5xx posting to channel %s; retrying in %ss", getattr(channel, "id", channel), delay)
+            await asyncio.sleep(delay)
+    return None
+
+
 class ConfirmWinnerView(ExpiringView):
     """Two buttons to settle a match whose winner couldn't be inferred
     confidently. Only a player who was in the match may confirm it — checked
@@ -169,7 +190,11 @@ class Replays(commands.Cog):
             return
         for attachment in message.attachments:
             if attachment.filename.lower().endswith(".sc2replay"):
-                await self._process_attachment(message.channel, attachment, message.author)
+                # One bad upload must not skip the rest of the message's replays.
+                try:
+                    await self._process_attachment(message.channel, attachment, message.author)
+                except Exception:
+                    logger.exception("Failed to process %s", attachment.filename)
 
     @commands.hybrid_command(help="toggle watching this channel (or #channel) for replay uploads (mods)")
     @is_bot_admin()
@@ -237,6 +262,12 @@ class Replays(commands.Cog):
         )
         if result.status == "updated":
             embed.set_footer(text=f"Match #{result.match_id} · refined from a more complete recording")
+        # Grant before posting: the ledger write is the part that matters, and
+        # a Discord hiccup on the summary must not leave the match ungranted.
+        pre_discovered = self.store.discovered_keys()  # before grant, to spot community-first secrets
+        unlocks = achievements.grant_new_unlocks(self.store, self.achievements, match)
+        unlocks += self._chronicler_unlock(author, match)
+
         needs_confirmation = match.duration_seconds >= MIN_DURATION_SECONDS and (
             match.winning_team is None or match.winner_confidence < MIN_WINNER_CONFIDENCE
         )
@@ -248,19 +279,16 @@ class Replays(commands.Cog):
             embed = matchmaking.lineup_embed(embed)
         if needs_confirmation:
             view = ConfirmWinnerView(self.store, result.match_id, self.achievements, next_view)
-            view.message = await channel.send(embed=embed, view=view)
+            view.message = await send_with_retry(channel, embed=embed, view=view)
         elif next_view is not None:
-            next_view.track(await channel.send(embed=embed, view=next_view))
+            next_view.track(await send_with_retry(channel, embed=embed, view=next_view))
         else:
-            await channel.send(embed=embed)
-        pre_discovered = self.store.discovered_keys()  # before grant, to spot community-first secrets
-        unlocks = achievements.grant_new_unlocks(self.store, self.achievements, match)
-        unlocks += self._chronicler_unlock(author, match)
+            await send_with_retry(channel, embed=embed)
         if unlocks:
             first = frozenset(
                 e.spec.key for _, e in unlocks if achievements.is_secret(e.spec) and e.spec.key not in pre_discovered
             )
-            await channel.send(embed=match_embeds.achievement_unlocks(unlocks, first))
+            await send_with_retry(channel, embed=match_embeds.achievement_unlocks(unlocks, first))
 
     def _chronicler_unlock(self, author, match) -> list:
         """Chronicler is earned by uploading, not playing — grant it here

@@ -29,7 +29,7 @@ class BotConfig(BaseModel):
     # is asked to confirm they're still there, and is removed if they don't
     # within afk_check_grace_minutes. Confirming restarts the clock. None
     # disables the check.
-    afk_check_minutes: int | None = 30
+    afk_check_minutes: int | None = 60
     afk_check_grace_minutes: int = 5
 
     # Discord user IDs allowed to run bot-admin commands (merges, linking other

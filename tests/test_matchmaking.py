@@ -1,10 +1,11 @@
 import asyncio
+import datetime as dt
 import types
 
 import pytest
-from cogs.matchmaking import ProposedMatchView
+from cogs.matchmaking import AfkCheckView, Matchmaking, ProposedMatchView
 from models.matchmaking import QueuedPlayer
-from services.matchmaking import balance_teams, ranked_matches
+from services.matchmaking import afk_due, balance_teams, next_roster, ranked_matches
 from services.rating import DEFAULT_MU, DEFAULT_SIGMA, predict_win_probability
 
 
@@ -104,6 +105,10 @@ class _Response:
 class _Message:
     def __init__(self):
         self.deleted = False
+        self.embeds = []  # no embed to redraw; the lineup is read off the cog
+
+    async def edit(self, **kwargs):
+        pass
 
     async def delete(self):
         self.deleted = True
@@ -114,8 +119,15 @@ class _Interaction:
         self.user = types.SimpleNamespace(id=user_id)
         self.response = _Response()
         self.channel = object()
-        self.guild = object()
+        self.guild = _Guild()
         self.message = _Message()
+
+
+class _Guild:
+    """Every waitlister is still in the server."""
+
+    def get_member(self, uid):
+        return types.SimpleNamespace(id=str(uid))
 
 
 class _Store:
@@ -125,6 +137,9 @@ class _Store:
     def match_count(self):
         return self.count
 
+    def sc2_names_for(self, uid):
+        return ["linked"]
+
 
 class _Cog:
     def __init__(self, store, stored_ids=(), resolved=None):
@@ -132,9 +147,20 @@ class _Cog:
         self.reposted = None
         self.stored_ids = list(stored_ids)
         self.resolved = list(resolved) if resolved is not None else None
+        self.promoted = None
+        self.sitting_out = []
+        self.waitlist = []
 
-    async def post_match(self, channel, users):
+    # The real swap logic, run against this fake's state.
+    lineup_for_next = Matchmaking.lineup_for_next
+    lineup_embed = Matchmaking.lineup_embed
+
+    def save_lineup(self):
+        pass
+
+    async def post_match(self, channel, users, promoted=()):
         self.reposted = users
+        self.promoted = list(promoted)
 
     def stored_roster_ids(self):
         return self.stored_ids
@@ -214,3 +240,115 @@ class TestRestoredAfterRestart:
         interaction = _Interaction(user_id="stranger")
         asyncio.run(view.new_teams.callback(interaction))
         assert "Only a player in this match" in interaction.response.message
+
+
+_T0 = dt.datetime(2026, 9, 27, 20, 0, tzinfo=dt.UTC)
+_AFTER = dt.timedelta(minutes=30)
+
+
+class TestAfkDue:
+    def test_idle_player_gets_checked_once_the_time_is_up(self):
+        confirmed = {"a": _T0, "b": _T0 + dt.timedelta(minutes=10)}
+        to_check, to_remove = afk_due(confirmed, {}, _T0 + _AFTER, _AFTER)
+        assert to_check == ["a"] and to_remove == []
+
+    def test_no_second_check_while_one_is_pending(self):
+        deadlines = {"a": _T0 + _AFTER + dt.timedelta(minutes=5)}
+        to_check, to_remove = afk_due({"a": _T0}, deadlines, _T0 + _AFTER + dt.timedelta(minutes=1), _AFTER)
+        assert to_check == [] and to_remove == []
+
+    def test_unanswered_check_removes_at_the_deadline(self):
+        deadline = _T0 + _AFTER + dt.timedelta(minutes=5)
+        _, to_remove = afk_due({"a": _T0}, {"a": deadline}, deadline, _AFTER)
+        assert to_remove == ["a"]
+
+
+class _AfkCog:
+    def __init__(self, queue):
+        self.queue = queue
+        self.activated = []
+        self.deleted = []
+
+    async def mark_active(self, uid):
+        self.activated.append(uid)
+
+    async def delete_quietly(self, message):
+        self.deleted.append(message)
+
+
+class TestAfkCheckButton:
+    def test_confirming_restarts_the_clock(self):
+        cog = _AfkCog({"1": object()})
+        interaction = _Interaction(user_id=1)
+        asyncio.run(AfkCheckView(cog, "1").confirm.callback(interaction))
+        assert cog.activated == ["1"]
+        assert "still in the queue" in interaction.response.message
+
+    def test_only_the_checked_player_may_answer(self):
+        cog = _AfkCog({"1": object()})
+        interaction = _Interaction(user_id=2)
+        asyncio.run(AfkCheckView(cog, "1").confirm.callback(interaction))
+        assert cog.activated == [] and cog.deleted == []
+        assert "isn't for you" in interaction.response.message
+
+    def test_answering_after_leaving_just_clears_the_check(self):
+        cog = _AfkCog({})
+        interaction = _Interaction(user_id=1)
+        asyncio.run(AfkCheckView(cog, "1").confirm.callback(interaction))
+        assert cog.activated == [] and cog.deleted == [interaction.message]
+        assert "no longer in the queue" in interaction.response.message
+
+
+class TestNextRoster:
+    def test_sit_outs_hand_their_spots_to_the_waitlist_in_order(self):
+        roster, promoted, short = next_roster(["a", "b", "c", "d"], ["b"], ["x", "y"])
+        assert roster == ["a", "c", "d", "x"] and promoted == ["x"] and short == 0
+
+    def test_nobody_sitting_out_means_nobody_moves(self):
+        assert next_roster(["a", "b"], [], ["x"]) == (["a", "b"], [], 0)
+
+    def test_short_when_the_waitlist_cannot_cover_the_sit_outs(self):
+        _, _, short = next_roster(["a", "b", "c", "d"], ["a", "b"], ["x"])
+        assert short == 1
+
+
+class TestSitOutAndWaitlist:
+    """Between games, players give up spots with Sit out and others claim them
+    with Waitlist; the swap happens at the next New teams."""
+
+    def test_sit_out_then_new_teams_swaps_in_the_first_waitlister(self):
+        view, users = _view(_Store(count=5))
+        asyncio.run(view.waitlist.callback(_Interaction(user_id="101")))
+        asyncio.run(view.waitlist.callback(_Interaction(user_id="102")))
+        asyncio.run(view.sit_out.callback(_Interaction(user_id="3")))
+        # No game stored yet, but the roster changed, so it re-balances.
+        asyncio.run(view.new_teams.callback(_Interaction()))
+        assert [u.id for u in view.cog.reposted] == [u.id for u in users if u.id != "3"] + ["101"]
+        assert [u.id for u in view.cog.promoted] == ["101"]
+
+    def test_pressing_again_takes_it_back(self):
+        view, _ = _view(_Store(count=5))
+        asyncio.run(view.sit_out.callback(_Interaction(user_id="3")))
+        asyncio.run(view.sit_out.callback(_Interaction(user_id="3")))
+        asyncio.run(view.waitlist.callback(_Interaction(user_id="101")))
+        asyncio.run(view.waitlist.callback(_Interaction(user_id="101")))
+        assert view.cog.sitting_out == [] and view.cog.waitlist == []
+
+    def test_no_swap_without_someone_to_take_the_spot(self):
+        view, _ = _view(_Store(count=5))
+        asyncio.run(view.sit_out.callback(_Interaction(user_id="3")))
+        interaction = _Interaction()
+        asyncio.run(view.new_teams.callback(interaction))
+        assert "need 1 more" in interaction.response.message
+        assert view.cog.reposted is None
+        assert view.cog.sitting_out == ["3"]  # still waiting for a taker
+
+    def test_players_sit_out_and_outsiders_wait(self):
+        view, _ = _view(_Store(count=5))
+        outsider = _Interaction(user_id="stranger")
+        asyncio.run(view.sit_out.callback(outsider))
+        assert "Waitlist" in outsider.response.message
+        player = _Interaction(user_id="3")
+        asyncio.run(view.waitlist.callback(player))
+        assert "Sit out" in player.response.message
+        assert view.cog.sitting_out == [] and view.cog.waitlist == []

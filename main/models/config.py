@@ -25,6 +25,13 @@ class BotConfig(BaseModel):
     queue_reset_time: str | None = "05:00"
     queue_reset_timezone: str = "America/New_York"
 
+    # AFK check: after this many minutes in the queue without a game, a player
+    # is asked to confirm they're still there, and is removed if they don't
+    # within afk_check_grace_minutes. Confirming restarts the clock. None
+    # disables the check.
+    afk_check_minutes: int | None = 30
+    afk_check_grace_minutes: int = 5
+
     # Discord user IDs allowed to run bot-admin commands (merges, linking other
     # members, clearing the queue) regardless of server permissions.
     admin_user_ids: list[int] = []

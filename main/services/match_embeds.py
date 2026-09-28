@@ -564,6 +564,28 @@ def proposed_match(match: ProposedMatch, option_index: int = 0, option_count: in
     return embed
 
 
+SITTING_OUT_FIELD = "Sitting out next game"
+WAITLIST_FIELD = "Waitlist"
+
+
+def with_lineup_changes(embed: discord.Embed, sitting_out: list[str], waitlist: list[str]) -> discord.Embed:
+    """Show who's giving up their spot and who's waiting for one under the
+    teams, replacing any earlier copy of those fields. Works on an embed read
+    back off a message, so a proposal from before a restart can be updated
+    too. Takes Discord ids; mentions in an embed render as names and never
+    ping."""
+    keep = [f for f in embed.fields if f.name not in (SITTING_OUT_FIELD, WAITLIST_FIELD)]
+    embed.clear_fields()
+    for f in keep:
+        embed.add_field(name=f.name, value=f.value, inline=f.inline)
+    if sitting_out:
+        embed.add_field(name=SITTING_OUT_FIELD, value=" ".join(f"<@{uid}>" for uid in sitting_out), inline=False)
+    if waitlist:
+        value = "\n".join(f"{i}. <@{uid}>" for i, uid in enumerate(waitlist, 1))
+        embed.add_field(name=WAITLIST_FIELD, value=value, inline=False)
+    return embed
+
+
 def mvp_rates(
     rows: list[tuple[str, str, int, int]],
     page: int = 0,

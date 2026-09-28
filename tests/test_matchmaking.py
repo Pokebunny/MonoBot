@@ -348,3 +348,33 @@ class TestNextGameButtonsOnSummary:
         asyncio.run(view.new_teams.callback(interaction))
         assert "Only a player" in interaction.response.message
         assert view.cog.reposted is None
+
+
+class _MetaStore(_Store):
+    def __init__(self):
+        super().__init__()
+        self.meta = {}
+
+    def get_meta(self, key):
+        return self.meta.get(key)
+
+    def set_meta(self, key, value):
+        self.meta[key] = value
+
+
+class TestJoinButton:
+    """The Join button end to end, so a helper it leans on can't go missing
+    unnoticed again."""
+
+    def test_join_queues_the_player_and_adopts_the_message(self):
+        cog = object.__new__(Matchmaking)
+        cog.store, cog.queue, cog.joined_at = _MetaStore(), {}, {}
+        cog.queue_message = None
+        cog._players = lambda: []  # no ratings to look up
+        interaction = _Interaction(user_id=1)
+        interaction.message.channel = types.SimpleNamespace(id=9)
+        interaction.message.id = 42
+        asyncio.run(cog.handle_join(interaction))
+        assert "1" in cog.queue and "1" in cog.joined_at
+        assert cog.queue_message is interaction.message
+        assert cog.store.meta["queue_message"] == "9:42"

@@ -364,6 +364,47 @@ class Matchmaking(commands.Cog):
         for uid in [uid for uid in self.joined_at if uid not in self.queue]:
             del self.joined_at[uid]
 
+    @commands.Cog.listener()
+    async def on_ready(self):
+        # Sweep a queue message left over from before a restart so a stale,
+        # unbacked queue isn't left sitting in chat. keep=self.queue_message is
+        # None on a fresh process (deletes the leftover) but the live message
+        # on a mid-session gateway reconnect (so it's preserved, not deleted).
+        await self._clear_old_queue_message(keep=self.queue_message)
+
+    async def _clear_old_queue_message(self, keep: discord.Message | None = None):
+        """Delete the last-tracked queue message unless it's `keep`, then record
+        `keep` as the current one. Called whenever a new queue message is posted
+        or adopted, and on startup (keep=None), so exactly one live queue
+        message survives and stale ones never accumulate — even across a restart,
+        since the pointer lives in the DB, not just memory."""
+        keep_ref = f"{keep.channel.id}:{keep.id}" if keep is not None else ""
+        old_ref = self.store.get_meta(QUEUE_MSG_META_KEY) or ""
+        if old_ref == keep_ref:
+            return
+        if old_ref:
+            await self._delete_message_ref(old_ref)
+        self.store.set_meta(QUEUE_MSG_META_KEY, keep_ref)
+
+    async def _delete_message_ref(self, ref: str):
+        """Delete a message given a stored "<channel_id>:<message_id>" pointer.
+        Silent if it's already gone or the channel is unreachable."""
+        try:
+            channel_id, message_id = (int(part) for part in ref.split(":"))
+        except ValueError:
+            return
+        channel = self.client.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.client.fetch_channel(channel_id)
+            except discord.HTTPException:
+                return
+        try:
+            message = await channel.fetch_message(message_id)
+            await message.delete()
+        except discord.HTTPException:
+            pass
+
     # -- rating lookup ---------------------------------------------------
 
     def _queued_player(self, user: discord.abc.User) -> QueuedPlayer:

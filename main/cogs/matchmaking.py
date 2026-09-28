@@ -15,7 +15,7 @@ from discord.ext import commands, tasks
 from models.matchmaking import ProposedMatch, QueuedPlayer
 from resources.config import CONFIG
 from services import identity, match_embeds
-from services.matchmaking import afk_due, next_roster, ranked_matches
+from services.matchmaking import expired, next_roster, ranked_matches
 from services.rating import DEFAULT_MU, DEFAULT_SIGMA, RatingCache
 from services.storage import MatchStore
 from views import PersonPickView
@@ -42,9 +42,8 @@ MATCH_ROSTER_META_KEY = "match_roster"
 SITTING_OUT_META_KEY = "match_sitting_out"
 WAITLIST_META_KEY = "match_waitlist"
 
-# How often the AFK sweep looks for idle players and unanswered checks. Sets
-# the slack on both timers, so keep it small next to the grace period.
-AFK_SWEEP_SECONDS = 30
+# How often queue timeouts are checked; the slack on the timeout itself.
+TIMEOUT_SWEEP_SECONDS = 60
 
 
 def _reset_time() -> dt.time | None:
@@ -82,29 +81,6 @@ class QueueView(discord.ui.View):
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, custom_id="monobot:queue:leave")
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.handle_leave(interaction)
-
-
-class AfkCheckView(discord.ui.View):
-    """The "still here?" button sent to one idle player. Not persistent: the
-    queue lives in memory, so after a restart there's nothing left to confirm."""
-
-    def __init__(self, cog: "Matchmaking", uid: str):
-        super().__init__(timeout=None)
-        self.cog = cog
-        self.uid = uid
-
-    @discord.ui.button(label="I'm still here", style=discord.ButtonStyle.success, emoji="✋")
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if str(interaction.user.id) != self.uid:
-            await interaction.response.send_message("This check isn't for you.", ephemeral=True)
-            return
-        if self.uid not in self.cog.queue:
-            await interaction.response.send_message("You're no longer in the queue.", ephemeral=True)
-            await self.cog.delete_quietly(interaction.message)
-            return
-        await interaction.response.send_message("Thanks — you're still in the queue.", ephemeral=True)
-        # Restarts their clock and deletes this message.
-        await self.cog.mark_active(self.uid)
 
 
 class ProposedMatchView(discord.ui.View):
@@ -299,12 +275,9 @@ class Matchmaking(commands.Cog):
         self.last_roster: list[discord.abc.User] = []
         self.match_message: discord.Message | None = None  # the live proposal
         self.summary_message: discord.Message | None = None  # latest summary with NextGameView
-        # AFK check state. Each queued player's last sign of life (joining, or
-        # answering a check), and the checks still awaiting an answer: their
-        # deadline and the message carrying the button (None if it couldn't
-        # be delivered — the deadline still stands).
-        self.confirmed_at: dict[str, dt.datetime] = {}
-        self.afk_checks: dict[str, tuple[dt.datetime, discord.Message | None]] = {}
+        # When each queued player last pressed Join; they're dropped once it's
+        # CONFIG.queue_timeout_minutes old.
+        self.joined_at: dict[str, dt.datetime] = {}
         # Spots changing hands at the next re-team (see ProposedMatchView).
         self.sitting_out: list[str] = self._stored_ids(SITTING_OUT_META_KEY)
         self.waitlist: list[str] = self._stored_ids(WAITLIST_META_KEY)
@@ -321,12 +294,12 @@ class Matchmaking(commands.Cog):
         if reset_at is not None:
             self.daily_reset.change_interval(time=reset_at)
             self.daily_reset.start()
-        if CONFIG.afk_check_minutes:
-            self.afk_sweep.start()
+        if CONFIG.queue_timeout_minutes:
+            self.timeout_sweep.start()
 
     async def cog_unload(self):
         self.daily_reset.cancel()
-        self.afk_sweep.cancel()
+        self.timeout_sweep.cancel()
 
     # A queue that sat unfilled overnight is stale: people who joined, never
     # got a game and forgot to leave make the count look healthier than it is.
@@ -349,143 +322,44 @@ class Matchmaking(commands.Cog):
     async def before_daily_reset(self):
         await self.client.wait_until_ready()
 
-    # -- AFK check ---------------------------------------------------------
+    # -- queue timeout -----------------------------------------------------
 
     # The daily reset catches a queue forgotten overnight; this catches one
     # player who wandered off mid-session and would otherwise be pinged into
-    # a match they aren't there for.
-    @tasks.loop(seconds=AFK_SWEEP_SECONDS)
-    async def afk_sweep(self):
-        await self._forget_departed()
-        now = discord.utils.utcnow()
-        to_check, to_remove = afk_due(
-            self.confirmed_at,
-            {uid: deadline for uid, (deadline, _) in self.afk_checks.items()},
-            now,
-            dt.timedelta(minutes=CONFIG.afk_check_minutes),
-        )
-        for uid in to_remove:
-            await self._remove_afk(uid)
-        if to_remove:
+    # a match they aren't there for. Silent on purpose: a reminder before
+    # removal was tried and found too noisy, so the queue message states the
+    # rule instead and pressing Join again restarts the clock.
+    @tasks.loop(seconds=TIMEOUT_SWEEP_SECONDS)
+    async def timeout_sweep(self):
+        self._forget_departed()
+        gone = expired(self.joined_at, discord.utils.utcnow(), dt.timedelta(minutes=CONFIG.queue_timeout_minutes))
+        for uid in gone:
+            user = self.queue.pop(uid, None)
+            del self.joined_at[uid]
+            logger.info("Queue timeout: removed %s", user.display_name if user is not None else uid)
+        if gone:
             await self._refresh_message()
-        for uid in to_check:
-            await self._send_afk_check(uid, now + dt.timedelta(minutes=CONFIG.afk_check_grace_minutes))
 
-    @afk_sweep.before_loop
-    async def before_afk_sweep(self):
+    @timeout_sweep.before_loop
+    async def before_timeout_sweep(self):
         await self.client.wait_until_ready()
 
-    @afk_sweep.error
-    async def afk_sweep_error(self, error):
+    @timeout_sweep.error
+    async def timeout_sweep_error(self, error):
         # A loop task dies on an unhandled exception; log it and keep sweeping.
-        logger.exception("AFK sweep failed", exc_info=error)
-        self.afk_sweep.restart()
+        logger.exception("Queue timeout sweep failed", exc_info=error)
+        self.timeout_sweep.restart()
 
-    async def mark_active(self, uid: str):
-        """Restart a player's AFK clock, withdrawing any check they have out.
-        Called on joining and on answering a check."""
-        self.confirmed_at[uid] = discord.utils.utcnow()
-        _, message = self.afk_checks.pop(uid, (None, None))
-        await self.delete_quietly(message)
+    def renew(self, uid: str):
+        """Start (or restart) a queued player's timeout."""
+        self.joined_at[uid] = discord.utils.utcnow()
 
-    async def _forget_departed(self):
-        """Drop AFK state for players no longer queued — they left, were
-        bumped, or got a match — and take down any check they had out. Done
-        here rather than at every place the queue shrinks."""
-        for uid in [uid for uid in self.confirmed_at if uid not in self.queue]:
-            del self.confirmed_at[uid]
-        for uid in [uid for uid in self.afk_checks if uid not in self.queue]:
-            _, message = self.afk_checks.pop(uid)
-            await self.delete_quietly(message)
-
-    async def _send_afk_check(self, uid: str, deadline: dt.datetime):
-        """Ask one idle player to confirm, in the queue's channel so the ping
-        lands where they queued; by DM if there's no live queue message."""
-        content = (
-            f"<@{uid}> are you still there? You've been in the queue for "
-            f"{CONFIG.afk_check_minutes} minutes — press the button "
-            f"{discord.utils.format_dt(deadline, 'R')} or you'll be removed."
-        )
-        message = None
-        try:
-            if self.queue_message is not None:
-                message = await self.queue_message.channel.send(
-                    content,
-                    view=AfkCheckView(self, uid),
-                    allowed_mentions=discord.AllowedMentions(users=True),
-                )
-            else:
-                message = await self.queue[uid].send(content, view=AfkCheckView(self, uid))
-        except discord.HTTPException:
-            logger.warning("Couldn't deliver AFK check to %s; removing at deadline anyway", uid)
-        self.afk_checks[uid] = (deadline, message)
-
-    async def _remove_afk(self, uid: str):
-        """Take a player who let their check lapse out of the queue, and turn
-        the check into a note saying why, so they aren't left wondering."""
-        user = self.queue.pop(uid, None)
-        self.confirmed_at.pop(uid, None)
-        _, message = self.afk_checks.pop(uid, (None, None))
-        logger.info("AFK check: removed %s from the queue", user.display_name if user is not None else uid)
-        if message is not None:
-            try:
-                await message.edit(
-                    content=f"<@{uid}> was removed from the queue for not answering the AFK check.",
-                    view=None,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-            except discord.HTTPException:
-                pass
-
-    @staticmethod
-    async def delete_quietly(message: discord.Message | None):
-        if message is None:
-            return
-        try:
-            await message.delete()
-        except discord.HTTPException:
-            pass
-
-    @commands.Cog.listener()
-    async def on_ready(self):
-        # Sweep a queue message left over from before a restart so a stale,
-        # unbacked queue isn't left sitting in chat. keep=self.queue_message is
-        # None on a fresh process (deletes the leftover) but the live message
-        # on a mid-session gateway reconnect (so it's preserved, not deleted).
-        await self._clear_old_queue_message(keep=self.queue_message)
-
-    async def _clear_old_queue_message(self, keep: discord.Message | None = None):
-        """Delete the last-tracked queue message unless it's `keep`, then record
-        `keep` as the current one. Called whenever a new queue message is posted
-        or adopted, and on startup (keep=None), so exactly one live queue
-        message survives and stale ones never accumulate — even across a restart,
-        since the pointer lives in the DB, not just memory."""
-        keep_ref = f"{keep.channel.id}:{keep.id}" if keep is not None else ""
-        old_ref = self.store.get_meta(QUEUE_MSG_META_KEY) or ""
-        if old_ref == keep_ref:
-            return
-        if old_ref:
-            await self._delete_message_ref(old_ref)
-        self.store.set_meta(QUEUE_MSG_META_KEY, keep_ref)
-
-    async def _delete_message_ref(self, ref: str):
-        """Delete a message given a stored "<channel_id>:<message_id>" pointer.
-        Silent if it's already gone or the channel is unreachable."""
-        try:
-            channel_id, message_id = (int(part) for part in ref.split(":"))
-        except ValueError:
-            return
-        channel = self.client.get_channel(channel_id)
-        if channel is None:
-            try:
-                channel = await self.client.fetch_channel(channel_id)
-            except discord.HTTPException:
-                return
-        try:
-            message = await channel.fetch_message(message_id)
-            await message.delete()
-        except discord.HTTPException:
-            pass
+    def _forget_departed(self):
+        """Drop timers for players no longer queued — they left, were bumped,
+        or got a match. Done here rather than at every place the queue
+        shrinks."""
+        for uid in [uid for uid in self.joined_at if uid not in self.queue]:
+            del self.joined_at[uid]
 
     # -- rating lookup ---------------------------------------------------
 
@@ -519,7 +393,7 @@ class Matchmaking(commands.Cog):
         return [self._queued_player(u) for u in self.queue.values()]
 
     def _status_embed(self) -> discord.Embed:
-        return match_embeds.queue_status(self._players(), QUEUE_TARGET)
+        return match_embeds.queue_status(self._players(), QUEUE_TARGET, CONFIG.queue_timeout_minutes)
 
     async def _refresh_message(self):
         """Update the tracked queue message after a command changes the queue."""
@@ -650,7 +524,7 @@ class Matchmaking(commands.Cog):
                     content=f"**{person.sc2_name}** isn't in this server.", view=None
                 )
                 return
-            message, roster = await self._add(member)
+            message, roster = self._add(member)
             await interaction.response.edit_message(content=message, view=None)
             await self._refresh_message()
             if roster:
@@ -659,13 +533,13 @@ class Matchmaking(commands.Cog):
         member = await self._member_for(ctx, player, picked)
         if member is None:
             return
-        message, roster = await self._add(member)
+        message, roster = self._add(member)
         await self._refresh_message()
         await ctx.send(message)
         if roster:
             await self.post_match(ctx.channel, roster, announce=True)
 
-    async def _add(self, member) -> tuple[str, list | None]:
+    def _add(self, member) -> tuple[str, list | None]:
         """Queue a member; returns what to say and a roster if that filled it."""
         uid = str(member.id)
         # Same link requirement as the Join button: an unlinked player would
@@ -677,9 +551,10 @@ class Matchmaking(commands.Cog):
                 "they need to run `!link <their SC2 name>` before they can queue."
             ), None
         if uid in self.queue:
-            return f"**{member.display_name}** is already in the queue.", None
+            self.renew(uid)
+            return f"**{member.display_name}** is already in the queue — restarted their timer.", None
         self.queue[uid] = member
-        await self.mark_active(uid)
+        self.renew(uid)
         roster = self._take_queue() if len(self.queue) >= QUEUE_TARGET else None
         return f"Added **{member.display_name}** to the queue.", roster
 
@@ -700,10 +575,15 @@ class Matchmaking(commands.Cog):
             )
             return
         if uid in self.queue:
-            await interaction.response.send_message("You're already in the queue.", ephemeral=True)
+            self.renew(uid)
+            await interaction.response.send_message(
+                f"You're already in the queue — your timer's restarted, you'll stay in for another "
+                f"{CONFIG.queue_timeout_minutes} minutes.",
+                ephemeral=True,
+            )
             return
         self.queue[uid] = interaction.user
-        await self.mark_active(uid)
+        self.renew(uid)
         roster = self._take_queue() if len(self.queue) >= QUEUE_TARGET else None
         # Reset the queue message either way, then announce any formed match.
         await interaction.response.edit_message(embed=self._status_embed(), view=QueueView(self))

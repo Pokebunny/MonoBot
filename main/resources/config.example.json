@@ -4,8 +4,7 @@
   ],
   "queue_reset_time": "05:00",
   "queue_reset_timezone": "America/New_York",
-  "afk_check_minutes": 60,
-  "afk_check_grace_minutes": 5,
+  "queue_timeout_minutes": 60,
   "admin_user_ids": [
     111111111111111111,
     222222222222222222

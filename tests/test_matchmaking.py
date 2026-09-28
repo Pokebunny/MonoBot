@@ -3,9 +3,9 @@ import datetime as dt
 import types
 
 import pytest
-from cogs.matchmaking import AfkCheckView, Matchmaking, NextGameView, ProposedMatchView
+from cogs.matchmaking import Matchmaking, NextGameView, ProposedMatchView
 from models.matchmaking import QueuedPlayer
-from services.matchmaking import afk_due, balance_teams, next_roster, ranked_matches
+from services.matchmaking import balance_teams, expired, next_roster, ranked_matches
 from services.rating import DEFAULT_MU, DEFAULT_SIGMA, predict_win_probability
 
 
@@ -248,60 +248,23 @@ class TestRestoredAfterRestart:
 
 
 _T0 = dt.datetime(2026, 9, 27, 20, 0, tzinfo=dt.UTC)
-_AFTER = dt.timedelta(minutes=30)
+_TIMEOUT = dt.timedelta(minutes=60)
 
 
-class TestAfkDue:
-    def test_idle_player_gets_checked_once_the_time_is_up(self):
-        confirmed = {"a": _T0, "b": _T0 + dt.timedelta(minutes=10)}
-        to_check, to_remove = afk_due(confirmed, {}, _T0 + _AFTER, _AFTER)
-        assert to_check == ["a"] and to_remove == []
+class TestQueueTimeout:
+    def test_removed_once_the_timeout_has_passed(self):
+        joined = {"a": _T0, "b": _T0 + dt.timedelta(minutes=10)}
+        assert expired(joined, _T0 + _TIMEOUT, _TIMEOUT) == ["a"]
 
-    def test_no_second_check_while_one_is_pending(self):
-        deadlines = {"a": _T0 + _AFTER + dt.timedelta(minutes=5)}
-        to_check, to_remove = afk_due({"a": _T0}, deadlines, _T0 + _AFTER + dt.timedelta(minutes=1), _AFTER)
-        assert to_check == [] and to_remove == []
-
-    def test_unanswered_check_removes_at_the_deadline(self):
-        deadline = _T0 + _AFTER + dt.timedelta(minutes=5)
-        _, to_remove = afk_due({"a": _T0}, {"a": deadline}, deadline, _AFTER)
-        assert to_remove == ["a"]
-
-
-class _AfkCog:
-    def __init__(self, queue):
-        self.queue = queue
-        self.activated = []
-        self.deleted = []
-
-    async def mark_active(self, uid):
-        self.activated.append(uid)
-
-    async def delete_quietly(self, message):
-        self.deleted.append(message)
-
-
-class TestAfkCheckButton:
-    def test_confirming_restarts_the_clock(self):
-        cog = _AfkCog({"1": object()})
-        interaction = _Interaction(user_id=1)
-        asyncio.run(AfkCheckView(cog, "1").confirm.callback(interaction))
-        assert cog.activated == ["1"]
-        assert "still in the queue" in interaction.response.message
-
-    def test_only_the_checked_player_may_answer(self):
-        cog = _AfkCog({"1": object()})
-        interaction = _Interaction(user_id=2)
-        asyncio.run(AfkCheckView(cog, "1").confirm.callback(interaction))
-        assert cog.activated == [] and cog.deleted == []
-        assert "isn't for you" in interaction.response.message
-
-    def test_answering_after_leaving_just_clears_the_check(self):
-        cog = _AfkCog({})
-        interaction = _Interaction(user_id=1)
-        asyncio.run(AfkCheckView(cog, "1").confirm.callback(interaction))
-        assert cog.activated == [] and cog.deleted == [interaction.message]
-        assert "no longer in the queue" in interaction.response.message
+    def test_pressing_join_again_restarts_the_timer(self):
+        cog = object.__new__(Matchmaking)  # just the queue state, no Discord client
+        cog.store, cog.queue, cog.joined_at = _Store(), {}, {}
+        member = types.SimpleNamespace(id=1, display_name="p1")
+        cog._add(member)
+        cog.joined_at["1"] = _T0  # joined an hour ago
+        message, _ = cog._add(member)
+        assert "restarted" in message
+        assert expired(cog.joined_at, _T0 + _TIMEOUT, _TIMEOUT) == []
 
 
 class TestNextRoster:

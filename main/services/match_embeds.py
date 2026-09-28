@@ -530,7 +530,7 @@ def h2h_summary(
     return embed
 
 
-def queue_status(players: list[QueuedPlayer], target: int) -> discord.Embed:
+def queue_status(players: list[QueuedPlayer], target: int, timeout_minutes: int | None = None) -> discord.Embed:
     embed = discord.Embed(title="Matchmaking Queue", color=ACCENT)
     if players:
         lines = []
@@ -540,7 +540,10 @@ def queue_status(players: list[QueuedPlayer], target: int) -> discord.Embed:
         embed.description = "\n".join(lines)
     else:
         embed.description = "*Queue is empty. Click **Join** to get in.*"
-    embed.set_footer(text=f"{len(players)}/{target} — teams form automatically when full")
+    footer = f"{len(players)}/{target} — teams form automatically when full"
+    if timeout_minutes:
+        footer += f"\nPlayers are removed after {timeout_minutes} minutes — press Join again to restart your timer."
+    embed.set_footer(text=footer)
     return embed
 
 

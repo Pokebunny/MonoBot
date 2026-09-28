@@ -49,21 +49,9 @@ def balance_teams(players: list[QueuedPlayer]) -> ProposedMatch:
     return ranked_matches(players, limit=1)[0]
 
 
-def afk_due(
-    confirmed_at: dict[str, dt.datetime],
-    deadlines: dict[str, dt.datetime],
-    now: dt.datetime,
-    check_after: dt.timedelta,
-) -> tuple[list[str], list[str]]:
-    """Who needs an AFK check and who has run out of time to answer one.
-
-    `confirmed_at` is each queued player's last sign of life (joining, or
-    answering a check); `deadlines` holds the players with a check already
-    out. Returns (to_check, to_remove): players idle for `check_after` with no
-    check pending, and players whose check went unanswered past its deadline."""
-    to_remove = [uid for uid, deadline in deadlines.items() if now >= deadline]
-    to_check = [uid for uid, since in confirmed_at.items() if uid not in deadlines and now - since >= check_after]
-    return to_check, to_remove
+def expired(joined_at: dict[str, dt.datetime], now: dt.datetime, timeout: dt.timedelta) -> list[str]:
+    """Queued players whose last Join press is at least `timeout` old."""
+    return [uid for uid, since in joined_at.items() if now - since >= timeout]
 
 
 def next_roster(roster: list[str], sitting_out: list[str], waitlist: list[str]) -> tuple[list[str], list[str], int]:

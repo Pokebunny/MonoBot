@@ -12,6 +12,7 @@ import zoneinfo
 
 import discord
 from checks import is_bot_admin
+from converters import AmbiguousMember, MemberConverter
 from discord.ext import commands, tasks
 from models.matchmaking import ProposedMatch, QueuedPlayer
 from resources.config import CONFIG
@@ -19,7 +20,7 @@ from services import identity, match_embeds
 from services.matchmaking import expired, next_roster, ranked_matches
 from services.rating import DEFAULT_MU, DEFAULT_SIGMA, RatingCache
 from services.storage import MatchStore
-from views import PersonPickView
+from views import PersonPickView, pick_member
 
 logger = logging.getLogger(__name__)
 
@@ -474,12 +475,13 @@ class Matchmaking(commands.Cog):
     async def _member_for(self, ctx, query: str, on_pick):
         """A guild member from a typed name, resolved the same way every other
         command resolves names: their claimed SC2 name first, then an account's
-        current in-game name, then an exact Discord name/nickname/mention/id.
-        No partial matching — queueing the wrong person is worse than being
+        current in-game name, then a Discord name/nickname/mention/id (case
+        ignored if nothing matches exactly). No partial matching — queueing the wrong person is worse than being
         told to type the whole name.
 
         None when the caller has already been answered: nothing matched, the
-        name is shared and a picker went out, or the person isn't reachable."""
+        name is shared (by accounts or by members) and a picker went out, or
+        the person isn't reachable."""
         people = identity.resolve(self.store, query)
         if identity.ambiguous(people):
             view = PersonPickView(people, str(ctx.author.id), on_pick)
@@ -490,7 +492,10 @@ class Matchmaking(commands.Cog):
             if member is not None:
                 return member
         try:  # a Discord handle, mention or id rather than an SC2 name
-            return await commands.MemberConverter().convert(ctx, query)
+            return await MemberConverter().convert(ctx, query)
+        except AmbiguousMember as err:
+            await pick_member(ctx, self.store, query, err.members, on_pick)
+            return None
         except commands.BadArgument:
             pass
         if people and people[0].discord_id:

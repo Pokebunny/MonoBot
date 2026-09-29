@@ -9,10 +9,11 @@ import logging
 
 import discord
 from checks import is_bot_admin
+from converters import AmbiguousMember, MemberConverter
 from discord.ext import commands
 from services.match_embeds import ACCENT, WARNING
 from services.storage import MatchStore
-from views import ExpiringView
+from views import ExpiringView, pick_member
 
 logger = logging.getLogger(__name__)
 
@@ -332,7 +333,15 @@ class Identity(commands.Cog):
     @is_bot_admin()
     async def unlinkuser(self, ctx, target: str, *, sc2_name: str | None = None):
         try:
-            member = await commands.MemberConverter().convert(ctx, target)
+            member = await MemberConverter().convert(ctx, target)
+        except AmbiguousMember as err:
+
+            async def picked(interaction, person):
+                message = self._unlink_member(person.discord_id, person.discord_name, sc2_name)
+                await interaction.response.edit_message(content=message, view=None)
+
+            await pick_member(ctx, self.store, err.argument, err.members, picked)
+            return
         except commands.BadArgument:
             member = None
         if member is None:
@@ -347,21 +356,21 @@ class Identity(commands.Cog):
             else:
                 await ctx.send(f"Unlinked **{target}** (was linked to <@{owner}>).")
             return
-        discord_id = str(member.id)
+        await ctx.send(self._unlink_member(str(member.id), member.display_name, sc2_name))
+
+    def _unlink_member(self, discord_id: str, display_name: str, sc2_name: str | None) -> str:
+        """Unlink one name from a member, or all of them; returns the reply."""
         if sc2_name:
             sc2_name = sc2_name.strip()
             if self.store.unlink_player(discord_id, sc2_name):
-                await ctx.send(f"Unlinked **{sc2_name}** from {member.display_name}.")
-            else:
-                await ctx.send(f"{member.display_name} doesn't have **{sc2_name}** linked.")
-            return
+                return f"Unlinked **{sc2_name}** from {display_name}."
+            return f"{display_name} doesn't have **{sc2_name}** linked."
         names = self.store.sc2_names_for(discord_id)
         if not names:
-            await ctx.send(f"{member.display_name} has no linked accounts.")
-            return
+            return f"{display_name} has no linked accounts."
         for name in names:
             self.store.unlink_player(discord_id, name)
-        await ctx.send(f"Unlinked {member.display_name}'s accounts: " + ", ".join(f"**{n}**" for n in names))
+        return f"Unlinked {display_name}'s accounts: " + ", ".join(f"**{n}**" for n in names)
 
     @commands.hybrid_command(help="unlink one of your SC2 names")
     @commands.cooldown(1, 3, commands.BucketType.user)
@@ -401,7 +410,19 @@ class Identity(commands.Cog):
     async def whois(self, ctx, *, target: str):
         target = target.strip()
         try:
-            member = await commands.MemberConverter().convert(ctx, target)
+            member = await MemberConverter().convert(ctx, target)
+        except AmbiguousMember as err:
+
+            async def picked(interaction, person):
+                embed = self._accounts_embed(person.discord_id, person.discord_name)
+                await interaction.response.edit_message(
+                    embed=embed,
+                    content=None if embed else f"{person.discord_name} hasn't linked any SC2 accounts.",
+                    view=None,
+                )
+
+            await pick_member(ctx, self.store, err.argument, err.members, picked)
+            return
         except commands.BadArgument:
             member = None
         if member is not None:

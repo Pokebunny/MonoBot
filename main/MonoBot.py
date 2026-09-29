@@ -3,6 +3,7 @@
 import logging
 import os
 
+import converters
 import discord
 from context import MonoContext
 from discord.ext import commands
@@ -11,6 +12,7 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 load_dotenv()
+converters.install()  # member names match regardless of case
 token = os.getenv("BOT_TOKEN")
 
 intents = discord.Intents.default()

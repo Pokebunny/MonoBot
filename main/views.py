@@ -10,6 +10,7 @@ don't show clickable-but-dead components.
 import logging
 
 import discord
+from services import identity
 from services.identity import Person
 
 logger = logging.getLogger(__name__)
@@ -106,21 +107,20 @@ class PersonPickView(ExpiringView):
         self.add_item(_PersonSelect(people, invoker_id, on_pick))
 
 
+async def pick_member(ctx, store, query: str, members, on_pick) -> None:
+    """Ask which member a shared Discord name meant — the same picker a shared
+    SC2 name gets, since both come down to choosing a person."""
+    people = [identity.for_discord(store, str(m.id), m.display_name) for m in members]
+    view = PersonPickView(people, str(ctx.author.id), on_pick)
+    view.message = await ctx.send(f"More than one member is called **{query}** — which one?", view=view)
+
+
 class _PersonSelect(discord.ui.Select):
     def __init__(self, people: list[Person], invoker_id: str, on_pick):
         self.people = {str(i): p for i, p in enumerate(people[:25])}
         self.invoker_id = invoker_id
         self.on_pick = on_pick
-        options = [
-            discord.SelectOption(
-                label=p.sc2_name[:100],
-                description=f"{p.games} games · {'linked' if p.discord_id else 'unlinked'} · …{p.handles[-1][-6:]}"
-                if p.handles
-                else f"{p.games} games",
-                value=key,
-            )
-            for key, p in self.people.items()
-        ]
+        options = [discord.SelectOption(**_option(p), value=key) for key, p in self.people.items()]
         super().__init__(placeholder="Which player?", options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -129,3 +129,16 @@ class _PersonSelect(discord.ui.Select):
             return
         self.view.stop()
         await self.on_pick(interaction, self.people[self.values[0]])
+
+
+def _option(p: Person) -> dict:
+    """Label and description for one choice. A member found by Discord name is
+    labelled by that name, since that's what was typed; an SC2 account by its
+    in-game name, tagged with the end of its handle to tell twins apart."""
+    if p.discord_name is not None:
+        played = f"plays as {p.sc2_name} · {p.games} games" if p.handles else "no SC2 account linked"
+        return {"label": p.discord_name[:100], "description": played[:100]}
+    if p.handles:
+        tag = "linked" if p.discord_id else "unlinked"
+        return {"label": p.sc2_name[:100], "description": f"{p.games} games · {tag} · …{p.handles[-1][-6:]}"}
+    return {"label": p.sc2_name[:100], "description": f"{p.games} games"}

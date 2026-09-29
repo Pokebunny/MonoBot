@@ -168,3 +168,23 @@ def test_an_unbound_claim_does_not_displace_a_live_account(store):
     people = identity.resolve(store, "Twin")
     assert [p.handles for p in people] == [("h-one",), ("h-two",)]
     assert all(p.via == identity.CURRENT for p in people)
+
+
+# -- Discord members -----------------------------------------------------
+
+
+def test_a_discord_member_brings_their_whole_merge_group(store):
+    _play(store, [("Jay", "h-jay"), *_filler(5)], 0)
+    _play(store, [("Luigi", "h-luigi"), *_filler(5)], 1)
+    store.link_player("discord-jay", "Jay")
+    store.add_account("discord-jay", "h-luigi")
+    person = identity.for_discord(store, "discord-jay", "jaybird")
+    assert set(person.handles) == {"h-jay", "h-luigi"}
+    assert person.games == 2
+    assert (person.via, person.discord_name) == (identity.DISCORD, "jaybird")
+
+
+def test_a_discord_member_who_never_linked_is_still_a_person(store):
+    person = identity.for_discord(store, "discord-new", "newbie")
+    assert person.handles == ()
+    assert (person.discord_id, person.sc2_name, person.games) == ("discord-new", "newbie", 0)

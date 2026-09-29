@@ -22,6 +22,10 @@ The fix is a precedence order, strongest evidence first:
 3. FORMER  — an account used to be called this. Last resort, so an abandoned
              name still finds its old owner when nothing better matches.
 
+A name can also mean a Discord member (`for_discord`). Commands try those only
+after every SC2 tier comes up empty, and several members sharing a name get
+the same picker as several accounts sharing one.
+
 Within a tier, more games wins. A tie INSIDE the best tier is genuine
 ambiguity — two live accounts really do share the name — and callers should
 ask rather than guess (see `ambiguous`).
@@ -32,14 +36,16 @@ from dataclasses import dataclass
 CLAIM = "claim"
 CURRENT = "current"
 FORMER = "former"
+DISCORD = "discord"
 
 # Lower sorts first.
-_TIER = {CLAIM: 0, CURRENT: 1, FORMER: 2}
+_TIER = {CLAIM: 0, CURRENT: 1, FORMER: 2, DISCORD: 3}
 
 _WHY = {
     CLAIM: "linked to their Discord account",
     CURRENT: "the account's current in-game name",
     FORMER: "a name this account used to play under",
+    DISCORD: "their Discord name",
 }
 
 
@@ -51,7 +57,8 @@ class Person:
     discord_id: str | None
     sc2_name: str  # most recent display name across the group
     games: int  # across the whole group
-    via: str  # CLAIM | CURRENT | FORMER
+    via: str  # CLAIM | CURRENT | FORMER | DISCORD
+    discord_name: str | None = None  # set when found by Discord name
 
     @property
     def why(self) -> str:
@@ -95,6 +102,17 @@ def resolve(store, query: str) -> list[Person]:
 
     people = [person for _, person in found.values()]
     return sorted(people, key=lambda p: (_TIER[p.via], -p.games))
+
+
+def for_discord(store, discord_id: str, discord_name: str) -> Person:
+    """The person behind a Discord member: every SC2 account they've linked,
+    or none if they never have."""
+    handles = store.handles_for(discord_id)
+    if not handles:
+        return Person((), discord_id, discord_name, 0, DISCORD, discord_name)
+    group = store.merged_handles(handles[0]) or handles
+    person = _person(store, list(group), DISCORD)
+    return Person(person.handles, discord_id, person.sc2_name, person.games, DISCORD, discord_name)
 
 
 def _person(store, group: list[str], via: str) -> Person:

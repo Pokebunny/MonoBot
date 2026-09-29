@@ -4,6 +4,7 @@ import logging
 
 import discord
 from checks import is_bot_admin
+from converters import AmbiguousMember, MemberConverter
 from discord.ext import commands
 from services import achievements, identity, map_versions, match_embeds
 from services.achievements import AchievementCache
@@ -16,7 +17,7 @@ from services.rating import (
     RatingCache,
 )
 from services.storage import MatchStore
-from views import ExpiringView, PagedBoardView, PersonPickView
+from views import ExpiringView, PagedBoardView, PersonPickView, pick_member
 
 logger = logging.getLogger(__name__)
 
@@ -373,24 +374,50 @@ class Leaderboard(commands.Cog):
         if note:
             await ctx.send(note)
 
-    def _group_for_name(self, player: str) -> tuple[str, list[str]]:
+    async def _group_for_name(self, ctx, player: str) -> tuple[str, list[str]]:
         """A typed name's person: their display name and full merge group.
-        Precedence (claim > current name > former name) lives in
-        services.identity, so every command agrees on who a name means."""
+        Precedence (claim > current name > former name > Discord name) lives
+        in services.identity, so every command agrees on who a name means.
+        Raises AmbiguousMember for a Discord name several members share."""
         people = identity.resolve(self.store, player)
-        if not people:
+        if people:
+            return people[0].sc2_name, list(people[0].handles)
+        person = await self._discord_person(ctx, player)
+        if person is None:
             return player, []
-        return people[0].sc2_name, list(people[0].handles)
+        return person.sc2_name, list(person.handles)
+
+    async def _discord_person(self, ctx, query: str):
+        """The person a Discord name, mention or id means, for a query no SC2
+        name matched; None if it isn't a member. Raises AmbiguousMember."""
+        try:
+            member = await MemberConverter().convert(ctx, query)
+        except AmbiguousMember:
+            raise
+        except commands.BadArgument:
+            return None
+        return identity.for_discord(self.store, str(member.id), member.display_name)
 
     async def _person_or_pick(self, ctx, query: str, on_pick):
         """The person a name means, or None when the caller has been answered
         already — either nothing matched, or the name is genuinely shared and
         a picker went out. `on_pick(interaction, person)` resumes the command
-        once they choose."""
+        once they choose. A name no SC2 account matches is tried as a Discord
+        member, with the same picker if several members share it."""
         people = identity.resolve(self.store, query)
         if not people:
-            await ctx.send(f"No games found for **{query}**.")
-            return None
+            try:
+                person = await self._discord_person(ctx, query)
+            except AmbiguousMember as err:
+                await pick_member(ctx, self.store, query, err.members, on_pick)
+                return None
+            if person is None:
+                await ctx.send(f"No games found for **{query}**.")
+                return None
+            if not person.handles:
+                await ctx.send(f"**{person.discord_name}** hasn't linked an SC2 account yet (`!link <name>`).")
+                return None
+            return person, ""
         if identity.ambiguous(people):
             view = PersonPickView(people, str(ctx.author.id), on_pick)
             view.message = await ctx.send(f"More than one player has played as **{query}** — which one?", view=view)
@@ -515,7 +542,12 @@ class Leaderboard(commands.Cog):
                     f"More than one player has played as **{name}** — use their exact current name or Discord handle."
                 )
                 return
-        name1, group1 = self._group_for_name(player1)
+        try:
+            name1, group1 = await self._group_for_name(ctx, player1)
+            name2, group2 = await self._group_for_name(ctx, player2) if player2 else (None, [])
+        except AmbiguousMember as err:
+            await ctx.send(str(err))
+            return
         if not group1:
             await ctx.send(f"No games found for **{player1}**.")
             return
@@ -527,7 +559,6 @@ class Leaderboard(commands.Cog):
                 return
             name2 = ctx.author.display_name
         else:
-            name2, group2 = self._group_for_name(player2)
             if not group2:
                 await ctx.send(f"No games found for **{player2}**.")
                 return

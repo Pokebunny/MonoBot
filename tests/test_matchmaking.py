@@ -103,7 +103,8 @@ class _Response:
 
 
 class _Message:
-    def __init__(self):
+    def __init__(self, id=0):
+        self.id = id
         self.deleted = False
         self.embeds = []  # no embed to redraw; the lineup is read off the cog
 
@@ -153,6 +154,7 @@ class _Cog:
         self.last_roster = []
         self.match_message = None
         self.lineup_messages = []
+        self.match_view = None
 
     # The real lineup logic, run against this fake's state.
     lineup_for_next = Matchmaking.lineup_for_next
@@ -160,6 +162,7 @@ class _Cog:
     toggle_lineup = Matchmaking.toggle_lineup
     re_team = Matchmaking.re_team
     _redraw_lineup = Matchmaking._redraw_lineup
+    _clear_match_message = Matchmaking._clear_match_message
 
     def save_lineup(self):
         pass
@@ -246,6 +249,62 @@ class TestRestoredAfterRestart:
         interaction = _Interaction(user_id="stranger")
         asyncio.run(view.new_teams.callback(interaction))
         assert "Only a player in this match" in interaction.response.message
+
+
+class _Ctx:
+    def __init__(self):
+        self.sent = []
+
+    async def send(self, content=None, **kwargs):
+        message = _Message(id=len(self.sent) + 1)
+        message.content, message.kwargs = content, kwargs
+        self.sent.append(message)
+        return message
+
+
+class TestWaitlistCommand:
+    """!waitlist brings the live teams and lineup back to the bottom of chat
+    without re-teaming."""
+
+    def test_moves_the_live_proposal_down_without_re_teaming(self):
+        view, _ = _view(_Store(count=5))
+        cog = view.cog
+        view.index = 2  # someone had cycled to the third split
+        old = _Message(id=-1)
+        cog.match_message, cog.match_view = old, view
+        ctx = _Ctx()
+        asyncio.run(Matchmaking.show_lineup.callback(cog, ctx))
+        reposted = ctx.sent[0]
+        assert reposted.kwargs["view"] is view and view.index == 2  # same split, same buttons
+        assert "Option 3 of 3" in reposted.kwargs["embed"].description
+        assert old.deleted and cog.match_message is reposted  # still one live proposal
+        assert cog.reposted is None
+
+    def test_shows_the_waitlist_under_the_teams(self):
+        view, _ = _view(_Store(count=5))
+        cog = view.cog
+        cog.waitlist = ["42"]
+        cog.match_message, cog.match_view = _Message(id=-1), view
+        ctx = _Ctx()
+        asyncio.run(Matchmaking.show_lineup.callback(cog, ctx))
+        fields = {f.name: f.value for f in ctx.sent[0].kwargs["embed"].fields}
+        assert "<@42>" in fields["Waitlist"]
+
+    def test_after_a_restart_posts_the_stored_roster_with_the_lineup_buttons(self):
+        cog = _Cog(_Store(), stored_ids=["1", "2"])
+        cog.waitlist = ["42"]
+        ctx = _Ctx()
+        asyncio.run(Matchmaking.show_lineup.callback(cog, ctx))
+        sent = ctx.sent[0]
+        assert isinstance(sent.kwargs["view"], NextGameView)
+        fields = {f.name: f.value for f in sent.kwargs["embed"].fields}
+        assert fields["Playing"] == "<@1> <@2>" and "<@42>" in fields["Waitlist"]
+        assert cog.lineup_messages == [sent]  # redrawn when the lineup changes
+
+    def test_with_no_match_says_so(self):
+        ctx = _Ctx()
+        asyncio.run(Matchmaking.show_lineup.callback(_Cog(_Store()), ctx))
+        assert "No match in progress" in ctx.sent[0].content
 
 
 _T0 = dt.datetime(2026, 9, 27, 20, 0, tzinfo=dt.UTC)

@@ -275,6 +275,9 @@ class Matchmaking(commands.Cog):
         # looked up fresh each time so re-teaming picks up recent games.
         self.last_roster: list[discord.abc.User] = []
         self.match_message: discord.Message | None = None  # the live proposal
+        # Its view, so !waitlist can move the same split (and its ranked
+        # alternatives) to the bottom of chat. Lost on restart.
+        self.match_view: ProposedMatchView | None = None
         # The latest few messages carrying NextGameView (summaries, a !teams
         # still waiting on players), redrawn when the lineup changes.
         self.lineup_messages: collections.deque[discord.Message] = collections.deque(maxlen=3)
@@ -549,6 +552,27 @@ class Matchmaking(commands.Cog):
             return
         await self.post_match(ctx.channel, roster, promoted=promoted)
 
+    @commands.hybrid_command(
+        name="waitlist", aliases=["lineup"], help="show the current teams and waitlist at the bottom of chat"
+    )
+    @commands.cooldown(1, 10, commands.BucketType.channel)
+    async def show_lineup(self, ctx):
+        """Bring the live teams, with who's sitting out and who's waiting, back
+        to the bottom of chat without re-teaming — the Sit out / Waitlist
+        buttons live on messages that scroll away once a game starts. Moves
+        the proposal rather than copying it, so one set of teams stays live."""
+        if self.match_view is not None and self.match_message is not None:
+            message = await ctx.send(embed=self.match_view.embed(), view=self.match_view)
+            await self._clear_match_message(keep=message)
+            return
+        roster = self.stored_roster_ids()
+        if not roster:
+            await ctx.send("No match in progress — run `!queue` to start one.")
+            return
+        # A restart lost the split, but the roster and lineup are stored.
+        view = NextGameView(self)
+        view.track(await ctx.send(embed=self.lineup_embed(match_embeds.current_lineup(roster)), view=view))
+
     @commands.hybrid_command(help="put a player into the queue (mods)")
     @is_bot_admin()
     async def add(self, ctx, *, player: str):
@@ -685,6 +709,7 @@ class Matchmaking(commands.Cog):
             view=view,
             allowed_mentions=discord.AllowedMentions(users=pinged),
         )
+        self.match_view = view
         await self._clear_match_message(keep=message)
 
     # -- sit-outs & waitlist ----------------------------------------------

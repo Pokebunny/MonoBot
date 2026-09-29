@@ -17,7 +17,7 @@ from discord.ext import commands
 
 # Canonical command names (not aliases) whose reply must stay public even when
 # invoked as a slash command, because other members act on the message itself.
-ALWAYS_PUBLIC = {"queue"}
+ALWAYS_PUBLIC = {"queue", "waitlist"}
 
 
 class MonoContext(commands.Context):

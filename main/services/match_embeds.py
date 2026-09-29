@@ -573,6 +573,18 @@ def waiting_for_players(reason: str) -> discord.Embed:
     return discord.Embed(title="Waiting for players", description=reason, color=ACCENT)
 
 
+def current_lineup(roster_ids: list[str]) -> discord.Embed:
+    """The roster in play when a restart lost its team split. Goes out with
+    the lineup buttons, whose New teams splits it again."""
+    embed = discord.Embed(
+        title="Current lineup",
+        description="I lost the team split in my last restart — 🔀 **New teams** splits this roster again.",
+        color=ACCENT,
+    )
+    embed.add_field(name="Playing", value=" ".join(f"<@{uid}>" for uid in roster_ids), inline=False)
+    return embed
+
+
 SITTING_OUT_FIELD = "Sitting out next game"
 WAITLIST_FIELD = "Waitlist"
 

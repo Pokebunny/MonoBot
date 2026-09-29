@@ -289,14 +289,6 @@ def test_unlink_second_account_by_alias(store):
     assert store.unlink_player("disc1", "Rain") is False
 
 
-def test_release_name_reaches_placeholder_rows(store):
-    _two_rains(store)
-    store.add_account("disc9", "H-rain2")  # only a placeholder row exists
-    assert store.release_name("Rain") == "disc9"
-    assert store.handles_for("disc9") == []
-    assert store.release_name("Rain") is None
-
-
 def test_free_candidates_filter(store):
     from types import SimpleNamespace
 

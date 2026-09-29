@@ -9,11 +9,11 @@ import logging
 
 import discord
 from checks import is_bot_admin
-from converters import AmbiguousMember, MemberConverter
 from discord.ext import commands
+from services import identity
 from services.match_embeds import ACCENT, WARNING
 from services.storage import MatchStore
-from views import ExpiringView, pick_member
+from views import ExpiringView, person_or_pick
 
 logger = logging.getLogger(__name__)
 
@@ -332,31 +332,22 @@ class Identity(commands.Cog):
     @commands.hybrid_command(help="unlink a member's SC2 accounts, or one name — @member [name], or a bare name (mods)")
     @is_bot_admin()
     async def unlinkuser(self, ctx, target: str, *, sc2_name: str | None = None):
-        try:
-            member = await MemberConverter().convert(ctx, target)
-        except AmbiguousMember as err:
+        # The target resolves like any other name (views.person_or_pick). An
+        # SC2 name unlinks just that name from whoever it means; a Discord
+        # member alone loses every account, or only `sc2_name` if given.
+        async def picked(interaction, person):
+            await interaction.response.edit_message(content=self._unlink(ctx, person, target, sc2_name), view=None)
 
-            async def picked(interaction, person):
-                message = self._unlink_member(person.discord_id, person.discord_name, sc2_name)
-                await interaction.response.edit_message(content=message, view=None)
+        people = await person_or_pick(ctx, self.store, target.strip(), picked)
+        if people is not None:
+            await ctx.send(self._unlink(ctx, people[0], target, sc2_name))
 
-            await pick_member(ctx, self.store, err.argument, err.members, picked)
-            return
-        except commands.BadArgument:
-            member = None
-        if member is None:
-            # A bare SC2 name — release the claim whoever holds it (covers
-            # people who've left the server).
-            if sc2_name:
-                await ctx.send("Give either `@member [name]` or just an SC2 name.")
-                return
-            owner = self.store.release_name(target)
-            if owner is None:
-                await ctx.send(f"**{target}** isn't linked to anyone.")
-            else:
-                await ctx.send(f"Unlinked **{target}** (was linked to <@{owner}>).")
-            return
-        await ctx.send(self._unlink_member(str(member.id), member.display_name, sc2_name))
+    def _unlink(self, ctx, person, target: str, sc2_name: str | None) -> str:
+        if person.discord_id is None:
+            return f"**{person.sc2_name}** isn't linked to anyone."
+        if sc2_name is None and person.via != identity.DISCORD:
+            sc2_name = target
+        return self._unlink_member(person.discord_id, self._display_name(ctx, person), sc2_name)
 
     def _unlink_member(self, discord_id: str, display_name: str, sc2_name: str | None) -> str:
         """Unlink one name from a member, or all of them; returns the reply."""
@@ -408,48 +399,39 @@ class Identity(commands.Cog):
     @commands.hybrid_command(help="look up anyone's SC2 accounts — by @member or SC2 name")
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def whois(self, ctx, *, target: str):
-        target = target.strip()
-        try:
-            member = await MemberConverter().convert(ctx, target)
-        except AmbiguousMember as err:
+        async def picked(interaction, person):
+            await interaction.response.edit_message(view=None, **self._whois_reply(ctx, person, ""))
 
-            async def picked(interaction, person):
-                embed = self._accounts_embed(person.discord_id, person.discord_name)
-                await interaction.response.edit_message(
-                    embed=embed,
-                    content=None if embed else f"{person.discord_name} hasn't linked any SC2 accounts.",
-                    view=None,
-                )
+        people = await person_or_pick(ctx, self.store, target.strip(), picked)
+        if people is not None:
+            reply = self._whois_reply(ctx, people[0], identity.others_note(people))
+            await ctx.send(allowed_mentions=discord.AllowedMentions.none(), **reply)
 
-            await pick_member(ctx, self.store, err.argument, err.members, picked)
-            return
-        except commands.BadArgument:
-            member = None
-        if member is not None:
-            embed = self._accounts_embed(str(member.id), member.display_name)
-            await ctx.send(
-                embed=embed if embed else None,
-                content=None if embed else f"{member.display_name} hasn't linked any SC2 accounts.",
-            )
-            return
+    def _whois_reply(self, ctx, person, note: str) -> dict:
+        """A person's accounts as send/edit kwargs: everything linked to their
+        Discord account, or the unlinked accounts the name matched."""
+        name = self._display_name(ctx, person)
+        if person.discord_id is not None:
+            embed = self._accounts_embed(person.discord_id, name)
+            if embed is None:
+                return {"content": f"{name} hasn't linked any SC2 accounts.\n{note}".strip(), "embed": None}
+            embed.description = f"<@{person.discord_id}>\n" + embed.description
+        else:
+            lines = []
+            for handle in person.handles:
+                aliases = self.store.aliases_for_handle(handle)
+                line = f"• **{aliases[0] if aliases else handle}**"
+                if aliases[1:]:
+                    line += f" (also: {', '.join(aliases[1:])})"
+                lines.append(line + f" — {self.store.game_count_for_handles([handle])} games")
+            description = "Not linked to a Discord account.\n" + "\n".join(lines)
+            embed = discord.Embed(title=name, description=description, color=ACCENT)
+        return {"content": note or None, "embed": embed}
 
-        candidates = self.store.candidates_for_name(target)
-        if not candidates:
-            await ctx.send(f"No account has played as **{target}**.")
-            return
-        lines = []
-        for handle, name, games in candidates:
-            aliases = self.store.aliases_for_handle(handle)
-            line = f"• **{aliases[0] if aliases else name}**"
-            if aliases[1:]:
-                line += f" (also: {', '.join(aliases[1:])})"
-            line += f" — {games} games"
-            disc = self.store.discord_id_for_handle(handle)
-            if disc:
-                line += f", linked to <@{disc}>"
-            lines.append(line)
-        embed = discord.Embed(title=f"Accounts matching '{target}'", description="\n".join(lines), color=ACCENT)
-        await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    def _display_name(self, ctx, person) -> str:
+        """The member's server name when they're here, else what we know them by."""
+        member = ctx.guild.get_member(int(person.discord_id)) if ctx.guild and person.discord_id else None
+        return member.display_name if member else person.discord_name or person.sc2_name
 
 
 async def setup(client):

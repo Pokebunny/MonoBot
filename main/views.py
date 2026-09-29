@@ -10,6 +10,8 @@ don't show clickable-but-dead components.
 import logging
 
 import discord
+from converters import AmbiguousMember, MemberConverter
+from discord.ext import commands
 from services import identity
 from services.identity import Person
 
@@ -107,12 +109,36 @@ class PersonPickView(ExpiringView):
         self.add_item(_PersonSelect(people, invoker_id, on_pick))
 
 
-async def pick_member(ctx, store, query: str, members, on_pick) -> None:
-    """Ask which member a shared Discord name meant — the same picker a shared
-    SC2 name gets, since both come down to choosing a person."""
-    people = [identity.for_discord(store, str(m.id), m.display_name) for m in members]
+async def person_or_pick(ctx, store, query: str, on_pick) -> list[Person] | None:
+    """Who a typed name means — the one way every command asks. SC2 names
+    first (claim > current > former, see services.identity), then a Discord
+    member's name, mention or id. Returns everyone matched, best first:
+    people[0] is the answer, the rest are for identity.others_note.
+
+    None when the caller has been answered already: nothing matched, or the
+    name is shared (by accounts or by members) and a picker went out.
+    `on_pick(interaction, person)` resumes the command once they choose."""
+    people = identity.resolve(store, query)
+    if identity.ambiguous(people):
+        await _ask(ctx, people, f"More than one player has played as **{query}** — which one?", on_pick)
+        return None
+    if people:
+        return people
+    try:
+        member = await MemberConverter().convert(ctx, query)
+    except AmbiguousMember as err:
+        people = [identity.for_discord(store, str(m.id), m.display_name) for m in err.members]
+        await _ask(ctx, people, f"More than one member is called **{query}** — which one?", on_pick)
+        return None
+    except commands.BadArgument:
+        await ctx.send(f"No player found matching **{query}**.", allowed_mentions=discord.AllowedMentions.none())
+        return None
+    return [identity.for_discord(store, str(member.id), member.display_name)]
+
+
+async def _ask(ctx, people: list[Person], prompt: str, on_pick) -> None:
     view = PersonPickView(people, str(ctx.author.id), on_pick)
-    view.message = await ctx.send(f"More than one member is called **{query}** — which one?", view=view)
+    view.message = await ctx.send(prompt, view=view, allowed_mentions=discord.AllowedMentions.none())
 
 
 class _PersonSelect(discord.ui.Select):

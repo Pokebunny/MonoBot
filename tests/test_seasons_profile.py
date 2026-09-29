@@ -11,6 +11,7 @@ import types
 import pytest
 from cogs.leaderboard import Leaderboard
 from models.replay import MatchPlayer, MonobattleMatch
+from services import identity
 from services.rating import RatingCache
 from services.storage import MatchStore, hash_replay
 
@@ -55,8 +56,13 @@ def cog(tmp_path):
     store.close()
 
 
+def _resolve(cog, name):
+    """What !profile <name> shows, minus Discord."""
+    return cog._resolve_person(identity.resolve(cog.store, name)[0])
+
+
 def test_profile_resolves_before_a_reset(cog):
-    resolved = cog._resolve("A0")
+    resolved = _resolve(cog, "A0")
     assert resolved is not None
     career, season, _rank, _total, _n = resolved
     assert career.games == 6
@@ -67,7 +73,7 @@ def test_profile_still_resolves_after_a_reset(cog):
     """The regression: a season reset emptied the rating book, so profile
     reported 'no rated games' for everyone until they played again."""
     cog.store.start_season("Season 2")
-    resolved = cog._resolve("A0")
+    resolved = _resolve(cog, "A0")
     assert resolved is not None, "a player with career games must still have a profile"
     career, season, rank, _total, _n = resolved
     assert career.games == 6  # career survives the reset
@@ -93,7 +99,7 @@ def test_season_rating_returns_once_they_play_again(cog):
     # no matter when the replay is uploaded, which is the whole point.
     later = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5)
     cog.store.ingest(_match(100, played_at=later), hash_replay(b"new"))
-    career, season, rank, total, _n = cog._resolve("A0")
+    career, season, rank, total, _n = _resolve(cog, "A0")
     assert career.games == 7  # career counts both seasons
     assert season is not None and season.games == 1  # season counts only the new one
     assert rank is None and total == 0  # 1 game is under MIN_RANKED_GAMES
@@ -103,7 +109,7 @@ def test_profile_embed_renders_with_no_season_games(cog):
     """The embed must not divide by zero or show a stale rating when the
     player has no games in the open season."""
     cog.store.start_season("Season 2")
-    resolved = cog._resolve("A0")
+    resolved = _resolve(cog, "A0")
     ctx = types.SimpleNamespace(guild=None, author=None)
     cog.client.get_user = lambda _id: None
     embed = cog._profile_embed(ctx, resolved, "A0")

@@ -4,7 +4,6 @@ import logging
 
 import discord
 from checks import is_bot_admin
-from converters import AmbiguousMember, MemberConverter
 from discord.ext import commands
 from services import achievements, identity, map_versions, match_embeds
 from services.achievements import AchievementCache
@@ -17,7 +16,7 @@ from services.rating import (
     RatingCache,
 )
 from services.storage import MatchStore
-from views import ExpiringView, PagedBoardView, PersonPickView, pick_member
+from views import ExpiringView, PagedBoardView, person_or_pick
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +177,11 @@ class ConfirmSeasonView(ExpiringView):
         await interaction.response.edit_message(content="Season unchanged.", view=None)
 
 
+def _text(content: str) -> dict:
+    """Send/edit kwargs for a plain reply that replaces any embed."""
+    return {"content": content, "embed": None}
+
+
 class Leaderboard(commands.Cog):
     def __init__(self, client):
         self.client = client
@@ -268,16 +272,6 @@ class Leaderboard(commands.Cog):
         """Every match ever, ignoring season windows. Profiles resolve against
         this so a player who hasn't played yet this season still has one."""
         return self._book_for(None, career=True)
-
-    def _resolve(self, player: str):
-        """Resolve a typed name to (career rating, this season's rating or
-        None, rank, board size, number of OTHER people who share the name), or
-        None if no rated games ever. Who the name means is decided by
-        services.identity, not by raw game counts."""
-        people = identity.resolve(self.store, player)
-        if not people:
-            return None
-        return self._resolve_person(people[0], others=len(people))
 
     def _resolve_person(self, person, others: int = 1):
         """The same tuple, for an already-chosen person."""
@@ -374,55 +368,25 @@ class Leaderboard(commands.Cog):
         if note:
             await ctx.send(note)
 
-    async def _group_for_name(self, ctx, player: str) -> tuple[str, list[str]]:
-        """A typed name's person: their display name and full merge group.
-        Precedence (claim > current name > former name > Discord name) lives
-        in services.identity, so every command agrees on who a name means.
-        Raises AmbiguousMember for a Discord name several members share."""
-        people = identity.resolve(self.store, player)
-        if people:
-            return people[0].sc2_name, list(people[0].handles)
-        person = await self._discord_person(ctx, player)
-        if person is None:
-            return player, []
-        return person.sc2_name, list(person.handles)
-
-    async def _discord_person(self, ctx, query: str):
-        """The person a Discord name, mention or id means, for a query no SC2
-        name matched; None if it isn't a member. Raises AmbiguousMember."""
-        try:
-            member = await MemberConverter().convert(ctx, query)
-        except AmbiguousMember:
-            raise
-        except commands.BadArgument:
-            return None
-        return identity.for_discord(self.store, str(member.id), member.display_name)
-
     async def _person_or_pick(self, ctx, query: str, on_pick):
-        """The person a name means, or None when the caller has been answered
-        already — either nothing matched, or the name is genuinely shared and
-        a picker went out. `on_pick(interaction, person)` resumes the command
-        once they choose. A name no SC2 account matches is tried as a Discord
-        member, with the same picker if several members share it."""
-        people = identity.resolve(self.store, query)
-        if not people:
-            try:
-                person = await self._discord_person(ctx, query)
-            except AmbiguousMember as err:
-                await pick_member(ctx, self.store, query, err.members, on_pick)
-                return None
-            if person is None:
-                await ctx.send(f"No games found for **{query}**.")
-                return None
-            if not person.handles:
-                await ctx.send(f"**{person.discord_name}** hasn't linked an SC2 account yet (`!link <name>`).")
-                return None
-            return person, ""
-        if identity.ambiguous(people):
-            view = PersonPickView(people, str(ctx.author.id), on_pick)
-            view.message = await ctx.send(f"More than one player has played as **{query}** — which one?", view=view)
+        """(person, note on the weaker matches) for a typed name, or None when
+        the caller has been answered already. Who the name means is decided by
+        views.person_or_pick, so every command agrees; this only adds that a
+        stats command needs someone with games."""
+        people = await person_or_pick(ctx, self.store, query, on_pick)
+        if people is None:
             return None
-        return people[0], identity.others_note(people)
+        person = people[0]
+        if not person.handles:
+            await ctx.send(self._no_games(person))
+            return None
+        return person, identity.others_note(people)
+
+    @staticmethod
+    def _no_games(person) -> str:
+        if person.via == identity.DISCORD:
+            return f"**{person.discord_name}** hasn't linked an SC2 account yet (`!link <name>`)."
+        return f"No games found for **{person.sc2_name}** yet."
 
     def _own_group(self, author) -> list[str]:
         group: list[str] = []
@@ -536,42 +500,56 @@ class Leaderboard(commands.Cog):
     @commands.hybrid_command(help="head-to-head between two players — !h2h <name> means you vs them")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def h2h(self, ctx, player1: str, player2: str | None = None):
-        for name in (player1, player2):
-            if name and identity.ambiguous(identity.resolve(self.store, name)):
-                await ctx.send(
-                    f"More than one player has played as **{name}** — use their exact current name or Discord handle."
-                )
+        # Either name can need a picker; the second is only asked once the
+        # first is settled, so each prompt is about one name.
+        async def first_picked(interaction, person):
+            if player2 is None:
+                await interaction.response.edit_message(view=None, **self._h2h_reply(ctx, person, None))
                 return
-        try:
-            name1, group1 = await self._group_for_name(ctx, player1)
-            name2, group2 = await self._group_for_name(ctx, player2) if player2 else (None, [])
-        except AmbiguousMember as err:
-            await ctx.send(str(err))
+            shown = self._shown_name(ctx, list(person.handles), person.discord_name or person.sc2_name)
+            await interaction.response.edit_message(content=f"Head-to-head: **{shown}** vs…", view=None)
+            await self._h2h_against(ctx, person, player2)
+
+        chosen = await self._person_or_pick(ctx, player1, first_picked)
+        if chosen is None:
             return
-        if not group1:
-            await ctx.send(f"No games found for **{player1}**.")
-            return
-        name1 = self._shown_name(ctx, group1, name1)
         if player2 is None:
+            await ctx.send(**self._h2h_reply(ctx, chosen[0], None))
+        else:
+            await self._h2h_against(ctx, chosen[0], player2)
+
+    async def _h2h_against(self, ctx, first, player2: str):
+        async def picked(interaction, person):
+            await interaction.response.edit_message(view=None, **self._h2h_reply(ctx, first, person))
+
+        chosen = await self._person_or_pick(ctx, player2, picked)
+        if chosen is not None:
+            await ctx.send(**self._h2h_reply(ctx, first, chosen[0]))
+
+    def _h2h_reply(self, ctx, first, second) -> dict:
+        """The h2h message as send/edit kwargs. `second` None means the
+        author."""
+        for person in (first, second):
+            if person is not None and not person.handles:
+                return _text(self._no_games(person))
+        group1 = list(first.handles)
+        name1 = self._shown_name(ctx, group1, first.sc2_name)
+        if second is None:
             group2 = self._own_group(ctx.author)
             if not group2:
-                await ctx.send("Link your SC2 account first (`!link <name>`), or give two names.")
-                return
+                return _text("Link your SC2 account first (`!link <name>`), or give two names.")
             name2 = ctx.author.display_name
         else:
-            if not group2:
-                await ctx.send(f"No games found for **{player2}**.")
-                return
-            name2 = self._shown_name(ctx, group2, name2)
+            group2 = list(second.handles)
+            name2 = self._shown_name(ctx, group2, second.sc2_name)
         if set(group1) & set(group2):
-            await ctx.send(f"**{name1}** and **{name2}** are the same player.")
-            return
+            return _text(f"**{name1}** and **{name2}** are the same player.")
         vs, together, opposed = self.store.h2h_records(group1, group2, MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
         if not (sum(vs) + sum(together)):
-            await ctx.send(f"**{name1}** and **{name2}** haven't shared a decided game yet.")
-            return
+            return _text(f"**{name1}** and **{name2}** haven't shared a decided game yet.")
         duo = self._duo_for(group1, group2) if sum(together) else None
-        await ctx.send(embed=match_embeds.h2h_summary(name1, name2, vs, together, opposed, group1, group2, duo))
+        embed = match_embeds.h2h_summary(name1, name2, vs, together, opposed, group1, group2, duo)
+        return {"content": None, "embed": embed}
 
     def _duo_for(self, group1: list[str], group2: list[str]):
         """This pair's entry on the duo board, or None if they've never been

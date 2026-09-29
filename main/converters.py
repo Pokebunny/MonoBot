@@ -1,6 +1,6 @@
 """Argument converters shared by the cogs.
 
-discord.py matches a typed member name with `==`, so `!teams bob` misses a
+discord.py matches a typed member name with `==`, so `!whois bob` missed a
 member whose nickname is "Bob". `MemberConverter` keeps the stock lookup (ids,
 mentions, exact names) and only falls back to ignoring case when that finds
 nobody — an exact-case match always wins. A name that fits several members
@@ -19,7 +19,7 @@ from discord.ext.commands import converter as _converter
 
 class AmbiguousMember(commands.MemberNotFound):
     """Several members are called this, ignoring case. A MemberNotFound, so
-    commands that don't offer a picker (`!teams`, `!linkuser`) just report it."""
+    commands that don't offer a picker (`!linkuser`) just report it."""
 
     def __init__(self, argument: str, members: list[discord.Member]):
         self.argument = argument

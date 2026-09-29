@@ -29,6 +29,13 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   moving the window, deleting nothing — past boards stay reconstructible.
   Only ratings are season-scoped; match history, profile stats and the
   achievement ledger are career-wide.
+- **Typed player names** resolve through `views.person_or_pick` and nothing
+  else: SC2 names first (claim > current > former, `services/identity.py`),
+  then a Discord member's name/mention/id (case-insensitive,
+  `converters.MemberConverter`), with `PersonPickView` whenever the name is
+  shared. A command that looks names up any other way will disagree with the
+  rest about who a name means. (`!link` is the exception: it picks an
+  *account* to claim, not a person.)
 - **Pair stats** (`!duos`, the teammate half of `!h2h`) come from
   `rating.duo_records`, one chronological walk that gives each pair three
   numbers. The headline is the pair's **own rating**: the duo is rated as a

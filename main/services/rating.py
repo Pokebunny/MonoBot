@@ -187,12 +187,6 @@ class RatingBook:
             self.ratings[handle].name = name
         return self.ratings[handle]
 
-    def by_name(self, name: str) -> list[PlayerRating]:
-        """All accounts that have played under a display name (case-insensitive),
-        most games first. Usually one, but names aren't unique."""
-        matches = [r for r in self.ratings.values() if r.name.lower() == name.lower()]
-        return sorted(matches, key=lambda r: r.games, reverse=True)
-
     def is_rateable(self, match: MonobattleMatch) -> bool:
         return (
             match.winning_team is not None

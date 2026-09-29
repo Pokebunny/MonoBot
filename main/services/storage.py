@@ -752,26 +752,6 @@ class MatchStore:
         except sqlite3.IntegrityError:
             pass  # handle already bound to another claimed name; leave as-is
 
-    def release_name(self, sc2_name: str) -> str | None:
-        """Delete a link by name regardless of owner (admin). Falls back to
-        matching bound accounts by their in-game aliases, since second-account
-        claim rows store the handle, not the display name. Returns the Discord
-        id it was linked to, or None if nothing matched."""
-        owner = self.discord_id_for(sc2_name)
-        if owner is not None:
-            self._conn.execute("DELETE FROM player_links WHERE sc2_name = ? COLLATE NOCASE", (sc2_name,))
-            self._conn.commit()
-            self.change_count += 1
-            return owner
-        for handle in self.handles_for_name(sc2_name):
-            handle_owner = self.discord_id_for_handle(handle)
-            if handle_owner is not None:
-                self._conn.execute("DELETE FROM player_links WHERE toon_handle = ?", (handle,))
-                self._conn.commit()
-                self.change_count += 1
-                return handle_owner
-        return None
-
     def unlink_player(self, discord_id: str, sc2_name: str) -> bool:
         """Release one of the user's links by name; returns False if none
         matched. Falls back to matching their bound accounts by in-game alias

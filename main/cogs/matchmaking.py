@@ -12,15 +12,14 @@ import zoneinfo
 
 import discord
 from checks import is_bot_admin
-from converters import AmbiguousMember, MemberConverter
 from discord.ext import commands, tasks
 from models.matchmaking import ProposedMatch, QueuedPlayer
 from resources.config import CONFIG
-from services import identity, match_embeds
+from services import match_embeds
 from services.matchmaking import expired, next_roster, ranked_matches
 from services.rating import DEFAULT_MU, DEFAULT_SIGMA, RatingCache
 from services.storage import MatchStore
-from views import PersonPickView, pick_member
+from views import person_or_pick
 
 logger = logging.getLogger(__name__)
 
@@ -473,40 +472,26 @@ class Matchmaking(commands.Cog):
         await self._clear_old_queue_message(keep=self.queue_message)
 
     async def _member_for(self, ctx, query: str, on_pick):
-        """A guild member from a typed name, resolved the same way every other
-        command resolves names: their claimed SC2 name first, then an account's
-        current in-game name, then a Discord name/nickname/mention/id (case
-        ignored if nothing matches exactly). No partial matching — queueing the wrong person is worse than being
-        told to type the whole name.
+        """A guild member from a typed name, resolved the way every command
+        resolves names (views.person_or_pick). No partial matching — queueing
+        the wrong person is worse than being told to type the whole name.
 
         None when the caller has already been answered: nothing matched, the
-        name is shared (by accounts or by members) and a picker went out, or
-        the person isn't reachable."""
-        people = identity.resolve(self.store, query)
-        if identity.ambiguous(people):
-            view = PersonPickView(people, str(ctx.author.id), on_pick)
-            view.message = await ctx.send(f"More than one player has played as **{query}** — which one?", view=view)
+        name is shared and a picker went out, or the person isn't reachable."""
+        people = await person_or_pick(ctx, self.store, query, on_pick)
+        if people is None:
             return None
-        if people:
-            member = await self._member_of(ctx, people[0])
-            if member is not None:
-                return member
-        try:  # a Discord handle, mention or id rather than an SC2 name
-            return await MemberConverter().convert(ctx, query)
-        except AmbiguousMember as err:
-            await pick_member(ctx, self.store, query, err.members, on_pick)
-            return None
-        except commands.BadArgument:
-            pass
-        if people and people[0].discord_id:
-            await ctx.send(f"**{people[0].sc2_name}** is linked, but isn't in this server.")
-        elif people:
+        person = people[0]
+        member = await self._member_of(ctx, person)
+        if member is not None:
+            return member
+        if person.discord_id:
+            await ctx.send(f"**{person.sc2_name}** is linked, but isn't in this server.")
+        else:
             await ctx.send(
-                f"**{people[0].sc2_name}** hasn't linked a Discord account yet — "
+                f"**{person.sc2_name}** hasn't linked a Discord account yet — "
                 "they need to run `!link <their SC2 name>` before they can queue."
             )
-        else:
-            await ctx.send(f"No player found matching **{query}**.")
         return None
 
     async def _member_of(self, ctx, person) -> discord.Member | None:
@@ -541,27 +526,24 @@ class Matchmaking(commands.Cog):
             await self._redraw_lineup()
         return f"Removed **{label}** from the {'queue' if queued else 'waitlist'}."
 
-    @commands.hybrid_command(help="re-post the last match with freshly balanced teams (optionally naming a new roster)")
+    @commands.hybrid_command(help="re-post the last match with freshly balanced teams")
     @commands.cooldown(1, 10, commands.BucketType.channel)
-    async def teams(self, ctx, members: commands.Greedy[discord.Member] = None):
-        """Re-split a roster without going back through the queue. With no
-        arguments it re-teams whoever was in the last match, which is the
-        common case after a few games; name members to swap someone in or out."""
-        roster = list(dict.fromkeys(members or self.last_roster))
+    async def teams(self, ctx):
+        """Re-split the last match's roster without going back through the
+        queue. Swapping people in and out is Sit out / Waitlist's job."""
+        roster = list(self.last_roster)
         if not roster:
             await ctx.send("No recent match to re-team — run `!queue` to start one.")
             return
-        promoted = []
-        if not members:  # a named roster is taken as given; sit-outs only apply to the last one
-            lineup = self.lineup_for_next(ctx.guild, roster)
-            if isinstance(lineup, str):
-                # With the buttons, so whoever wants the spot can take it
-                # right here and the group can re-team once they have.
-                view = NextGameView(self)
-                embed = self.lineup_embed(match_embeds.waiting_for_players(lineup))
-                view.track(await ctx.send(embed=embed, view=view))
-                return
-            roster, promoted = lineup
+        lineup = self.lineup_for_next(ctx.guild, roster)
+        if isinstance(lineup, str):
+            # With the buttons, so whoever wants the spot can take it
+            # right here and the group can re-team once they have.
+            view = NextGameView(self)
+            embed = self.lineup_embed(match_embeds.waiting_for_players(lineup))
+            view.track(await ctx.send(embed=embed, view=view))
+            return
+        roster, promoted = lineup
         if len(roster) < 2 or len(roster) % 2 != 0:
             await ctx.send(f"Need an even number of players, got {len(roster)}.")
             return
@@ -814,8 +796,7 @@ class Matchmaking(commands.Cog):
         if short:
             return (
                 f"{len(self.sitting_out)} sitting out but only {len(promoted)} on the waitlist — "
-                f"need {short} more. Press **Waitlist** to take a spot, press **Sit out** again to stay in, "
-                "or name a roster with `!teams`."
+                f"need {short} more. Press **Waitlist** to take a spot, or press **Sit out** again to stay in."
             )
         return [members[uid] for uid in roster], [members[uid] for uid in promoted]
 

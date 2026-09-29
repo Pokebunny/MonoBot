@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 # manual confirmation instead of silently rating the wrong team.
 MIN_DURATION_SECONDS = 120
 MIN_WINNER_CONFIDENCE = 0.7
+# Only full 4v4s are rated: a 3v3 or an uneven lobby is a different game, and
+# scoring it on the same scale muddies the ladder.
+TEAM_SIZE = 4
 
 # Games needed to appear on the leaderboard and hold a rank; players below it
 # still have a rating, shown as unranked.
@@ -193,6 +196,7 @@ class RatingBook:
             and match.winner_confidence >= MIN_WINNER_CONFIDENCE
             and match.duration_seconds >= MIN_DURATION_SECONDS
             and len({p.team for p in match.players}) == 2
+            and all(len(match.team(t)) == TEAM_SIZE for t in {p.team for p in match.players})
         )
 
     def rate_match(self, match: MonobattleMatch) -> bool:

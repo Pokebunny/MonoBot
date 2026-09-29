@@ -65,6 +65,13 @@ def test_no_winner_skipped():
     assert not book.rate_match(_match(winning_team=None))
 
 
+def test_non_4v4_skipped():
+    book = RatingBook()
+    assert not book.rate_match(_match(winning_team=1, team1=["A1", "A2", "A3"], team2=["B1", "B2", "B3"]))
+    assert not book.rate_match(_match(winning_team=1, team1=["A1", "A2", "A3"]))
+    assert not book.ratings
+
+
 def test_leaderboard_min_games():
     book = RatingBook()
     book.rate_match(_match(winning_team=1))

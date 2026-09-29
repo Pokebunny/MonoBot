@@ -242,7 +242,7 @@ class Replays(commands.Cog):
         # to its chronological position and show what it moved. Scoped to the
         # season the game was PLAYED in (not the open one) so a late-uploaded
         # old replay reports the delta it actually caused. Empty for unrateable
-        # games (unconfirmed winner / too short) — the field is simply omitted.
+        # games (unconfirmed winner / too short / not a 4v4) — the field is simply omitted.
         season = self.store.season_containing(match.played_at.isoformat())
         history = self.store.season_matches(season) if season else self.store.all_matches()
         deltas = match_rating_deltas(history, result.match_id, self.store.merge_map())

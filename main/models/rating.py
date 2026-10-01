@@ -101,8 +101,3 @@ class UnitRating(BaseModel):
         """The bonus in ladder display points against `baseline` (the average
         pick's mu): "+200" plays like its picker being 200 rating better."""
         return round((self.mu - baseline) * 40)
-
-    @property
-    def uncertainty(self) -> int:
-        """One standard deviation, in the same display points."""
-        return round(self.sigma * 40)

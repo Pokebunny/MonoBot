@@ -712,10 +712,14 @@ def unit_board(
     """`rows` is pre-sorted; `sort` ("rating" or "raw") says which number
     leads. A unit's rating is a bonus in ladder points over the average pick,
     adjusted for who picked it and who they faced — so "+200" plays like its
-    picker being 200 rating better. The ± is one standard deviation; the tight
-    prior has already pulled rarely-picked units toward zero, so the board
-    sorts on the rating itself rather than a conservative bound (which would
-    sink a rare unit below a common one no matter which way it leans)."""
+    picker being 200 rating better. The tight prior has already pulled
+    rarely-picked units toward zero, so the board sorts on the rating itself
+    rather than a conservative bound (which would sink a rare unit below a
+    common one no matter which way it leans).
+
+    No ± is shown: every unit's sigma settles at the same floor, where each
+    game's information is balanced by the model's per-game drift, so it read
+    as ±70-80 on every row and said nothing the game count doesn't."""
     pages = page_count(rows)
     page = max(0, min(page, pages - 1))
     start = page * BOARD_PAGE_SIZE
@@ -726,7 +730,7 @@ def unit_board(
         if sort == "raw":
             lead, rest = f"{unit.win_rate:.0%}", f"{unit.wins}-{unit.losses}, rated {bonus}"
         else:
-            lead, rest = f"{bonus}", f"±{unit.uncertainty} · {record}"
+            lead, rest = bonus, record
         lines.append(f"`{i:>2}` **{unit.pick}** — **{lead}** ({rest})")
     title = "Unit Win Rates" if sort == "raw" else "Unit Ratings"
     embed = discord.Embed(title=title, color=ACCENT)

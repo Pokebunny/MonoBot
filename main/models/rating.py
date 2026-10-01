@@ -4,6 +4,7 @@ from pydantic import BaseModel
 class PlayerRating(BaseModel):
     handle: str  # SC2 unique account id — the identity ratings are keyed on
     name: str  # latest display name seen for this account
+    race: str | None = None  # set only on a by-race book's entries
     mu: float
     sigma: float
     wins: int = 0

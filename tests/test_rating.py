@@ -206,3 +206,56 @@ def test_match_summary_shows_battle_time_not_replay_length():
     match.pick_phase_seconds = 240  # a drafted game: four minutes of picking
     assert "11:00" in match_summary(match).description
     assert "15:00" not in match_summary(match).description
+
+
+def _raced(winning_team, races1, races2):
+    """A _match whose players are on the given races, in roster order."""
+    match = _match(winning_team)
+    for p, race in zip(match.players, races1 + races2):
+        p.race = race
+    return match
+
+
+def test_by_race_book_rates_each_race_separately():
+    book = RatingBook(by_race=True)
+    book.rate_match(_raced(1, ["Zerg"] * 4, ["Terran"] * 4))
+    book.rate_match(_raced(2, ["Protoss"] * 4, ["Terran"] * 4))
+    a1_zerg, a1_toss = book.ratings["A1/Zerg"], book.ratings["A1/Protoss"]
+    assert (a1_zerg.wins, a1_zerg.losses) == (1, 0)
+    assert (a1_toss.wins, a1_toss.losses) == (0, 1)
+    assert a1_zerg.handle == a1_toss.handle == "A1"
+    assert book.ratings["B1/Terran"].games == 2
+
+
+def test_race_leaderboard_lists_only_that_race():
+    book = RatingBook(by_race=True)
+    book.rate_match(_raced(1, ["Zerg"] * 4, ["Terran"] * 4))
+    board = book.leaderboard(min_games=1, race="Zerg")
+    assert {r.handle for r in board} == {"A1", "A2", "A3", "A4"}
+    assert all(r.race == "Zerg" for r in board)
+
+
+def test_overall_book_ignores_race():
+    book = RatingBook()
+    book.rate_match(_raced(1, ["Zerg"] * 4, ["Terran"] * 4))
+    book.rate_match(_raced(1, ["Protoss"] * 4, ["Terran"] * 4))
+    assert book.ratings["A1"].wins == 2 and book.ratings["A1"].race is None
+
+
+def test_board_query_reads_a_race_word_anywhere():
+    from cogs.leaderboard import DEFAULT_MIN_GAMES, Leaderboard
+
+    assert Leaderboard._parse_board_query("") == (DEFAULT_MIN_GAMES, None, "")
+    assert Leaderboard._parse_board_query("zerg") == (DEFAULT_MIN_GAMES, "Zerg", "")
+    assert Leaderboard._parse_board_query("10 Toss s1") == (10, "Protoss", "s1")
+    assert Leaderboard._parse_board_query("career t") == (DEFAULT_MIN_GAMES, "Terran", "career")
+
+
+def test_race_board_title_and_footer_name_the_race():
+    book = RatingBook(by_race=True)
+    book.rate_match(_raced(1, ["Zerg"] * 4, ["Terran"] * 4))
+    from services.match_embeds import leaderboard
+
+    embed = leaderboard(book.leaderboard(1, "Zerg"), min_games=5, hidden=1, season="Season 2", race="Zerg")
+    assert embed.title == "Zerg Leaderboard — Season 2"
+    assert "!leaderboard zerg 1" in embed.footer.text

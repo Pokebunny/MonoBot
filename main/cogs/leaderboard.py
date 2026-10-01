@@ -34,6 +34,13 @@ MVP_RATE_MIN_GAMES = 50
 # so the floor is high; !duos <n> overrides it.
 DUO_MIN_GAMES = 15
 
+# Words that turn !leaderboard into one race's board.
+_RACES = {
+    **dict.fromkeys(("protoss", "toss", "p"), "Protoss"),
+    **dict.fromkeys(("terran", "t"), "Terran"),
+    **dict.fromkeys(("zerg", "z"), "Zerg"),
+}
+
 # Words that pick a !duos sort. Rating is the default, so its own words only
 # exist so nobody has to remember which way round it is.
 _DUO_SORTS = {
@@ -201,11 +208,11 @@ class Leaderboard(commands.Cog):
 
     @commands.hybrid_command(
         aliases=["ladder"],
-        help="show the rating leaderboard — add a season (!leaderboard s1) or 'career' for all-time",
+        help="show the rating leaderboard — add a race (!leaderboard zerg), a season (s1) or 'career' for all-time",
     )
     @commands.cooldown(1, 5, commands.BucketType.channel)
     async def leaderboard(self, ctx, *, query: str = ""):
-        min_games, season_query = self._parse_board_query(query)
+        min_games, race, season_query = self._parse_board_query(query)
         career = season_query.lower() in ("career", "all", "alltime", "all-time")
         if career:
             season, label = None, "All-Time"
@@ -220,8 +227,8 @@ class Leaderboard(commands.Cog):
             season = self.store.current_season()
             label = season.name
 
-        book = self._book_for(season, career)
-        everyone = book.leaderboard(min_games=1)
+        book = self._book_for(season, career, by_race=race is not None)
+        everyone = book.leaderboard(min_games=1, race=race)
         board = [r for r in everyone if r.games >= min_games]
         hidden = len(everyone) - len(board)
         names = {r.handle: self._shown_name(ctx, r.handle, r.name) for r in board}
@@ -229,32 +236,36 @@ class Leaderboard(commands.Cog):
         # ladder right after a reset reads as intentional, not as data loss.
         final = season is not None and season.ended_at is not None
         view = PagedBoardView(
-            lambda page: match_embeds.leaderboard(board, page, min_games, names, hidden, label, final),
+            lambda page: match_embeds.leaderboard(board, page, min_games, names, hidden, label, final, race),
             match_embeds.page_count(board),
         )
         await self._send_board(ctx, view)
 
     @staticmethod
-    def _parse_board_query(query: str) -> tuple[int, str]:
-        """Split '!leaderboard [min_games] [season]' into its two parts. A bare
-        number stays min_games — that predates seasons and is what the board's
-        own footer tells people to type — so a season needs a name ('s1')."""
-        min_games, season_words = DEFAULT_MIN_GAMES, []
+    def _parse_board_query(query: str) -> tuple[int, str | None, str]:
+        """Split '!leaderboard [min_games] [race] [season]' into its parts. A
+        bare number stays min_games — that predates seasons and is what the
+        board's own footer tells people to type — so a season needs a name
+        ('s1'). A race word can go anywhere."""
+        min_games, race, season_words = DEFAULT_MIN_GAMES, None, []
         for token in query.split():
-            if token.isdigit() and not season_words:
+            if token.lower() in _RACES:
+                race = _RACES[token.lower()]
+            elif token.isdigit() and not season_words:
                 min_games = int(token)
             else:
                 season_words.append(token)
-        return min_games, " ".join(season_words)
+        return min_games, race, " ".join(season_words)
 
-    def _book_for(self, season, career: bool):
+    def _book_for(self, season, career: bool, by_race: bool = False):
         """The rating book for a season. The open season comes from the shared
-        cache; past seasons and the career board are built on demand — they're
-        rare reads, and at this history size a full replay is ~50ms."""
-        if not career and season is not None and season.ended_at is None:
+        cache; past seasons, the career board and race boards are built on
+        demand — they're rare reads, and at this history size a full replay is
+        ~50ms."""
+        if not career and not by_race and season is not None and season.ended_at is None:
             return self.ratings.book()
         matches = self.store.all_matches() if career else self.store.season_matches(season)
-        return RatingBook.from_matches((m for _, m in matches), self.store.merge_map())
+        return RatingBook.from_matches((m for _, m in matches), self.store.merge_map(), by_race)
 
     def _shown_name(self, ctx, handles, fallback: str) -> str:
         """The Discord display name of whoever these accounts are linked to —

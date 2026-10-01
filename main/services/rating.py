@@ -157,18 +157,25 @@ def _prior(book: "RatingBook", player) -> tuple[float, float]:
 class RatingBook:
     """All player ratings, updated match by match (in chronological order)."""
 
-    def __init__(self, merge_map: dict[str, str] | None = None):
+    def __init__(self, merge_map: dict[str, str] | None = None, by_race: bool = False):
         self.ratings: dict[str, PlayerRating] = {}
         # handle -> canonical handle, so one person's linked accounts share a
         # single rating (see MatchStore.merge_map).
         self._merge = merge_map or {}
+        # by_race: each person holds a separate rating per race, and every game
+        # scores the race they played against the races their opponents
+        # played. One walk rates all three, so a race board's opponents enter
+        # at their rating on the race they were on, not their overall one.
+        # Entries are keyed "handle/race"; PlayerRating.handle stays the
+        # canonical handle so names and links resolve as on the main board.
+        self._by_race = by_race
         self.rated_matches = 0
         self.skipped_matches = 0
 
     @classmethod
-    def from_matches(cls, matches, merge_map: dict[str, str] | None = None) -> "RatingBook":
+    def from_matches(cls, matches, merge_map: dict[str, str] | None = None, by_race: bool = False) -> "RatingBook":
         """Build a book by replaying matches in chronological order."""
-        book = cls(merge_map)
+        book = cls(merge_map, by_race)
         for match in sorted(matches, key=lambda m: m.played_at):
             book.rate_match(match)
         return book
@@ -180,15 +187,21 @@ class RatingBook:
         """Rating for an account, following any account merge."""
         return self.ratings.get(self.canonical(handle))
 
-    def _get(self, handle: str, name: str) -> PlayerRating:
-        """Rating for a (canonical) account. The display name is refreshed to
-        the latest one seen (players can rename)."""
-        if handle not in self.ratings:
-            default = _model.rating(name=handle)
-            self.ratings[handle] = PlayerRating(handle=handle, name=name, mu=default.mu, sigma=default.sigma)
+    def _get(self, player) -> PlayerRating:
+        """Rating for a match participant's (canonical) account — on the race
+        they played, in a by-race book. The display name is refreshed to the
+        latest one seen (players can rename)."""
+        handle = self.canonical(player.toon_handle)
+        race = player.race if self._by_race else None
+        key = f"{handle}/{race}" if race else handle
+        if key not in self.ratings:
+            default = _model.rating(name=key)
+            self.ratings[key] = PlayerRating(
+                handle=handle, name=player.name, race=race, mu=default.mu, sigma=default.sigma
+            )
         else:
-            self.ratings[handle].name = name
-        return self.ratings[handle]
+            self.ratings[key].name = player.name
+        return self.ratings[key]
 
     def is_rateable(self, match: MonobattleMatch) -> bool:
         return (
@@ -206,7 +219,7 @@ class RatingBook:
             return False
 
         team_numbers = sorted({p.team for p in match.players})
-        teams = [[self._get(self.canonical(p.toon_handle), p.name) for p in match.team(n)] for n in team_numbers]
+        teams = [[self._get(p) for p in match.team(n)] for n in team_numbers]
         os_teams = [[_model.create_rating([r.mu, r.sigma], name=r.handle) for r in team] for team in teams]
         # ranks: lower is better; winner gets 0.
         ranks = [0 if n == match.winning_team else 1 for n in team_numbers]
@@ -224,8 +237,9 @@ class RatingBook:
         self.rated_matches += 1
         return True
 
-    def leaderboard(self, min_games: int = 1) -> list[PlayerRating]:
-        eligible = [r for r in self.ratings.values() if r.games >= min_games]
+    def leaderboard(self, min_games: int = 1, race: str | None = None) -> list[PlayerRating]:
+        """Ranked entries; `race` narrows a by-race book to one race's board."""
+        eligible = [r for r in self.ratings.values() if r.games >= min_games and (race is None or r.race == race)]
         return sorted(eligible, key=lambda r: r.ordinal, reverse=True)
 
 

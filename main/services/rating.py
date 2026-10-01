@@ -45,7 +45,7 @@ def predict_win_probability(team1: list[tuple[float, float]], team2: list[tuple[
 
 # Display rating a player carries before their first rated game (the model's
 # prior, run through PlayerRating.display_rating).
-_DEFAULT_DISPLAY = PlayerRating(handle="", name="", mu=DEFAULT_MU, sigma=DEFAULT_SIGMA).display_rating
+DEFAULT_DISPLAY = PlayerRating(handle="", name="", mu=DEFAULT_MU, sigma=DEFAULT_SIGMA).display_rating
 
 
 def match_rating_deltas(matches, match_id: int, merge_map: dict[str, str] | None = None) -> dict[str, tuple[int, int]]:
@@ -67,7 +67,7 @@ def match_rating_deltas(matches, match_id: int, merge_map: dict[str, str] | None
         before = {}
         for p in match.players:
             r = book.rating_for(p.toon_handle)
-            before[p.toon_handle] = r.display_rating if r is not None else _DEFAULT_DISPLAY
+            before[p.toon_handle] = r.display_rating if r is not None else DEFAULT_DISPLAY
         if not book.rate_match(match):
             return {}
         return {

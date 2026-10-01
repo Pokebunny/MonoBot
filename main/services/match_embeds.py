@@ -1,11 +1,15 @@
 """Discord embed builders for matches, leaderboards, and stats."""
 
+import datetime
+
 import discord
 from models.matchmaking import ProposedMatch, QueuedPlayer
 from models.rating import DuoRecord, PlayerRating
+from models.recap import SessionRecap
 from models.replay import MatchPlayer, MonobattleMatch
 from services.achievements import RARITIES, RARITY_EMOJI, AchievementSpec, Earned, is_secret
 from services.achievements import SPECS as ACHIEVEMENT_SPECS
+from services.achievements import SPECS_BY_KEY as ACHIEVEMENT_SPECS_BY_KEY
 from services.awards import SPECS, game_awards, match_awards, mvp_outkilled_team
 from services.rating import MIN_RANKED_GAMES
 
@@ -713,3 +717,72 @@ def unit_stats(records: dict[str, list[int]], min_games: int = 10) -> discord.Em
     if min_games > 1:
         embed.set_footer(text=f"min {min_games} games per unit")
     return embed
+
+
+def _clock(moment: datetime.datetime) -> str:
+    """'9:14 PM' — no leading zero, which strftime can't drop portably."""
+    return moment.strftime("%I:%M %p").lstrip("0")
+
+
+def session_recap(recap: SessionRecap, names: dict[str, str], tz: datetime.tzinfo, title: str) -> discord.Embed:
+    """Everyone who played a session, one line each, biggest rating climb
+    first: record, ladder rating and its change, MVPs, and below it anything
+    they unlocked. Secrets show their name only, as in the unlock
+    announcement — the recipe would spoil the channel."""
+    start, end = recap.started_at.astimezone(tz), recap.ended_at.astimezone(tz)
+    when = f"{start:%a %b} {start.day} · {_clock(start)} – {_clock(end)} {end.tzname()}"
+    players = sorted(
+        recap.players,
+        key=lambda p: (p.rating_change is not None, p.rating_change or 0, p.wins - p.losses),
+        reverse=True,
+    )
+    lines, budget, dropped = [], 3700, 0
+    for p in players:
+        change = p.rating_change
+        if change is None:
+            rating = ""
+        else:
+            arrow = "📈" if change > 0 else "📉" if change < 0 else "➖"
+            rating = f" · {p.rating_after:,} {arrow} `{change:+d}`"
+        stars = f" · ⭐{p.mvps}" if p.mvps else ""
+        line = f"**{names.get(p.handle, p.name)}** {p.wins}-{p.losses}{rating}{stars}"
+        if p.achievement_keys:
+            specs = [ACHIEVEMENT_SPECS_BY_KEY[k] for k in p.achievement_keys]
+            line += "\n└ " + ", ".join(f"{s.emoji} {s.name}" for s in specs)
+        if budget - len(line) - 1 < 0:
+            dropped += 1
+            continue
+        budget -= len(line) + 1
+        lines.append(line)
+    if dropped:
+        lines.append(f"*…and {dropped} more.*")
+
+    embed = discord.Embed(title=title, color=ACCENT)
+    embed.description = f"{when}\n**{recap.games}** games · **{len(recap.players)}** players\n\n" + "\n".join(lines)
+    highlights = _recap_highlights(players, names)
+    if highlights:
+        embed.add_field(name="Highlights", value="\n".join(highlights), inline=False)
+    embed.set_footer(text="Rating is this season's ladder rating · ⭐ = game MVP (most value destroyed)")
+    return embed
+
+
+def _recap_highlights(players: list, names: dict[str, str]) -> list[str]:
+    """A few one-liners naming the night's standouts. Each is skipped unless
+    someone clearly earned it, so a quiet night doesn't crown a 1-1."""
+
+    def name(p) -> str:
+        return f"**{names.get(p.handle, p.name)}**"
+
+    out = []
+    top_mvp = max(players, key=lambda p: (p.mvps, p.games))
+    if top_mvp.mvps >= 2:
+        out.append(f"⭐ Session MVP: {name(top_mvp)} — MVP in {top_mvp.mvps} of {top_mvp.games} games")
+    rated = [p for p in players if p.rating_change is not None]
+    if rated:
+        climber = max(rated, key=lambda p: p.rating_change)
+        if climber.rating_change > 0:
+            out.append(f"🚀 Biggest climb: {name(climber)} `{climber.rating_change:+d}`")
+    best = max(players, key=lambda p: (p.wins - p.losses, p.wins))
+    if best.wins >= 3 and best.wins > best.losses:
+        out.append(f"🔥 Best record: {name(best)} {best.wins}-{best.losses}")
+    return out

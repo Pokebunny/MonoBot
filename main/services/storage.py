@@ -827,6 +827,17 @@ class MatchStore:
         ).fetchall()
         return [(r["key"], r["earned_at"]) for r in rows]
 
+    def unlocks_between(self, since: datetime.datetime, until: datetime.datetime) -> list[tuple[str, str]]:
+        """(handle, key) for unlocks whose unlocking game was played in
+        [since, until] — earned_at is that game's played_at, so a badge
+        granted late (a reconcile, a slow upload) still lands on the night it
+        was earned. Bounds are UTC; earned_at is stored naive."""
+        bounds = [b.astimezone(datetime.UTC).replace(tzinfo=None).isoformat() for b in (since, until)]
+        rows = self._conn.execute(
+            "SELECT handle, key FROM achievement_unlocks WHERE earned_at >= ? AND earned_at <= ?", bounds
+        ).fetchall()
+        return [(r["handle"], r["key"]) for r in rows]
+
     def all_unlocks(self) -> list[tuple[str, str]]:
         """(handle, key) for every unlock — holder counts are computed from
         this, collapsing merge groups at read time."""

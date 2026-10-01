@@ -4,6 +4,8 @@
   ],
   "queue_reset_time": "05:00",
   "queue_reset_timezone": "America/New_York",
+  "recap_time": "08:00",
+  "recap_timezone": "America/New_York",
   "queue_timeout_minutes": 60,
   "admin_user_ids": [
     111111111111111111,

@@ -24,6 +24,7 @@ cog_files = [
     "identity",
     "replays",
     "leaderboard",
+    "recap",
     "matchmaking",
     "pubs",
 ]

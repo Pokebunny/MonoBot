@@ -25,6 +25,12 @@ class BotConfig(BaseModel):
     queue_reset_time: str | None = "05:00"
     queue_reset_timezone: str = "America/New_York"
 
+    # Daily session recap, posted to the !recapchannel channel (or, if none is
+    # set, the replay channels) covering the previous 24 hours. "HH:MM" in
+    # recap_timezone; None disables the post (!recap still works on demand).
+    recap_time: str | None = "08:00"
+    recap_timezone: str = "America/New_York"
+
     # Queued players are removed this many minutes after they last pressed
     # Join (pressing it again while queued restarts the clock). None disables
     # the timeout.

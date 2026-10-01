@@ -50,6 +50,13 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   Ranking on a level holds up where ranking on a residual does not; keep it
   that way. Career-wide and cached in `DuoCache`, since the walk does twelve
   model updates per match.
+- **Unit ratings** (`!leaderboard units`, `!unitstats`) come from
+  `rating.unit_ratings`: each pick is an extra member of its picker's team, and
+  the walk updates only the units — players enter at their pre-match ladder
+  rating and are never changed by it, so the ladder is untouched. Shown as
+  points over the games-weighted average pick. Career-wide, cached in
+  `UnitCache`. Updating players and units jointly was tried and predicted
+  worse; keep players fixed.
 - **Achievements** are derived from history but *held* in the
   `achievement_unlocks` ledger, which is reconciled rather than append-only:
   `achievements.reconcile` grants and revokes, and the startup hook announces

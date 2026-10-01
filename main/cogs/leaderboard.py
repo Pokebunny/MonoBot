@@ -14,6 +14,8 @@ from services.rating import (
     DuoCache,
     RatingBook,
     RatingCache,
+    UnitCache,
+    unit_baseline,
 )
 from services.storage import MatchStore
 from views import ExpiringView, PagedBoardView, person_or_pick
@@ -33,6 +35,15 @@ MVP_RATE_MIN_GAMES = 50
 # noisier than players — most of a duo's record is the other two teammates —
 # so the floor is high; !duos <n> overrides it.
 DUO_MIN_GAMES = 15
+
+# Default minimum games for a unit to make the unit board. Most picks clear
+# it easily; it only trims picks too rare to have moved off the prior.
+UNIT_MIN_GAMES = 10
+
+# Words that turn !leaderboard into the unit board, and the words on it that
+# sort by raw win rate instead of rating.
+_UNIT_WORDS = {"unit", "units", "pick", "picks"}
+_UNIT_RAW_WORDS = {"raw", "winrate", "wins", "rate", "record"}
 
 # Words that turn !leaderboard into one race's board.
 _RACES = {
@@ -200,18 +211,25 @@ class Leaderboard(commands.Cog):
             client.achievement_cache = AchievementCache(client.match_store)
         if not hasattr(client, "duo_cache"):
             client.duo_cache = DuoCache(client.match_store)
+        if not hasattr(client, "unit_cache"):
+            client.unit_cache = UnitCache(client.match_store)
         self.store: MatchStore = client.match_store
         self.duos_cache: DuoCache = client.duo_cache
+        self.units_cache: UnitCache = client.unit_cache
         self.ratings: RatingCache = client.rating_cache
         self.achievements: AchievementCache = client.achievement_cache
         achievements.ensure_seeded(self.store, self.achievements)
 
     @commands.hybrid_command(
         aliases=["ladder"],
-        help="show the rating leaderboard — add a race (!leaderboard zerg), a season (s1) or 'career' for all-time",
+        help="show the rating leaderboard — add a race (!leaderboard zerg), a season (s1), 'career' for all-time, "
+        "or 'units' to rate unit picks",
     )
     @commands.cooldown(1, 5, commands.BucketType.channel)
     async def leaderboard(self, ctx, *, query: str = ""):
+        if any(token.lower() in _UNIT_WORDS for token in query.split()):
+            await self._unit_board(ctx, query)
+            return
         min_games, race, season_query = self._parse_board_query(query)
         career = season_query.lower() in ("career", "all", "alltime", "all-time")
         if career:
@@ -632,14 +650,40 @@ class Leaderboard(commands.Cog):
         """Post a paged board, hiding the arrows when there's only one page."""
         view.message = await ctx.send(embed=view.embed(), view=view if view.multipage else None)
 
-    @commands.hybrid_command(help="show win rates by unit pick")
+    @commands.hybrid_command(help="rate unit picks, adjusted for who picked them — same as !leaderboard units")
     @commands.cooldown(1, 5, commands.BucketType.channel)
-    async def unitstats(self, ctx, min_games: int = 1):
-        records = self.store.unit_records(MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
-        if not records:
-            await ctx.send("No decided matches stored yet.")
+    async def unitstats(self, ctx, *, query: str = ""):
+        await self._unit_board(ctx, query)
+
+    async def _unit_board(self, ctx, query: str):
+        min_games, raw = self._parse_unit_query(query)
+        units = self.units_cache.units()
+        # The zero is the average pick across every unit, not just the ones
+        # shown, so raising the floor doesn't shift everyone's number.
+        baseline = unit_baseline(units.values())
+        rows = [u for u in units.values() if u.games >= min_games]
+        if not rows:
+            await ctx.send(f"No unit has {min_games} rated games yet.")
             return
-        await ctx.send(embed=match_embeds.unit_stats(records, min_games))
+        rows.sort(key=(lambda u: (u.win_rate, u.games)) if raw else (lambda u: u.mu), reverse=True)
+        sort = "raw" if raw else "rating"
+        view = PagedBoardView(
+            lambda page: match_embeds.unit_board(rows, page, min_games, baseline, sort),
+            match_embeds.page_count(rows),
+        )
+        await self._send_board(ctx, view)
+
+    @staticmethod
+    def _parse_unit_query(query: str) -> tuple[int, bool]:
+        """Split '[units] [min_games] [raw]' into (min_games, sort by raw win
+        rate). Unit boards are career-wide, so season words are ignored."""
+        min_games, raw = UNIT_MIN_GAMES, False
+        for token in query.lower().split():
+            if token.isdigit():
+                min_games = max(1, int(token))
+            elif token in _UNIT_RAW_WORDS:
+                raw = True
+        return min_games, raw
 
     @commands.hybrid_command(help="show the current ladder season")
     @commands.cooldown(1, 5, commands.BucketType.channel)

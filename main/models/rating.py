@@ -75,3 +75,34 @@ class DuoRecord(BaseModel):
         lot also lifts both players' individual ratings, which raises
         `expected_wins` and pulls this back toward zero."""
         return self.wins - self.expected_wins
+
+
+class UnitRating(BaseModel):
+    """How much one unit pick is worth, over and above whoever picked it. The
+    unit is rated as an extra member of its picker's team, on the same scale
+    a player is, so `mu` is a bonus to the team's strength: a unit 2 mu above
+    another plays like its picker being 2 mu better (80 display points)."""
+
+    pick: str
+    mu: float
+    sigma: float
+    wins: int = 0  # per slot: two players on one team on the same pick count twice
+    losses: int = 0
+
+    @property
+    def games(self) -> int:
+        return self.wins + self.losses
+
+    @property
+    def win_rate(self) -> float:
+        return self.wins / self.games if self.games else 0.0
+
+    def points(self, baseline: float) -> int:
+        """The bonus in ladder display points against `baseline` (the average
+        pick's mu): "+200" plays like its picker being 200 rating better."""
+        return round((self.mu - baseline) * 40)
+
+    @property
+    def uncertainty(self) -> int:
+        """One standard deviation, in the same display points."""
+        return round(self.sigma * 40)

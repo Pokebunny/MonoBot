@@ -4,7 +4,7 @@ import datetime
 
 import discord
 from models.matchmaking import ProposedMatch, QueuedPlayer
-from models.rating import DuoRecord, PlayerRating
+from models.rating import DuoRecord, PlayerRating, UnitRating
 from models.recap import SessionRecap
 from models.replay import MatchPlayer, MonobattleMatch
 from services.achievements import RARITIES, RARITY_EMOJI, AchievementSpec, Earned, is_secret
@@ -703,6 +703,42 @@ def duo_board(
         text=f"Career · {note}{meanings.get(sort, meanings['rating'])} · "
         f"{others.get(sort, others['rating'])} · Page {page + 1}/{pages}"
     )
+    return embed
+
+
+def unit_board(
+    rows: list[UnitRating], page: int = 0, min_games: int = 1, baseline: float = 0.0, sort: str = "rating"
+) -> discord.Embed:
+    """`rows` is pre-sorted; `sort` ("rating" or "raw") says which number
+    leads. A unit's rating is a bonus in ladder points over the average pick,
+    adjusted for who picked it and who they faced — so "+200" plays like its
+    picker being 200 rating better. The ± is one standard deviation; the tight
+    prior has already pulled rarely-picked units toward zero, so the board
+    sorts on the rating itself rather than a conservative bound (which would
+    sink a rare unit below a common one no matter which way it leans)."""
+    pages = page_count(rows)
+    page = max(0, min(page, pages - 1))
+    start = page * BOARD_PAGE_SIZE
+    lines = []
+    for i, unit in enumerate(rows[start : start + BOARD_PAGE_SIZE], start + 1):
+        bonus = f"{unit.points(baseline):+d}"
+        record = f"{unit.wins}-{unit.losses}, {unit.win_rate:.0%}"
+        if sort == "raw":
+            lead, rest = f"{unit.win_rate:.0%}", f"{unit.wins}-{unit.losses}, rated {bonus}"
+        else:
+            lead, rest = f"{bonus}", f"±{unit.uncertainty} · {record}"
+        lines.append(f"`{i:>2}` **{unit.pick}** — **{lead}** ({rest})")
+    title = "Unit Win Rates" if sort == "raw" else "Unit Ratings"
+    embed = discord.Embed(title=title, color=ACCENT)
+    embed.description = "\n".join(lines) or "*No unit has been picked that often yet.*"
+    meaning = (
+        "win rate, ignoring who picked it and who they faced"
+        if sort == "raw"
+        else "rating points over the average pick, adjusted for who picked it and who they faced"
+    )
+    other = "!leaderboard units" if sort == "raw" else "!leaderboard units raw"
+    note = f"min {min_games} games · " if min_games > 1 else ""
+    embed.set_footer(text=f"Career · {note}{meaning} · {other} · Page {page + 1}/{pages}")
     return embed
 
 

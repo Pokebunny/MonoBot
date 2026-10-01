@@ -8,7 +8,7 @@ sc2reader is behind replay_parser.
 import itertools
 import logging
 
-from models.rating import DuoRecord, PlayerRating
+from models.rating import DuoRecord, PlayerRating, UnitRating
 from models.replay import MonobattleMatch
 from openskill.models import PlackettLuce
 
@@ -152,6 +152,90 @@ def _prior(book: "RatingBook", player) -> tuple[float, float]:
     anyone who hasn't played yet."""
     rating = book.rating_for(player.toon_handle)
     return (rating.mu, rating.sigma) if rating is not None else (DEFAULT_MU, DEFAULT_SIGMA)
+
+
+# A unit starts far more certain than a new player: there are only ~45 picks,
+# each with hundreds of games, and a tight prior shrinks the rarely-picked
+# ones toward the average instead of letting a lucky 10 games top the board.
+# Of the priors tried against the live history (a half and a quarter of a
+# player's), a quarter predicted the later half of it best.
+UNIT_PRIOR_SIGMA = DEFAULT_SIGMA / 4
+
+
+def unit_ratings(matches, merge_map: dict[str, str] | None = None) -> dict[str, UnitRating]:
+    """Every unit pick's rating, keyed by pick. `matches` is an iterable of
+    MonobattleMatch, e.g. (m for _, m in store.all_matches()).
+
+    Each unit is an extra member of its picker's team, so a side is its four
+    players plus their four picks and its strength is the sum of all eight.
+    The players enter at their ladder rating from before the game and are
+    never changed by this walk — only the units learn. So a unit's rating is
+    what the pick adds beyond the skill of whoever picked it, against the
+    players and picks it faced: the adjustment raw win rate can't make, where
+    a unit good players favour looks strong for their sake.
+
+    Measured on the live history this holds up the way the duo rating does:
+    a unit's rating in one half of the games correlates with the other half
+    (r ~ +0.6), and adding unit ratings to the ladder's win prediction helps
+    out of sample by more than merely padding each side with untrained slots
+    does. Letting players and units learn together was tried and predicted
+    slightly worse, besides moving the ladder — which this must not do.
+
+    Only games where every pick is known count; a side missing a unit would
+    be scored as if that slot were an average pick. Career-wide."""
+    book = RatingBook(merge_map)
+    units: dict[str, UnitRating] = {}
+    for match in sorted(matches, key=lambda m: m.played_at):
+        if book.is_rateable(match) and all(p.pick for p in match.players):
+            _rate_units(book, match, units)
+        book.rate_match(match)
+    return units
+
+
+def _rate_units(book: "RatingBook", match: MonobattleMatch, units: dict[str, UnitRating]) -> None:
+    """Update every pick in one match. Called before the match is rated, so
+    the players enter at their pre-match ratings."""
+    team_numbers = sorted({p.team for p in match.players})
+    sides = [match.team(n) for n in team_numbers]
+    for p in match.players:
+        if p.pick not in units:
+            units[p.pick] = UnitRating(pick=p.pick, mu=DEFAULT_MU, sigma=UNIT_PRIOR_SIGMA)
+    teams = [
+        [_model.create_rating(list(_prior(book, p))) for p in side]
+        + [_model.create_rating([units[p.pick].mu, units[p.pick].sigma]) for p in side]
+        for side in sides
+    ]
+    ranks = [0 if n == match.winning_team else 1 for n in team_numbers]
+    rated = _model.rate(teams, ranks=ranks)
+    # Every slot is scored against the same pre-match unit rating, then the
+    # changes are pooled: a pick fielded twice in one game (or on both sides)
+    # gets both slots' mu moves, rather than the last slot overwriting the
+    # first. Sigma takes the tightest slot's: each update also adds the
+    # model's per-game drift (tau), which must count once per game, not once
+    # per slot.
+    moves: dict[str, list[float]] = {}  # pick -> [summed mu change, new sigma]
+    for side, new, rank in zip(sides, rated, ranks):
+        for p, after in zip(side, new[len(side) :]):
+            unit = units[p.pick]
+            move = moves.setdefault(p.pick, [0.0, after.sigma])
+            move[0] += after.mu - unit.mu
+            move[1] = min(move[1], after.sigma)
+            if rank == 0:
+                unit.wins += 1
+            else:
+                unit.losses += 1
+    for pick, (mu_change, sigma) in moves.items():
+        units[pick].mu += mu_change
+        units[pick].sigma = sigma
+
+
+def unit_baseline(units) -> float:
+    """The average pick's mu, weighted by how often each is fielded — the zero
+    a unit's bonus is shown against. Not the prior: the picks' ratings only
+    mean anything relative to each other, since every side fields four."""
+    units = list(units)
+    games = sum(u.games for u in units)
+    return sum(u.mu * u.games for u in units) / games if games else DEFAULT_MU
 
 
 class RatingBook:
@@ -302,3 +386,21 @@ class DuoCache:
             self._records = duo_records((m for _, m in self._store.all_matches()), merge_map)
             self._version = self._store.change_count
         return self._records
+
+
+class UnitCache:
+    """unit_ratings for a store, rebuilt only when the store changes. Career-
+    wide like the duo board: most picks get a few dozen games a season, too
+    few to rate them on."""
+
+    def __init__(self, store):
+        self._store = store
+        self._units: dict[str, UnitRating] | None = None
+        self._version = -1
+
+    def units(self) -> dict[str, UnitRating]:
+        if self._units is None or self._version != self._store.change_count:
+            merge_map = self._store.merge_map() if hasattr(self._store, "merge_map") else None
+            self._units = unit_ratings((m for _, m in self._store.all_matches()), merge_map)
+            self._version = self._store.change_count
+        return self._units

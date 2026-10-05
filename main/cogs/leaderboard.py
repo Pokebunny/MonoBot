@@ -234,6 +234,7 @@ class Leaderboard(commands.Cog):
 
     @commands.hybrid_command(
         aliases=["ladder"],
+        description="show the rating leaderboard (a race, a season like s1, career, or units)",
         help="show the rating leaderboard — add a race (!leaderboard zerg), a season (s1), 'career' for all-time, "
         "or 'units' to rate unit picks",
     )
@@ -730,8 +731,9 @@ class Leaderboard(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(
+        description="start a new ladder season (add --hard to reset everyone to the default) (mods)",
         help="start a new ladder season: ratings carry over from career, pulled toward the middle "
-        "(add --hard to reset everyone to the default) (mods)"
+        "(add --hard to reset everyone to the default) (mods)",
     )
     @is_bot_admin()
     async def newseason(self, ctx, *, name: str | None = None):

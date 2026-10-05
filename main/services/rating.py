@@ -47,8 +47,21 @@ def predict_win_probability(team1: list[tuple[float, float]], team2: list[tuple[
 # prior, run through PlayerRating.display_rating).
 DEFAULT_DISPLAY = PlayerRating(handle="", name="", mu=DEFAULT_MU, sigma=DEFAULT_SIGMA).display_rating
 
+# A soft season reset seeds each player from their career rating at the
+# boundary: mu keeps SOFT_RESET_CARRYOVER of its distance from the prior, and
+# sigma goes back up to SOFT_RESET_SIGMA (never down — a player the career
+# book is still unsure of stays unsure). Chosen by
+# scripts/soft_reset_backtest.py: carrying skill over is what predicts the new
+# season (a hard reset was the worst setting tried), while resetting sigma all
+# the way costs next to nothing and leaves everyone free to move — wanted, so
+# a season still feels like a fresh climb.
+SOFT_RESET_CARRYOVER = 0.7
+SOFT_RESET_SIGMA = DEFAULT_SIGMA
 
-def match_rating_deltas(matches, match_id: int, merge_map: dict[str, str] | None = None) -> dict[str, tuple[int, int]]:
+
+def match_rating_deltas(
+    matches, match_id: int, merge_map: dict[str, str] | None = None, start: "RatingBook | None" = None
+) -> dict[str, tuple[int, int]]:
     """For the match with id `match_id`, each participant's (before, after)
     display rating, computed at the match's true chronological position by
     replaying history up to and through it. Keyed by the player's own
@@ -57,8 +70,9 @@ def match_rating_deltas(matches, match_id: int, merge_map: dict[str, str] | None
     Empty when the match didn't move ratings (unrateable — no winner, low
     confidence, too short), which is exactly when callers should say so rather
     than show a change. `matches` is an iterable of (id, match) pairs, e.g.
-    MatchStore.all_matches()."""
-    book = RatingBook(merge_map)
+    MatchStore.all_matches(). `start` is the book the walk begins from (a
+    soft-reset season's seeds, see season_start); it is consumed."""
+    book = start if start is not None else RatingBook(merge_map)
     ordered = sorted(matches, key=lambda im: im[1].played_at)
     for mid, match in ordered:
         if mid != match_id:
@@ -66,7 +80,7 @@ def match_rating_deltas(matches, match_id: int, merge_map: dict[str, str] | None
             continue
         before = {}
         for p in match.players:
-            r = book.rating_for(p.toon_handle)
+            r = book.standing_for(p.toon_handle)
             before[p.toon_handle] = r.display_rating if r is not None else DEFAULT_DISPLAY
         if not book.rate_match(match):
             return {}
@@ -253,23 +267,54 @@ class RatingBook:
         # Entries are keyed "handle/race"; PlayerRating.handle stays the
         # canonical handle so names and links resolve as on the main board.
         self._by_race = by_race
+        # Where a player starts if they play: a soft-reset season's seeds,
+        # keyed like `ratings`. Kept apart from `ratings` so that still means
+        # "has played in this book" — boards, profiles and season ranks list
+        # only players who have, and a seed only matters once it's played on.
+        self.seeds: dict[str, PlayerRating] = {}
         self.rated_matches = 0
         self.skipped_matches = 0
 
     @classmethod
     def from_matches(cls, matches, merge_map: dict[str, str] | None = None, by_race: bool = False) -> "RatingBook":
         """Build a book by replaying matches in chronological order."""
-        book = cls(merge_map, by_race)
+        return cls(merge_map, by_race).replay(matches)
+
+    def replay(self, matches) -> "RatingBook":
+        """Rate matches in chronological order on top of this book."""
         for match in sorted(matches, key=lambda m: m.played_at):
-            book.rate_match(match)
-        return book
+            self.rate_match(match)
+        return self
+
+    def seed(self, career: "RatingBook", carryover: float, sigma: float) -> None:
+        """Soft reset: start every player `career` knows at their career
+        rating pulled toward the prior (see SOFT_RESET_CARRYOVER), with no
+        games on record. `career` must be built in the same mode (by_race or
+        not) so its keys line up."""
+        for key, r in career.ratings.items():
+            self.seeds[key] = PlayerRating(
+                handle=r.handle,
+                name=r.name,
+                race=r.race,
+                mu=DEFAULT_MU + carryover * (r.mu - DEFAULT_MU),
+                sigma=max(sigma, r.sigma),
+            )
 
     def canonical(self, handle: str) -> str:
         return self._merge.get(handle, handle)
 
     def rating_for(self, handle: str) -> PlayerRating | None:
-        """Rating for an account, following any account merge."""
+        """Rating for an account, following any account merge. None until
+        they've played in this book, even if they hold a seed."""
         return self.ratings.get(self.canonical(handle))
+
+    def standing_for(self, handle: str) -> PlayerRating | None:
+        """Where an account stands going into its next game: its rating, else
+        its seed, else None (the model's prior). What matchmaking and
+        before/after deltas want; boards and ranks want rating_for. Overall
+        books only — a by-race book's keys carry the race."""
+        key = self.canonical(handle)
+        return self.ratings.get(key) or self.seeds.get(key)
 
     def _get(self, player) -> PlayerRating:
         """Rating for a match participant's (canonical) account — on the race
@@ -279,10 +324,9 @@ class RatingBook:
         race = player.race if self._by_race else None
         key = f"{handle}/{race}" if race else handle
         if key not in self.ratings:
-            default = _model.rating(name=key)
-            self.ratings[key] = PlayerRating(
-                handle=handle, name=player.name, race=race, mu=default.mu, sigma=default.sigma
-            )
+            seed = self.seeds.get(key)
+            mu, sigma = (seed.mu, seed.sigma) if seed else (DEFAULT_MU, DEFAULT_SIGMA)
+            self.ratings[key] = PlayerRating(handle=handle, name=player.name, race=race, mu=mu, sigma=sigma)
         else:
             self.ratings[key].name = player.name
         return self.ratings[key]
@@ -327,17 +371,41 @@ class RatingBook:
         return sorted(eligible, key=lambda r: r.ordinal, reverse=True)
 
 
+def season_start(store, season, by_race: bool = False) -> RatingBook:
+    """The book a season's walk starts from: empty after a hard reset (and
+    for the career walk, season=None), seeded from career ratings at the
+    season's start after a soft one. Derived, like everything else here: the
+    season row holds only the reset's parameters, so a late-uploaded replay
+    from before the boundary moves the seeds too."""
+    merge_map = store.merge_map()
+    book = RatingBook(merge_map, by_race)
+    if season is not None and season.carryover is not None:
+        before = store.all_matches(until=season.started_at)
+        career = RatingBook.from_matches((m for _, m in before), merge_map, by_race)
+        book.seed(career, season.carryover, season.seed_sigma)
+    return book
+
+
+def season_book(store, season, by_race: bool = False) -> RatingBook:
+    """A season's ratings (career, all history, when season is None). The one
+    way to build a season board — every caller must start from season_start
+    or a soft reset shows up on some screens and not others."""
+    matches = store.all_matches() if season is None else store.season_matches(season)
+    return season_start(store, season, by_race).replay(m for _, m in matches)
+
+
 class RatingCache:
     """A RatingBook derived from a match store, rebuilt only when the store
     changes. Shared by the cogs that read ratings (leaderboard, matchmaking).
 
     Ratings are season-scoped: the book replays only matches inside the open
-    season's window, so starting a season is a hard reset (everyone back to
-    the prior) without deleting anything. `career=True` ignores season bounds.
+    season's window, starting from that season's seeds (season_start), so a
+    reset deletes nothing. `career=True` ignores season bounds.
     Match history, profile stats and achievements are NOT season-scoped and
     read the store directly.
 
-    `store` is duck-typed (needs `.all_matches()` and `.change_count`) so this
+    `store` is duck-typed (needs `.all_matches()`, `.merge_map()` and
+    `.change_count`; `.current_season()` to window by season) so this
     module keeps its one-way dependency on models only."""
 
     def __init__(self, store, career: bool = False):
@@ -358,9 +426,7 @@ class RatingCache:
         # Season turnover changes the window without necessarily changing the
         # matches, so it invalidates the book independently of change_count.
         if self._book is None or self._version != self._store.change_count or self._season_id != season_id:
-            merge_map = self._store.merge_map() if hasattr(self._store, "merge_map") else None
-            matches = self._store.all_matches() if season is None else self._store.season_matches(season)
-            self._book = RatingBook.from_matches((m for _, m in matches), merge_map)
+            self._book = season_book(self._store, season)
             self._version = self._store.change_count
             self._season_id = season_id
         return self._book

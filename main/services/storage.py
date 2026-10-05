@@ -50,6 +50,14 @@ class Season(NamedTuple):
     name: str
     started_at: str  # ISO, inclusive
     ended_at: str | None  # ISO, exclusive; None = still running
+    # Soft reset: ratings start from career at started_at, pulled toward the
+    # prior (services.rating.RatingBook.seed). Both None = a hard reset.
+    carryover: float | None = None
+    seed_sigma: float | None = None
+
+    @classmethod
+    def from_row(cls, row) -> "Season":
+        return cls(row["id"], row["name"], row["started_at"], row["ended_at"], row["carryover"], row["seed_sigma"])
 
     def contains(self, played_at: str) -> bool:
         return self.started_at <= played_at and (self.ended_at is None or played_at < self.ended_at)
@@ -59,7 +67,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -165,7 +173,10 @@ CREATE TABLE IF NOT EXISTS seasons (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
     started_at TEXT NOT NULL,
-    ended_at TEXT
+    ended_at TEXT,
+    -- Soft-reset parameters; NULL = hard reset (everyone starts at the prior).
+    carryover REAL,
+    seed_sigma REAL
 );
 
 -- Exactly one open season. Indexing the expression, not ended_at itself:
@@ -360,6 +371,16 @@ def _migration_12_kills_by_unit(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE match_players ADD COLUMN kills_by_unit TEXT NOT NULL DEFAULT '{}'")
 
 
+def _migration_13_soft_season_reset(conn: sqlite3.Connection) -> None:
+    """Let a season start from carried-over career ratings instead of the
+    prior. Existing seasons keep NULL — they were hard resets, and their
+    boards must rebuild exactly as they were."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(seasons)")}
+    for col in ("carryover", "seed_sigma"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE seasons ADD COLUMN {col} REAL")
+
+
 _MIGRATIONS = {
     1: _migration_1_content_key,
     2: _migration_2_replay_channels,
@@ -373,6 +394,7 @@ _MIGRATIONS = {
     10: _migration_10_seasons,
     11: _migration_11_map_versions,
     12: _migration_12_kills_by_unit,
+    13: _migration_13_soft_season_reset,
 }
 
 
@@ -1021,7 +1043,7 @@ class MatchStore:
         row = self._conn.execute(
             "SELECT * FROM seasons WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1"
         ).fetchone()
-        return Season(row["id"], row["name"], row["started_at"], row["ended_at"])
+        return Season.from_row(row)
 
     def season_containing(self, played_at: str) -> Season | None:
         """The season whose window holds this played_at. Used so a match's
@@ -1032,21 +1054,28 @@ class MatchStore:
     def seasons(self) -> list[Season]:
         """All seasons, oldest first."""
         rows = self._conn.execute("SELECT * FROM seasons ORDER BY started_at").fetchall()
-        return [Season(r["id"], r["name"], r["started_at"], r["ended_at"]) for r in rows]
+        return [Season.from_row(r) for r in rows]
 
-    def start_season(self, name: str) -> Season:
+    def start_season(self, name: str, carryover: float | None = None, seed_sigma: float | None = None) -> Season:
         """Close the open season as of now and open a new one. The boundary is
         shared (previous ended_at == new started_at) so no match can fall
-        between two seasons, and none is counted by both."""
+        between two seasons, and none is counted by both. `carryover` and
+        `seed_sigma` make it a soft reset (both or neither); omitted, it is a
+        hard one."""
+        if (carryover is None) != (seed_sigma is None):
+            raise ValueError("a soft reset needs both carryover and seed_sigma")
         # UTC-aware, matching how played_at is stored: season windows are
         # compared as strings in SQL, so a naive local boundary would sit hours
         # off from the timestamps it is filtering whenever the host isn't UTC.
         now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
         with self._conn:
             self._conn.execute("UPDATE seasons SET ended_at = ? WHERE ended_at IS NULL", (now,))
-            cur = self._conn.execute("INSERT INTO seasons (name, started_at) VALUES (?, ?)", (name, now))
+            cur = self._conn.execute(
+                "INSERT INTO seasons (name, started_at, carryover, seed_sigma) VALUES (?, ?, ?, ?)",
+                (name, now, carryover, seed_sigma),
+            )
         self.change_count += 1
-        return Season(cur.lastrowid, name, now, None)
+        return Season(cur.lastrowid, name, now, None, carryover, seed_sigma)
 
     def pending_confirmations(self, confidence_gate: float, min_duration: int) -> list[tuple[int, MonobattleMatch]]:
         """Real matches whose winner is unknown or below the rating gate."""

@@ -27,6 +27,15 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   window holds its `played_at`, so a late-uploaded old replay still scores
   against the season it was played in. Starting a season resets ratings by
   moving the window, deleting nothing — past boards stay reconstructible.
+  A reset is hard (everyone at the prior; seasons 1–2) or soft (the default
+  since season 3): the season row stores only `carryover`/`seed_sigma`, and
+  each player is seeded from their career rating at `started_at`, derived
+  like everything else (`rating.season_start`; parameters chosen by
+  `scripts/soft_reset_backtest.py`). Seeds live in `RatingBook.seeds`, apart
+  from `ratings`, so boards and season ranks still list only players who have
+  played; matchmaking and before/after deltas read `standing_for`. Build a
+  season's ratings only through `season_book`/`season_start`, or a soft reset
+  shows on some screens and not others.
   Only ratings are season-scoped; match history, profile stats and the
   achievement ledger are career-wide.
 - **Typed player names** resolve through `views.person_or_pick` and nothing

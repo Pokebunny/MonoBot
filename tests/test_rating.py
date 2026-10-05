@@ -259,3 +259,31 @@ def test_race_board_title_and_footer_name_the_race():
     embed = leaderboard(book.leaderboard(1, "Zerg"), min_games=5, hidden=1, season="Season 2", race="Zerg")
     assert embed.title == "Zerg Leaderboard — Season 2"
     assert "!leaderboard zerg 1" in embed.footer.text
+
+
+def test_seed_compresses_mu_and_never_lowers_sigma():
+    from services.rating import DEFAULT_MU, DEFAULT_SIGMA
+
+    career = RatingBook()
+    career.ratings["strong"] = PlayerRating(handle="strong", name="s", mu=DEFAULT_MU + 10, sigma=2.0, wins=30)
+    career.ratings["new"] = PlayerRating(handle="new", name="n", mu=DEFAULT_MU - 2, sigma=7.5, losses=1)
+    book = RatingBook()
+    book.seed(career, 0.5, 5.0)
+
+    strong, new = book.standing_for("strong"), book.standing_for("new")
+    assert strong.mu == DEFAULT_MU + 5 and strong.sigma == 5.0
+    assert new.mu == DEFAULT_MU - 1 and new.sigma == 7.5  # already less sure than the reset
+    assert strong.games == 0 and new.games == 0
+    assert book.rating_for("strong") is None and book.leaderboard() == []
+    assert book.standing_for("nobody") is None
+    assert DEFAULT_SIGMA > 5.0  # the case above is a genuine reset of sigma upward
+
+
+def test_seeded_player_starts_from_the_seed():
+    career = RatingBook.from_matches([_match(winning_team=1)] * 3)
+    seeded = RatingBook()
+    seeded.seed(career, 1.0, 0.0)
+    seeded.rate_match(_match(winning_team=2))
+    fresh = RatingBook.from_matches([_match(winning_team=2)])
+    assert seeded.ratings["A1"].mu > fresh.ratings["A1"].mu
+    assert seeded.ratings["A1"].games == 1

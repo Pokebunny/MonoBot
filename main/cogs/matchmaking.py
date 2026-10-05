@@ -412,12 +412,13 @@ class Matchmaking(commands.Cog):
 
     def _queued_player(self, user: discord.abc.User) -> QueuedPlayer:
         """Build a QueuedPlayer, rated by the user's bound SC2 account with the
-        most games. Users who are linked but haven't played yet (no bound
-        handle) get the new-player default rating."""
+        most games. A season's seed counts until they've played in it, so a
+        soft reset balances on carried-over skill from the first game. Users
+        who are linked but haven't played yet get the new-player default."""
         book = self.ratings.book()
         best = None
         for handle in self.store.handles_for(str(user.id)):
-            rating = book.rating_for(handle)  # follows account merges
+            rating = book.standing_for(handle)  # follows account merges
             if rating is not None and (best is None or rating.games > best.games):
                 best = rating
         if best is not None:

@@ -42,6 +42,7 @@ def build_recap(
     season_matches: list[tuple[int, MonobattleMatch]],
     merge_map: dict[str, str],
     unlocks: list[tuple[str, str]],
+    start: RatingBook | None = None,
 ) -> SessionRecap | None:
     """Summarise `session` (oldest first). None when none of its games were
     decided — there is nothing to report.
@@ -49,7 +50,9 @@ def build_recap(
     `season_matches` are the season the session was played in, for the rating
     walk: each player's "before" is their rating going into their first game
     of the session, and "after" their rating coming out of the last one.
-    `unlocks` are (handle, key) ledger rows earned in the session's window."""
+    `unlocks` are (handle, key) ledger rows earned in the session's window.
+    `start` is the book that season's walk begins from (rating.season_start);
+    it is consumed."""
     decided = [m for _, m in session if is_decided(m)]
     if not decided:
         return None
@@ -71,13 +74,13 @@ def build_recap(
 
     session_ids = {mid for mid, _ in session}
     last_id = session[-1][0]
-    book = RatingBook(merge_map)
+    book = start if start is not None else RatingBook(merge_map)
     for mid, match in sorted(season_matches, key=lambda im: im[1].played_at):
         if mid in session_ids and book.is_rateable(match):
             for p in match.players:
                 entry = players.get(canonical(p.toon_handle))
                 if entry is not None and entry.rating_before is None:
-                    rating = book.rating_for(p.toon_handle)
+                    rating = book.standing_for(p.toon_handle)
                     entry.rating_before = rating.display_rating if rating is not None else DEFAULT_DISPLAY
         book.rate_match(match)
         if mid == last_id:

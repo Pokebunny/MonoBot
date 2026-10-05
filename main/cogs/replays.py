@@ -13,7 +13,7 @@ from discord.ext import commands
 from resources.config import CONFIG
 from services import achievements, map_versions, match_embeds, replay_parser, storage
 from services.achievements import AchievementCache
-from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, match_rating_deltas
+from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, match_rating_deltas, season_start
 from services.storage import MatchStore
 from views import ExpiringView
 
@@ -245,7 +245,7 @@ class Replays(commands.Cog):
         # games (unconfirmed winner / too short / not a 4v4) — the field is simply omitted.
         season = self.store.season_containing(match.played_at.isoformat())
         history = self.store.season_matches(season) if season else self.store.all_matches()
-        deltas = match_rating_deltas(history, result.match_id, self.store.merge_map())
+        deltas = match_rating_deltas(history, result.match_id, start=season_start(self.store, season))
         # A new rotation shows up as a map version nobody has looked up yet;
         # fetching it is one network call per version, not per upload. Never
         # let it stop the summary going out — the map's name is a garnish,

@@ -306,6 +306,26 @@ class TestMigrations:
         s.close()
         MatchStore(path).close()  # reopening doesn't re-run migrations
 
+    def test_seasons_gain_reset_columns_as_hard_resets(self, tmp_path):
+        """Migration 13: seasons that existed before soft resets read back as
+        the hard resets they were."""
+        import sqlite3
+
+        path = str(tmp_path / "v12.db")
+        MatchStore(path).close()
+        conn = sqlite3.connect(path)
+        conn.execute("ALTER TABLE seasons DROP COLUMN carryover")
+        conn.execute("ALTER TABLE seasons DROP COLUMN seed_sigma")
+        conn.execute("UPDATE seasons SET ended_at = '2026-08-01T00:00:00' WHERE id = 1")
+        conn.execute("INSERT INTO seasons (name, started_at) VALUES ('later', '2026-08-01T00:00:00')")
+        conn.execute("PRAGMA user_version = 12")
+        conn.commit()
+        conn.close()
+
+        s = MatchStore(path)
+        assert [(x.carryover, x.seed_sigma) for x in s.seasons()] == [(None, None), (None, None)]
+        s.close()
+
     def test_newer_db_refused(self, tmp_path):
         import sqlite3
 
@@ -562,6 +582,102 @@ def test_past_season_ratings_are_reconstructible(store):
     closed = store.find_season("s1")
     rebuilt = RatingBook.from_matches((m for _, m in store.season_matches(closed)))
     assert [(r.name, r.display_rating) for r in rebuilt.leaderboard(min_games=1)] == before
+
+
+def _after_now(seconds=30):
+    """A game time just past a season boundary start_season wrote as now."""
+    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=seconds)
+
+
+def test_soft_reset_seeds_from_career(store):
+    """A soft season starts each player from their career rating pulled toward
+    the prior, with sigma reset — but nobody is on the board until they play."""
+    from services.rating import DEFAULT_MU, DEFAULT_SIGMA, RatingCache
+
+    for i in range(6):
+        store.ingest(_match(played_at=_at(i)), hash_replay(f"c{i}".encode()))
+    career = RatingBook.from_matches(m for _, m in store.all_matches())
+    store.start_season("Season 2", carryover=0.7, seed_sigma=DEFAULT_SIGMA)
+
+    book = RatingCache(store).book()
+    assert book.leaderboard(min_games=1) == []
+    assert book.rating_for("h-A0") is None  # hasn't played this season
+    seed = book.standing_for("h-A0")
+    assert seed.games == 0
+    assert seed.mu == pytest.approx(DEFAULT_MU + 0.7 * (career.rating_for("h-A0").mu - DEFAULT_MU))
+    assert seed.sigma == DEFAULT_SIGMA
+    assert book.standing_for("h-A0").mu > DEFAULT_MU > book.standing_for("h-B0").mu
+
+
+def test_soft_reset_ratings_start_from_the_seed(store):
+    from services.rating import DEFAULT_SIGMA, season_book
+
+    for i in range(6):
+        store.ingest(_match(played_at=_at(i)), hash_replay(f"c{i}".encode()))
+    season = store.start_season("Season 2", carryover=0.7, seed_sigma=DEFAULT_SIGMA)
+    store.ingest(_match(played_at=_after_now(), file_name="new.SC2Replay"), hash_replay(b"new"))
+
+    soft = season_book(store, season)
+    hard = RatingBook.from_matches(m for _, m in store.season_matches(season))
+    assert soft.rating_for("h-A0").games == 1
+    assert soft.rating_for("h-A0").mu > hard.rating_for("h-A0").mu
+    assert soft.rating_for("h-B0").mu < hard.rating_for("h-B0").mu
+
+
+def test_hard_reset_seasons_rebuild_unchanged(store):
+    """Seasons with no reset parameters (all of them before soft resets
+    existed) must build exactly as before — and a soft reset later on must
+    not touch the seasons it follows."""
+    from services.rating import DEFAULT_SIGMA, season_book
+
+    for i in range(4):
+        store.ingest(_match(played_at=_at(i)), hash_replay(f"h{i}".encode()))
+    store.start_season("Season 2")
+    store.ingest(_match(played_at=_after_now(), file_name="s2.SC2Replay"), hash_replay(b"s2"))
+    store.start_season("Season 3", carryover=0.7, seed_sigma=DEFAULT_SIGMA)
+
+    for season in store.seasons()[:2]:
+        assert season.carryover is None and season.seed_sigma is None
+        plain = RatingBook.from_matches(m for _, m in store.season_matches(season))
+        built = season_book(store, season)
+        assert not built.seeds
+        assert [(r.handle, r.mu, r.sigma) for r in built.leaderboard()] == [
+            (r.handle, r.mu, r.sigma) for r in plain.leaderboard()
+        ]
+
+
+def test_late_upload_moves_soft_reset_seeds(store):
+    """Seeds are derived, not stored: an old replay uploaded after the reset
+    changes the career they're drawn from."""
+    from services.rating import DEFAULT_SIGMA, season_start
+
+    store.ingest(_match(played_at=_at(0)), hash_replay(b"early"))
+    season = store.start_season("Season 2", carryover=0.7, seed_sigma=DEFAULT_SIGMA)
+    before = season_start(store, season).standing_for("h-A0").mu
+    store.ingest(_match(played_at=_at(1), file_name="late.SC2Replay"), hash_replay(b"late"))
+    assert season_start(store, season).standing_for("h-A0").mu > before
+
+
+def test_soft_reset_deltas_start_from_the_seed(store):
+    """An upload's before/after reads the seed for a player's first game."""
+    from services.rating import DEFAULT_SIGMA, match_rating_deltas, season_start
+
+    for i in range(6):
+        store.ingest(_match(played_at=_at(i)), hash_replay(f"d{i}".encode()))
+    season = store.start_season("Season 2", carryover=0.7, seed_sigma=DEFAULT_SIGMA)
+    result = store.ingest(_match(played_at=_after_now(), file_name="first.SC2Replay"), hash_replay(b"first"))
+    seed = season_start(store, season).standing_for("h-A0")
+
+    deltas = match_rating_deltas(store.season_matches(season), result.match_id, start=season_start(store, season))
+    before, after = deltas["h-A0"]
+    assert before == seed.display_rating
+    assert after > before
+
+
+def test_soft_reset_needs_both_parameters(store):
+    with pytest.raises(ValueError):
+        store.start_season("Season 2", carryover=0.7)
+    assert store.current_season().name == "Season 1"
 
 
 def test_season_reset_keeps_links_and_achievements(store):

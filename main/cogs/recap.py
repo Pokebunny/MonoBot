@@ -10,6 +10,7 @@ from checks import is_bot_admin
 from discord.ext import commands, tasks
 from resources.config import CONFIG
 from services import match_embeds, recap
+from services.rating import season_start
 from services.storage import MatchStore
 
 logger = logging.getLogger(__name__)
@@ -127,6 +128,7 @@ class Recap(commands.Cog):
             self.store.season_matches(season),
             self.store.merge_map(),
             self.store.unlocks_between(first, last),
+            start=season_start(self.store, season),
         )
         if summary is None:
             return None

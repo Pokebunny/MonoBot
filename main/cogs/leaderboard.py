@@ -11,10 +11,12 @@ from services.rating import (
     MIN_DURATION_SECONDS,
     MIN_RANKED_GAMES,
     MIN_WINNER_CONFIDENCE,
+    SOFT_RESET_CARRYOVER,
+    SOFT_RESET_SIGMA,
     DuoCache,
-    RatingBook,
     RatingCache,
     UnitCache,
+    season_book,
     unit_baseline,
 )
 from services.storage import MatchStore
@@ -165,12 +167,13 @@ class ConfirmSeasonView(ExpiringView):
     """Confirmation for a season reset. Visible to the whole channel, so the
     button is locked to the mod who ran the command."""
 
-    def __init__(self, store, ratings, name: str, invoker_id: int, timeout: float = 60):
+    def __init__(self, store, ratings, name: str, invoker_id: int, hard: bool = False, timeout: float = 60):
         super().__init__(timeout=timeout)
         self.store = store
         self.ratings = ratings
         self.name = name
         self.invoker_id = invoker_id
+        self.hard = hard
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.invoker_id:
@@ -180,14 +183,23 @@ class ConfirmSeasonView(ExpiringView):
 
     @discord.ui.button(label="Start season", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        season = self.store.start_season(self.name)
-        # The book is windowed to the open season, so it empties on next read.
+        if self.hard:
+            season = self.store.start_season(self.name)
+            reset = "every rating is back to the default"
+        else:
+            season = self.store.start_season(self.name, SOFT_RESET_CARRYOVER, SOFT_RESET_SIGMA)
+            reset = "ratings carry over from career, pulled toward the middle and wide open to move"
+        # The book is windowed to the open season, so it re-seeds on next read.
         self.ratings.book()
-        logger.info("Season %d (%s) started by %s", season.id, season.name, interaction.user)
-        self.stop()
-        await interaction.response.edit_message(
-            content=f"**{season.name}** has begun — every rating is back to the default. Good luck.", view=None
+        logger.info(
+            "Season %d (%s) started by %s (%s reset)",
+            season.id,
+            season.name,
+            interaction.user,
+            "hard" if self.hard else "soft",
         )
+        self.stop()
+        await interaction.response.edit_message(content=f"**{season.name}** has begun — {reset}. Good luck.", view=None)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -282,8 +294,7 @@ class Leaderboard(commands.Cog):
         ~50ms."""
         if not career and not by_race and season is not None and season.ended_at is None:
             return self.ratings.book()
-        matches = self.store.all_matches() if career else self.store.season_matches(season)
-        return RatingBook.from_matches((m for _, m in matches), self.store.merge_map(), by_race)
+        return season_book(self.store, None if career else season, by_race)
 
     def _shown_name(self, ctx, handles, fallback: str) -> str:
         """The Discord display name of whoever these accounts are linked to —
@@ -706,23 +717,40 @@ class Leaderboard(commands.Cog):
                 value="\n".join(f"{s.name} — {len(self.store.season_matches(s))} games" for s in reversed(past)),
                 inline=False,
             )
+        if current.carryover is not None:
+            embed.add_field(
+                name="Ratings",
+                value=f"Started from career ratings, {current.carryover:.0%} carried over and uncertainty reset.",
+                inline=False,
+            )
         footer = "Ratings cover this season only · match history and achievements are all-time"
         if past:
             footer = "!leaderboard s1 shows a past season · !leaderboard career is all-time\n" + footer
         embed.set_footer(text=footer)
         await ctx.send(embed=embed)
 
-    @commands.hybrid_command(help="start a new ladder season, resetting all ratings (mods)")
+    @commands.hybrid_command(
+        help="start a new ladder season: ratings carry over from career, pulled toward the middle "
+        "(add --hard to reset everyone to the default) (mods)"
+    )
     @is_bot_admin()
     async def newseason(self, ctx, *, name: str | None = None):
         current = self.store.current_season()
-        name = (name or "").strip() or self._next_season_name()
+        words = (name or "").split()
+        hard = "--hard" in words
+        name = " ".join(w for w in words if w != "--hard") or self._next_season_name()
         played = len(self.store.season_matches(current))
-        view = ConfirmSeasonView(self.store, self.ratings, name, ctx.author.id)
+        if hard:
+            reset = "resets every rating to the default"
+        else:
+            reset = (
+                f"starts every rating from career, keeping {SOFT_RESET_CARRYOVER:.0%} of each player's distance "
+                f"from the middle, with uncertainty reset so everyone can move fast"
+            )
+        view = ConfirmSeasonView(self.store, self.ratings, name, ctx.author.id, hard=hard)
         message = await ctx.send(
-            f"Start **{name}**? This ends **{current.name}** ({played} games) and resets every rating to "
-            f"the default — nothing is deleted, and match history, profile stats and achievements are "
-            f"untouched.",
+            f"Start **{name}**? This ends **{current.name}** ({played} games) and {reset} — nothing is "
+            f"deleted, and match history, profile stats and achievements are untouched.",
             view=view,
         )
         view.message = message

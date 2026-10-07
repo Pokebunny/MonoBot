@@ -382,6 +382,35 @@ class TestSitOutAndWaitlist:
         assert view.cog.sitting_out == [] and view.cog.waitlist == []
 
 
+class TestBumpFromMatch:
+    """!bump on someone in the live match sits them out, as if they'd
+    pressed Sit out themselves."""
+
+    def _cog(self):
+        cog = _Cog(_Store(count=5), stored_ids=[str(i) for i in range(8)])
+        cog.queue = {}
+        cog._bump = types.MethodType(Matchmaking._bump, cog)
+        cog._bump_from_match = types.MethodType(Matchmaking._bump_from_match, cog)
+        return cog
+
+    def test_sits_the_player_out_and_the_waitlister_takes_the_spot(self):
+        cog = self._cog()
+        cog.waitlist = ["101"]
+        reply = asyncio.run(cog._bump(types.SimpleNamespace(id=3), "p3"))
+        assert "sit out" in reply
+        assert cog.sitting_out == ["3"] and cog.waitlist == ["101"]
+        users = [types.SimpleNamespace(id=str(i)) for i in range(8)]
+        roster, promoted = cog.lineup_for_next(_Guild(), users)
+        assert [u.id for u in promoted] == ["101"]
+        assert "3" not in [u.id for u in roster]
+
+    def test_bumping_twice_says_so(self):
+        cog = self._cog()
+        asyncio.run(cog._bump(types.SimpleNamespace(id=3), "p3"))
+        reply = asyncio.run(cog._bump(types.SimpleNamespace(id=3), "p3"))
+        assert "already" in reply and cog.sitting_out == ["3"]
+
+
 class TestNextGameButtonsOnSummary:
     """The same Sit out / Waitlist / New teams on the summary of the game just
     played, acting on the live roster."""

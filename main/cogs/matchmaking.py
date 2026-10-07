@@ -503,11 +503,15 @@ class Matchmaking(commands.Cog):
             return None
         return ctx.guild.get_member(int(person.discord_id))
 
-    @commands.hybrid_command(aliases=["remove"], help="remove a player from the queue, e.g. a no-show (mods)")
+    @commands.hybrid_command(
+        aliases=["remove"], help="sit a player out of the next game, or take them out of the queue (mods)"
+    )
     @is_bot_admin()
     async def bump(self, ctx, *, player: str):
-        # Admin-gated: players drop themselves with Leave, so this exists only
-        # to clear someone else out, which shouldn't be open to everyone.
+        # Admin-gated: players drop themselves with Leave / Sit out, so this
+        # exists only to move someone else, which shouldn't be open to everyone.
+        # Someone in the live match is sat out as if they'd pressed Sit out;
+        # anyone else comes out of the queue or off the waitlist.
         async def picked(interaction, person):
             member = await self._member_of(ctx, person)
             await interaction.response.edit_message(content=await self._bump(member, person.sc2_name), view=None)
@@ -518,6 +522,8 @@ class Matchmaking(commands.Cog):
 
     async def _bump(self, member, label: str) -> str:
         uid = str(member.id) if member is not None else None
+        if uid is not None and uid in self.stored_roster_ids():
+            return await self._bump_from_match(uid, label)
         queued = self.queue.pop(uid, None) is not None
         waiting = uid in self.waitlist
         if not (queued or waiting):
@@ -529,6 +535,17 @@ class Matchmaking(commands.Cog):
             self.save_lineup()
             await self._redraw_lineup()
         return f"Removed **{label}** from the {'queue' if queued else 'waitlist'}."
+
+    async def _bump_from_match(self, uid: str, label: str) -> str:
+        """Sit a player in the live match out of the next game, exactly as if
+        they'd pressed Sit out: their spot goes to the first waitlister at the
+        next re-team."""
+        if uid in self.sitting_out:
+            return f"**{label}** is already sitting out the next game."
+        self.sitting_out.append(uid)
+        self.save_lineup()
+        await self._redraw_lineup()
+        return f"**{label}** will sit out the next game; the first person on the waitlist takes their spot."
 
     @commands.hybrid_command(help="re-post the last match with freshly balanced teams")
     @commands.cooldown(1, 10, commands.BucketType.channel)

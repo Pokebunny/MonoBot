@@ -11,7 +11,6 @@ import logging
 import zoneinfo
 
 import discord
-from checks import is_bot_admin
 from discord.ext import commands, tasks
 from models.matchmaking import ProposedMatch, QueuedPlayer
 from resources.config import CONFIG
@@ -504,12 +503,11 @@ class Matchmaking(commands.Cog):
         return ctx.guild.get_member(int(person.discord_id))
 
     @commands.hybrid_command(
-        aliases=["remove"], help="sit a player out of the next game, or take them out of the queue (mods)"
+        aliases=["remove"], help="sit a player out of the next game, or take them out of the queue"
     )
-    @is_bot_admin()
     async def bump(self, ctx, *, player: str):
-        # Admin-gated: players drop themselves with Leave / Sit out, so this
-        # exists only to move someone else, which shouldn't be open to everyone.
+        # Open to everyone: it only moves people in the queue and the next
+        # game's lineup, which the next re-team or a Join press undoes.
         # Someone in the live match is sat out as if they'd pressed Sit out;
         # anyone else comes out of the queue or off the waitlist.
         async def picked(interaction, person):
@@ -591,8 +589,7 @@ class Matchmaking(commands.Cog):
         view = NextGameView(self)
         view.track(await ctx.send(embed=self.lineup_embed(match_embeds.current_lineup(roster)), view=view))
 
-    @commands.hybrid_command(help="put a player into the queue (mods)")
-    @is_bot_admin()
+    @commands.hybrid_command(help="put a player into the queue")
     async def add(self, ctx, *, player: str):
         async def picked(interaction, person):
             member = await self._member_of(ctx, person)
@@ -635,8 +632,7 @@ class Matchmaking(commands.Cog):
         roster = self._take_queue() if len(self.queue) >= QUEUE_TARGET else None
         return f"Added **{member.display_name}** to the queue.", roster
 
-    @commands.hybrid_command(help="clear the matchmaking queue (mods)")
-    @is_bot_admin()
+    @commands.hybrid_command(help="clear the matchmaking queue")
     async def clearqueue(self, ctx):
         self.queue.clear()
         await self._refresh_message()

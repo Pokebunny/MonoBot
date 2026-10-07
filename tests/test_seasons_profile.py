@@ -11,7 +11,7 @@ import types
 import pytest
 from cogs.leaderboard import Leaderboard
 from models.replay import MatchPlayer, MonobattleMatch
-from services import identity
+from services import identity, match_embeds
 from services.rating import RatingCache
 from services.storage import MatchStore, hash_replay
 
@@ -112,9 +112,17 @@ def test_profile_embed_renders_with_no_season_games(cog):
     resolved = _resolve(cog, "A0")
     ctx = types.SimpleNamespace(guild=None, author=None)
     cog.client.get_user = lambda _id: None
-    embed = cog._profile_embed(ctx, resolved, "A0")
+    embed = cog._profile_view(ctx, resolved).profile
     fields = {f.name: f.value for f in embed.fields}
     assert any("Season 2" in name for name in fields), fields
     assert "Career" in fields
     assert "6-0" in fields["Career"] or "0-6" in fields["Career"]
     assert any("No games yet" in v for v in fields.values())
+
+
+def test_all_units_lists_every_pick_past_the_profiles_top_ten():
+    records = {f"Unit{i}": [i, 1] for i in range(15)}
+    embed = match_embeds.player_units("A0", records)
+    assert embed.description.count("\n") == 14  # all fifteen, one per line
+    assert embed.description.startswith("**Unit14**")  # most-played first
+    assert "15 units" in embed.footer.text

@@ -163,6 +163,26 @@ class MatchBrowserView(ExpiringView):
         await self._show(interaction)
 
 
+class ProfileView(ExpiringView):
+    """One button on a profile that flips the message between the profile
+    and the player's full unit list (the profile shows only the ten
+    most-played). Edits in place, so anyone looking can flip it without
+    adding to the channel."""
+
+    def __init__(self, profile: discord.Embed, units: discord.Embed):
+        super().__init__()
+        self.profile = profile
+        self.units = units
+        self.showing_units = False
+
+    @discord.ui.button(label="All units", style=discord.ButtonStyle.secondary)
+    async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.showing_units = not self.showing_units
+        button.label = "Profile" if self.showing_units else "All units"
+        embed = self.units if self.showing_units else self.profile
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
 class ConfirmSeasonView(ExpiringView):
     """Confirmation for a season reset. Visible to the whole channel, so the
     button is locked to the mod who ran the command."""
@@ -359,23 +379,27 @@ class Leaderboard(commands.Cog):
             await ctx.send("You haven't linked a rated SC2 account yet — use `!link <name>`, or pass a name.")
         return resolved
 
-    def _profile_embed(self, ctx, resolved, player: str | None):
+    def _profile_view(self, ctx, resolved) -> ProfileView:
+        """The profile, with its All units button. Send `view.profile`."""
         rating, season_rating, rank, total, _n = resolved
         group = self.store.merged_handles(rating.handle)  # all merged accounts, e.g. Jay+Luigi
-        return match_embeds.player_profile(
+        shown = self._shown_name(ctx, group, rating.name)
+        unit_records = self.store.player_records_by(group, "pick", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
+        profile = match_embeds.player_profile(
             rating,
             rank,
             total,
             self.store.aliases_for_handles(group),
             self.store.player_records_by(group, "race", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS),
-            self.store.player_records_by(group, "pick", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS),
+            unit_records,
             self.store.mvp_count(group, MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS),
             self.store.award_counts(group, MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS),
-            display_name=self._shown_name(ctx, group, rating.name),
+            display_name=shown,
             achievements=achievements.ledger_for_group(self.store, group),
             season_rating=season_rating,
             season_name=self.store.current_season().name,
         )
+        return ProfileView(profile, match_embeds.player_units(shown, unit_records))
 
     @commands.hybrid_command(aliases=["rank"], help="show a player's full profile (yourself if no name given)")
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -383,7 +407,7 @@ class Leaderboard(commands.Cog):
         if player is None:
             resolved = await self._resolve_or_reply(ctx, None)
             if resolved is not None:
-                await ctx.send(embed=self._profile_embed(ctx, resolved, player))
+                await self._send_profile(ctx, resolved)
             return
 
         async def show(interaction, person):
@@ -393,9 +417,9 @@ class Leaderboard(commands.Cog):
                     content=f"**{person.sc2_name}** has no rated games yet.", view=None
                 )
                 return
-            await interaction.response.edit_message(
-                content=None, embed=self._profile_embed(ctx, resolved, player), view=None
-            )
+            view = self._profile_view(ctx, resolved)
+            await interaction.response.edit_message(content=None, embed=view.profile, view=view)
+            view.message = interaction.message
 
         picked = await self._person_or_pick(ctx, player, show)
         if picked is None:
@@ -405,9 +429,13 @@ class Leaderboard(commands.Cog):
         if resolved is None:
             await ctx.send(f"No rated games found for **{player}**.")
             return
-        await ctx.send(embed=self._profile_embed(ctx, resolved, player))
+        await self._send_profile(ctx, resolved)
         if note:
             await ctx.send(note)
+
+    async def _send_profile(self, ctx, resolved):
+        view = self._profile_view(ctx, resolved)
+        view.message = await ctx.send(embed=view.profile, view=view)
 
     async def _person_or_pick(self, ctx, query: str, on_pick):
         """(person, note on the weaker matches) for a typed name, or None when

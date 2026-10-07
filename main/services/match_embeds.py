@@ -203,7 +203,7 @@ def _rating_footer(rating: PlayerRating) -> str:
     return "Rating rises with wins; how much depends on the opponents' strength."
 
 
-def _record_lines(records: dict[str, list[int]], limit: int) -> str:
+def _record_lines(records: dict[str, list[int]], limit: int | None) -> str:
     rows = [(k, w, losses) for k, (w, losses) in records.items()]
     rows.sort(key=lambda r: r[1] + r[2], reverse=True)  # by games played
     lines = []
@@ -265,6 +265,17 @@ def player_profile(
     if others:
         embed.add_field(name="Plays as", value=", ".join(others[:12]), inline=False)
     embed.set_footer(text=_rating_footer(current))
+    return embed
+
+
+def player_units(shown_name: str, unit_records: dict[str, list[int]]) -> discord.Embed:
+    """Every unit a player has picked, most-played first — the profile only
+    has room for the top ten. Career-wide, like the profile's own list. Fits
+    one description: there are only ~45 picks, at ~35 characters a line."""
+    embed = discord.Embed(title=f"{shown_name} — units", color=ACCENT)
+    embed.description = _record_lines(unit_records, None)
+    games = sum(w + losses for w, losses in unit_records.values())
+    embed.set_footer(text=f"{len(unit_records)} units · {games} games")
     return embed
 
 

@@ -72,9 +72,7 @@ class Recap(commands.Cog):
     async def recap(self, ctx):
         # Sessions with no decided game have nothing to report, so they get
         # no page rather than a blank one.
-        sessions = [
-            s for s in recap.split_sessions(self.store.all_matches()) if any(recap.is_decided(m) for _, m in s)
-        ]
+        sessions = [s for s in recap.split_sessions(self.store.all_matches()) if any(recap.is_decided(m) for _, m in s)]
         if not sessions:
             await ctx.send("No decided games to recap yet.")
             return

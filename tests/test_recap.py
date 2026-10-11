@@ -4,7 +4,7 @@ import zoneinfo
 from models.replay import MatchPlayer, MonobattleMatch
 from services import match_embeds
 from services.rating import match_rating_deltas
-from services.recap import SESSION_GAP, build_recap, latest_session
+from services.recap import SESSION_GAP, build_recap, latest_session, split_sessions
 from services.storage import MatchStore
 
 BASE = datetime.datetime(2026, 9, 30, 23, 0, tzinfo=datetime.UTC)
@@ -108,3 +108,10 @@ def test_embed_lists_everyone_and_their_achievements():
     assert "The Long Haul" in embed.description
     player_lines = [line for line in embed.description.splitlines() if " 2-0" in line or " 0-2" in line]
     assert len(player_lines) == 8
+
+
+def test_split_sessions_breaks_at_long_gaps():
+    gap = int(SESSION_GAP.total_seconds() // 60)
+    history = _numbered([_match(1, 0), _match(1, gap), _match(1, 2 * gap + 1), _match(1, 3 * gap + 2)])
+    assert [[mid for mid, _ in s] for s in split_sessions(history)] == [[1, 2], [3], [4]]
+    assert split_sessions([]) == []

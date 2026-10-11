@@ -17,15 +17,23 @@ from services.rating import DEFAULT_DISPLAY, MIN_DURATION_SECONDS, MIN_WINNER_CO
 SESSION_GAP = datetime.timedelta(hours=3)
 
 
+def split_sessions(matches: list[tuple[int, MonobattleMatch]]) -> list[list[tuple[int, MonobattleMatch]]]:
+    """Every session's matches, oldest session first and each oldest first.
+    `matches` is oldest first, as MatchStore.all_matches returns them."""
+    sessions: list[list[tuple[int, MonobattleMatch]]] = []
+    for item in matches:
+        if sessions and item[1].played_at - sessions[-1][-1][1].played_at <= SESSION_GAP:
+            sessions[-1].append(item)
+        else:
+            sessions.append([item])
+    return sessions
+
+
 def latest_session(matches: list[tuple[int, MonobattleMatch]]) -> list[tuple[int, MonobattleMatch]]:
     """The most recent session's matches, oldest first. `matches` is oldest
     first, as MatchStore.all_matches returns them."""
-    if not matches:
-        return []
-    start = len(matches) - 1
-    while start > 0 and matches[start][1].played_at - matches[start - 1][1].played_at <= SESSION_GAP:
-        start -= 1
-    return matches[start:]
+    sessions = split_sessions(matches)
+    return sessions[-1] if sessions else []
 
 
 def is_decided(match: MonobattleMatch) -> bool:

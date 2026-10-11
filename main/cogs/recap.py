@@ -12,6 +12,7 @@ from resources.config import CONFIG
 from services import match_embeds, recap
 from services.rating import season_start
 from services.storage import MatchStore
+from views import PagedBoardView
 
 logger = logging.getLogger(__name__)
 
@@ -64,16 +65,32 @@ class Recap(commands.Cog):
         self.daily_recap.cancel()
 
     @commands.hybrid_command(
-        aliases=["session", "nightly"], help="recap the latest session: records, rating changes, MVPs and achievements"
+        aliases=["session", "nightly"],
+        help="recap the latest session: records, rating changes, MVPs and achievements (◀ for older sessions)",
     )
     @commands.cooldown(1, 10, commands.BucketType.channel)
     async def recap(self, ctx):
-        session = recap.latest_session(self.store.all_matches())
-        embed = self._embed(session, "📋 Session Recap", ctx.guild)
-        if embed is None:
+        # Sessions with no decided game have nothing to report, so they get
+        # no page rather than a blank one.
+        sessions = [
+            s for s in recap.split_sessions(self.store.all_matches()) if any(recap.is_decided(m) for _, m in s)
+        ]
+        if not sessions:
             await ctx.send("No decided games to recap yet.")
             return
-        await ctx.send(embed=embed)
+        # Each page is a season rating walk, so build them as they're opened.
+        cache: dict[int, discord.Embed] = {}
+
+        def render(page: int) -> discord.Embed:
+            if page not in cache:
+                embed = self._embed(sessions[page], "📋 Session Recap", ctx.guild)
+                embed.set_footer(text=f"Session {page + 1}/{len(sessions)} · {embed.footer.text}")
+                cache[page] = embed
+            return cache[page]
+
+        # Open on the latest session; ◀ steps back in time, as in !matches.
+        view = PagedBoardView(render, len(sessions), start=len(sessions) - 1)
+        view.message = await ctx.send(embed=view.embed(), view=view)
 
     @commands.hybrid_command(
         help="send the morning recap to this channel (or #channel); run again to go back to the default (mods)"

@@ -47,13 +47,14 @@ class PagedBoardView(ExpiringView):
     `render(page)` returns the embed for that page and closes over the board
     data, so the ranking is snapshotted at send time and paging stays
     consistent even if a game is uploaded mid-browse. Any board that can
-    render a page — ratings, MVP rate — pages the same way through this."""
+    render a page — ratings, MVP rate, session recaps — pages the same way
+    through this. `start` is the page it opens on."""
 
-    def __init__(self, render, pages: int):
+    def __init__(self, render, pages: int, start: int = 0):
         super().__init__()
         self.render = render
         self.pages = max(1, pages)
-        self.page = 0
+        self.page = min(max(0, start), self.pages - 1)
         self._sync()
 
     @property

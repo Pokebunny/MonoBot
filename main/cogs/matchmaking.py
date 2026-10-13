@@ -5,6 +5,7 @@ The queue is a single in-memory roster (one queue for the bot). discord.py
 runs interaction callbacks on one event-loop thread, so no locking is needed.
 """
 
+import asyncio
 import collections
 import datetime as dt
 import logging
@@ -704,12 +705,13 @@ class Matchmaking(commands.Cog):
         self.last_roster = list(users)
         self.store.set_meta(MATCH_ROSTER_META_KEY, ",".join(str(u.id) for u in users))
         roster_ids = {str(u.id) for u in users}
+        waiting = len(self.waitlist)
+        lineup_changed = bool(self.sitting_out)
         self.sitting_out.clear()
         self.waitlist[:] = [uid for uid in self.waitlist if uid not in roster_ids]
+        lineup_changed |= len(self.waitlist) != waiting
         self.save_lineup()
-        await self._redraw_lineup()  # the summary still shows the old lineup
-        if promoted and any(self.queue.pop(str(u.id), None) for u in promoted):
-            await self._refresh_message()
+        queue_changed = any([self.queue.pop(str(u.id), None) for u in promoted])
         view = ProposedMatchView(self, list(users), options)
         pinged = list(users) if announce else list(promoted)
         content = None
@@ -724,7 +726,16 @@ class Matchmaking(commands.Cog):
             allowed_mentions=discord.AllowedMentions(users=pinged),
         )
         self.match_view = view
-        await self._clear_match_message(keep=message)
+        # Teams go up first and the tidying after, all at once: each of these
+        # is a Discord round-trip, and run one by one ahead of the send they
+        # made a re-team look frozen for seconds. The old proposal is deleted
+        # rather than redrawn, so only the summaries need the cleared lineup.
+        cleanup = [self._clear_match_message(keep=message)]
+        if lineup_changed:
+            cleanup.append(self._redraw_lineup(skip=message))
+        if queue_changed:
+            cleanup.append(self._refresh_message())
+        await asyncio.gather(*cleanup)
 
     # -- sit-outs & waitlist ----------------------------------------------
 

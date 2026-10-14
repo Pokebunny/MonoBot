@@ -9,6 +9,7 @@ import logging
 
 import discord
 from checks import is_bot_admin
+from community import CommunityCog
 from discord.ext import commands
 from services import identity
 from services.match_embeds import ACCENT, WARNING
@@ -107,13 +108,7 @@ class ConfirmAddView(ExpiringView):
             self.stop()
 
 
-class Identity(commands.Cog):
-    def __init__(self, client):
-        self.client = client
-        if not hasattr(client, "match_store"):
-            client.match_store = MatchStore()
-        self.store: MatchStore = client.match_store
-
+class Identity(CommunityCog):
     def _free_candidates(self, sc2_name: str):
         """(all accounts under a name, the subset not linked to anyone).
         Pickers only offer the free subset — claimed accounts can't be taken."""
@@ -174,6 +169,7 @@ class Identity(commands.Cog):
     @commands.hybrid_command(help="link your Discord account to your in-game SC2 name")
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def link(self, ctx, *, sc2_name: str):
+        self = self.at(ctx)
         sc2_name = sc2_name.strip()
         if not sc2_name:
             await ctx.send("Usage: `!link <your SC2 name>`")
@@ -257,6 +253,7 @@ class Identity(commands.Cog):
     @commands.hybrid_command(help="link a member to an SC2 account (mods) — repeat to attach a player's alt accounts")
     @is_bot_admin()
     async def linkuser(self, ctx, member: discord.Member, *, sc2_name: str):
+        self = self.at(ctx)
         sc2_name = sc2_name.strip()
         discord_id = str(member.id)
         candidates, free = self._free_candidates(sc2_name)
@@ -332,6 +329,8 @@ class Identity(commands.Cog):
     @commands.hybrid_command(help="unlink a member's SC2 accounts, or one name — @member [name], or a bare name (mods)")
     @is_bot_admin()
     async def unlinkuser(self, ctx, target: str, *, sc2_name: str | None = None):
+        self = self.at(ctx)
+
         # The target resolves like any other name (views.person_or_pick). An
         # SC2 name unlinks just that name from whoever it means; a Discord
         # member alone loses every account, or only `sc2_name` if given.
@@ -366,6 +365,7 @@ class Identity(commands.Cog):
     @commands.hybrid_command(help="unlink one of your SC2 names")
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def unlink(self, ctx, *, sc2_name: str):
+        self = self.at(ctx)
         if self.store.unlink_player(str(ctx.author.id), sc2_name.strip()):
             await ctx.send(f"Unlinked **{sc2_name.strip()}**.")
         else:
@@ -390,6 +390,7 @@ class Identity(commands.Cog):
     @commands.hybrid_command(help="show which SC2 accounts are linked to you")
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def whoami(self, ctx):
+        self = self.at(ctx)
         embed = self._accounts_embed(str(ctx.author.id), ctx.author.display_name)
         if embed is None:
             await ctx.send("You haven't linked any SC2 names yet. Use `!link <your SC2 name>`.")
@@ -399,6 +400,8 @@ class Identity(commands.Cog):
     @commands.hybrid_command(help="look up anyone's SC2 accounts — by @member or SC2 name")
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def whois(self, ctx, *, target: str):
+        self = self.at(ctx)
+
         async def picked(interaction, person):
             await interaction.response.edit_message(view=None, **self._whois_reply(ctx, person, ""))
 

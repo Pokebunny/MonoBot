@@ -1,9 +1,12 @@
 from pydantic import BaseModel, model_validator
 
 
-class BotConfig(BaseModel):
+class GuildConfig(BaseModel):
+    """Settings for one community (one Discord server's ladder)."""
+
     # Only parse .SC2Replay attachments posted in these channels. Empty means
-    # watch every channel (simplest, but noisy — set this in production).
+    # watch every channel in the server (simplest, but noisy — set this in
+    # production).
     replays_channel_ids: list[int] = []
 
     @model_validator(mode="before")
@@ -37,5 +40,20 @@ class BotConfig(BaseModel):
     queue_timeout_minutes: int | None = 60
 
     # Discord user IDs allowed to run bot-admin commands (merges, linking other
-    # members, clearing the queue) regardless of server permissions.
+    # members, clearing the queue) regardless of server permissions. The
+    # top-level list is admin everywhere; a guild's own list only there.
     admin_user_ids: list[int] = []
+
+
+class BotConfig(GuildConfig):
+    """The top-level fields are the home community's settings — the original
+    ladder, whose database is resources/monobot.db. Every server in `guilds`
+    is a separate community with its own database, queue and settings."""
+
+    # The server the home community belongs to. None (the legacy default)
+    # means it serves every server not listed in `guilds`, as the bot did
+    # before there was more than one community.
+    home_guild_id: int | None = None
+
+    # Other communities, by guild id.
+    guilds: dict[int, GuildConfig] = {}

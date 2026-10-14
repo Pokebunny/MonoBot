@@ -1,24 +1,24 @@
 """Matchmaking queue: players join, and when the queue fills the bot splits
 them into the two most balanced teams using their skill ratings.
 
-The queue is a single in-memory roster (one queue for the bot). discord.py
-runs interaction callbacks on one event-loop thread, so no locking is needed.
+Each community has its own Lobby — queue, waitlist and proposals — and the
+cog routes every command and button press to the lobby of the server it came
+from. The queue is an in-memory roster. discord.py runs interaction callbacks
+on one event-loop thread, so no locking is needed.
 """
 
 import asyncio
 import collections
 import datetime as dt
 import logging
-import zoneinfo
 
 import discord
+from community import Community, NotACommunity, daily_time, start_daily
 from discord.ext import commands, tasks
 from models.matchmaking import ProposedMatch, QueuedPlayer
-from resources.config import CONFIG
 from services import match_embeds
 from services.matchmaking import expired, next_roster, ranked_matches
-from services.rating import DEFAULT_MU, DEFAULT_SIGMA, RatingCache
-from services.storage import MatchStore
+from services.rating import DEFAULT_MU, DEFAULT_SIGMA
 from views import person_or_pick
 
 logger = logging.getLogger(__name__)
@@ -47,41 +47,43 @@ WAITLIST_META_KEY = "match_waitlist"
 TIMEOUT_SWEEP_SECONDS = 60
 
 
-def _reset_time() -> dt.time | None:
-    """The configured daily queue-reset time, or None if it's disabled or
-    unparseable (a bad value shouldn't stop the bot from booting)."""
-    raw = CONFIG.queue_reset_time
-    if not raw:
-        return None
-    try:
-        tz = zoneinfo.ZoneInfo(CONFIG.queue_reset_timezone)
-        hour, minute = (int(part) for part in raw.split(":"))
-        return dt.time(hour=hour, minute=minute, tzinfo=tz)
-    except ValueError, zoneinfo.ZoneInfoNotFoundError:
-        logger.warning(
-            "Ignoring bad queue reset config (%r in %r); daily reset disabled",
-            raw,
-            CONFIG.queue_reset_timezone,
-        )
-        return None
+def _reset_time(config) -> dt.time | None:
+    """A community's daily queue-reset time, or None if it's disabled."""
+    return daily_time(config.queue_reset_time, config.queue_reset_timezone, "queue reset")
+
+
+async def _lobby_or_reply(lobby_for, interaction: discord.Interaction) -> "Lobby | None":
+    """The lobby of the server a button was pressed in, or None (answered)
+    if that server has no community — a persistent button can outlive one
+    being configured."""
+    lobby = lobby_for(interaction.guild)
+    if lobby is None:
+        await interaction.response.send_message("MonoBot's ladder isn't set up in this server.", ephemeral=True)
+    return lobby
 
 
 class QueueView(discord.ui.View):
     """Join/Leave buttons attached to the queue message. Persistent (fixed
     custom_ids + registered via client.add_view on cog load), so the buttons
-    keep working across bot restarts."""
+    keep working across bot restarts.
 
-    def __init__(self, cog: "Matchmaking"):
+    Every view here takes `lobby_for(guild)` rather than a lobby: the one
+    instance registered for persistence serves every server's messages, so
+    each press finds its lobby from the server it came from."""
+
+    def __init__(self, lobby_for):
         super().__init__(timeout=None)
-        self.cog = cog
+        self.lobby_for = lobby_for
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="monobot:queue:join")
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.handle_join(interaction)
+        if lobby := await _lobby_or_reply(self.lobby_for, interaction):
+            await lobby.handle_join(interaction)
 
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, custom_id="monobot:queue:leave")
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.handle_leave(interaction)
+        if lobby := await _lobby_or_reply(self.lobby_for, interaction):
+            await lobby.handle_leave(interaction)
 
 
 class ProposedMatchView(discord.ui.View):
@@ -121,34 +123,32 @@ class ProposedMatchView(discord.ui.View):
 
     def __init__(
         self,
-        cog: "Matchmaking",
+        lobby_for,
         users: list[discord.abc.User] | None = None,
         options: list[ProposedMatch] | None = None,
+        games_at_post: int = 0,
     ):
         super().__init__(timeout=None)
-        self.cog = cog
+        self.lobby_for = lobby_for
         self.users = list(users or [])  # kept so a re-balance can re-read live ratings
         self.options = list(options or [])
         self.index = 0
         # Games stored when this was posted; a higher count later means a
         # replay went up since, so the ranked options are stale.
-        self.games_at_post = cog.store.match_count()
+        self.games_at_post = games_at_post
 
-    @property
-    def player_ids(self) -> set[str]:
+    def player_ids(self, lobby: "Lobby") -> set[str]:
         """Who may touch the button. Falls back to the stored roster for a
         restored view, whose users were lost with the restart."""
         if self.users:
             return {str(u.id) for u in self.users}
-        return set(self.cog.stored_roster_ids())
+        return set(lobby.stored_roster_ids())
 
-    def embed(self) -> discord.Embed:
-        return self.cog.lineup_embed(
-            match_embeds.proposed_match(self.options[self.index], self.index, len(self.options))
-        )
+    def embed(self, lobby: "Lobby") -> discord.Embed:
+        return lobby.lineup_embed(match_embeds.proposed_match(self.options[self.index], self.index, len(self.options)))
 
-    async def _players_only(self, interaction: discord.Interaction, action: str) -> bool:
-        if str(interaction.user.id) in self.player_ids:
+    async def _players_only(self, interaction: discord.Interaction, lobby: "Lobby", action: str) -> bool:
+        if str(interaction.user.id) in self.player_ids(lobby):
             return True
         await interaction.response.send_message(f"Only a player in this match can {action} the teams.", ephemeral=True)
         return False
@@ -157,17 +157,18 @@ class ProposedMatchView(discord.ui.View):
         label="New teams", style=discord.ButtonStyle.primary, emoji="🔀", custom_id="monobot:match:newteams"
     )
     async def new_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await self._players_only(interaction, "re-team"):
+        lobby = await _lobby_or_reply(self.lobby_for, interaction)
+        if lobby is None or not await self._players_only(interaction, lobby, "re-team"):
             return
         if not self.options:
             # Restored view: the ranked splits went with the restart, so the
             # only thing left to offer is a fresh balance of the same roster.
-            await self._rebalance(interaction, drop_message=True)
+            await self._rebalance(interaction, lobby, drop_message=True)
             return
         # Someone sitting out changes the roster, so cycling the old splits
         # would be wrong even if no game has been stored yet.
-        if self.cog.store.match_count() > self.games_at_post or self.cog.sitting_out:
-            await self._rebalance(interaction)
+        if lobby.store.match_count() > self.games_at_post or lobby.sitting_out:
+            await self._rebalance(interaction, lobby)
             return
         if len(self.options) <= 1:
             await interaction.response.send_message(
@@ -176,22 +177,22 @@ class ProposedMatchView(discord.ui.View):
             )
             return
         self.index = (self.index + 1) % len(self.options)
-        await interaction.response.edit_message(embed=self.embed(), view=self)
+        await interaction.response.edit_message(embed=self.embed(lobby), view=self)
 
-    async def _rebalance(self, interaction: discord.Interaction, drop_message: bool = False):
+    async def _rebalance(self, interaction: discord.Interaction, lobby: "Lobby", drop_message: bool = False):
         """Re-split from current ratings. Reposts at the bottom of the channel
         rather than editing in place: by now the old message has scrolled away
         under the games that were just played. post_match deletes the previous
         proposal, except a restored one it never had a handle on — hence
         drop_message."""
-        users = self.users or self.cog.resolve_roster(interaction.guild)
+        users = self.users or lobby.resolve_roster(interaction.guild)
         if not users:
             await interaction.response.send_message(
                 "This match is from before my last restart and I've lost its roster — run `!teams` to post fresh ones.",
                 ephemeral=True,
             )
             return
-        if await self.cog.re_team(interaction, users) and drop_message:
+        if await lobby.re_team(interaction, users) and drop_message:
             try:
                 await interaction.message.delete()
             except discord.HTTPException:
@@ -201,13 +202,15 @@ class ProposedMatchView(discord.ui.View):
         label="Sit out", style=discord.ButtonStyle.secondary, emoji="🪑", custom_id="monobot:match:sitout"
     )
     async def sit_out(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.toggle_lineup(interaction, "sit_out", self.player_ids)
+        if lobby := await _lobby_or_reply(self.lobby_for, interaction):
+            await lobby.toggle_lineup(interaction, "sit_out", self.player_ids(lobby))
 
     @discord.ui.button(
         label="Waitlist", style=discord.ButtonStyle.secondary, emoji="⏳", custom_id="monobot:match:waitlist"
     )
     async def waitlist(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.toggle_lineup(interaction, "waitlist", self.player_ids)
+        if lobby := await _lobby_or_reply(self.lobby_for, interaction):
+            await lobby.toggle_lineup(interaction, "waitlist", self.player_ids(lobby))
 
 
 class NextGameView(discord.ui.View):
@@ -220,54 +223,62 @@ class NextGameView(discord.ui.View):
     the summarised game. Persistent like the proposal, so a deploy doesn't
     kill the buttons on the summary everyone is looking at."""
 
-    def __init__(self, cog: "Matchmaking"):
+    def __init__(self, lobby_for):
         super().__init__(timeout=None)
-        self.cog = cog
+        self.lobby_for = lobby_for
 
     def track(self, message: discord.Message | None):
         """Record the message this view went out on, so lineup changes made
         elsewhere are redrawn on it too."""
-        if message is not None:
-            self.cog.lineup_messages.append(message)
+        if message is not None and (lobby := self.lobby_for(getattr(message, "guild", None))):
+            lobby.lineup_messages.append(message)
 
     @discord.ui.button(
         label="Sit out", style=discord.ButtonStyle.secondary, emoji="🪑", custom_id="monobot:next:sitout"
     )
     async def sit_out(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.toggle_lineup(interaction, "sit_out", set(self.cog.stored_roster_ids()))
+        if lobby := await _lobby_or_reply(self.lobby_for, interaction):
+            await lobby.toggle_lineup(interaction, "sit_out", set(lobby.stored_roster_ids()))
 
     @discord.ui.button(
         label="Waitlist", style=discord.ButtonStyle.secondary, emoji="⏳", custom_id="monobot:next:waitlist"
     )
     async def waitlist(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.toggle_lineup(interaction, "waitlist", set(self.cog.stored_roster_ids()))
+        if lobby := await _lobby_or_reply(self.lobby_for, interaction):
+            await lobby.toggle_lineup(interaction, "waitlist", set(lobby.stored_roster_ids()))
 
     @discord.ui.button(
         label="New teams", style=discord.ButtonStyle.primary, emoji="🔀", custom_id="monobot:next:newteams"
     )
     async def new_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if str(interaction.user.id) not in self.cog.stored_roster_ids():
+        lobby = await _lobby_or_reply(self.lobby_for, interaction)
+        if lobby is None:
+            return
+        if str(interaction.user.id) not in lobby.stored_roster_ids():
             await interaction.response.send_message("Only a player in this match can re-team.", ephemeral=True)
             return
-        users = self.cog.last_roster or self.cog.resolve_roster(interaction.guild)
+        users = lobby.last_roster or lobby.resolve_roster(interaction.guild)
         if not users:
             await interaction.response.send_message(
                 "I've lost the roster since my last restart — run `!teams` to post fresh teams.", ephemeral=True
             )
             return
         # The summary stays: it's the record of the game just played.
-        await self.cog.re_team(interaction, users)
+        await lobby.re_team(interaction, users)
 
 
-class Matchmaking(commands.Cog):
-    def __init__(self, client):
+class Lobby:
+    """One community's matchmaking: its queue, the live proposal, and who's
+    sitting out or waiting. `lobby_for` is what views it posts are given, so
+    their buttons find this lobby again (after a restart too)."""
+
+    def __init__(self, client, community: Community, lobby_for):
         self.client = client
-        if not hasattr(client, "match_store"):
-            client.match_store = MatchStore()
-        if not hasattr(client, "rating_cache"):
-            client.rating_cache = RatingCache(client.match_store)
-        self.store: MatchStore = client.match_store
-        self.ratings: RatingCache = client.rating_cache
+        self.community = community
+        self.config = community.config
+        self.store = community.store
+        self.ratings = community.ratings
+        self.lobby_for = lobby_for
         self.queue: dict[str, discord.abc.User] = {}
         self.queue_message: discord.Message | None = None  # the live queue embed
         # The last roster to get teams, so !teams and New teams can re-split
@@ -282,35 +293,15 @@ class Matchmaking(commands.Cog):
         # still waiting on players), redrawn when the lineup changes.
         self.lineup_messages: collections.deque[discord.Message] = collections.deque(maxlen=3)
         # When each queued player last pressed Join; they're dropped once it's
-        # CONFIG.queue_timeout_minutes old.
+        # queue_timeout_minutes old.
         self.joined_at: dict[str, dt.datetime] = {}
         # Spots changing hands at the next re-team (see ProposedMatchView).
         self.sitting_out: list[str] = self._stored_ids(SITTING_OUT_META_KEY)
         self.waitlist: list[str] = self._stored_ids(WAITLIST_META_KEY)
 
-    async def cog_load(self):
-        # Register the persistent view so Join/Leave buttons on queue messages
-        # from before the last restart still dispatch here.
-        self.client.add_view(QueueView(self))
-        # Same for New teams on a proposal that outlived the restart, and the
-        # lineup buttons on match summaries.
-        self.client.add_view(ProposedMatchView(self))
-        self.client.add_view(NextGameView(self))
-        reset_at = _reset_time()
-        if reset_at is not None:
-            self.daily_reset.change_interval(time=reset_at)
-            self.daily_reset.start()
-        if CONFIG.queue_timeout_minutes:
-            self.timeout_sweep.start()
-
-    async def cog_unload(self):
-        self.daily_reset.cancel()
-        self.timeout_sweep.cancel()
-
     # A queue that sat unfilled overnight is stale: people who joined, never
     # got a game and forgot to leave make the count look healthier than it is.
-    # Wipe it once a day in the small hours (real time set in cog_load).
-    @tasks.loop(time=dt.time(hour=5))
+    # Wiped once a day in the small hours (the community's queue_reset_time).
     async def daily_reset(self):
         # Last night's waitlist is as stale as its queue.
         self.sitting_out.clear()
@@ -320,13 +311,9 @@ class Matchmaking(commands.Cog):
             return
         stale = len(self.queue)
         self.queue.clear()
-        logger.info("Daily queue reset: cleared %d player(s)", stale)
+        logger.info("Daily queue reset (community %s): cleared %d player(s)", self.community.guild_id, stale)
         # Silent: the live queue message just edits back to empty, no new post.
         await self._refresh_message()
-
-    @daily_reset.before_loop
-    async def before_daily_reset(self):
-        await self.client.wait_until_ready()
 
     # -- queue timeout -----------------------------------------------------
 
@@ -335,26 +322,16 @@ class Matchmaking(commands.Cog):
     # a match they aren't there for. Silent on purpose: a reminder before
     # removal was tried and found too noisy, so the queue message states the
     # rule instead and pressing Join again restarts the clock.
-    @tasks.loop(seconds=TIMEOUT_SWEEP_SECONDS)
-    async def timeout_sweep(self):
+    async def sweep_timeouts(self):
         self._forget_departed()
-        gone = expired(self.joined_at, discord.utils.utcnow(), dt.timedelta(minutes=CONFIG.queue_timeout_minutes))
+        timeout = dt.timedelta(minutes=self.config.queue_timeout_minutes)
+        gone = expired(self.joined_at, discord.utils.utcnow(), timeout)
         for uid in gone:
             user = self.queue.pop(uid, None)
             del self.joined_at[uid]
             logger.info("Queue timeout: removed %s", user.display_name if user is not None else uid)
         if gone:
             await self._refresh_message()
-
-    @timeout_sweep.before_loop
-    async def before_timeout_sweep(self):
-        await self.client.wait_until_ready()
-
-    @timeout_sweep.error
-    async def timeout_sweep_error(self, error):
-        # A loop task dies on an unhandled exception; log it and keep sweeping.
-        logger.exception("Queue timeout sweep failed", exc_info=error)
-        self.timeout_sweep.restart()
 
     def renew(self, uid: str):
         """Start (or restart) a queued player's timeout."""
@@ -366,14 +343,6 @@ class Matchmaking(commands.Cog):
         shrinks."""
         for uid in [uid for uid in self.joined_at if uid not in self.queue]:
             del self.joined_at[uid]
-
-    @commands.Cog.listener()
-    async def on_ready(self):
-        # Sweep a queue message left over from before a restart so a stale,
-        # unbacked queue isn't left sitting in chat. keep=self.queue_message is
-        # None on a fresh process (deletes the leftover) but the live message
-        # on a mid-session gateway reconnect (so it's preserved, not deleted).
-        await self._clear_old_queue_message(keep=self.queue_message)
 
     async def _clear_old_queue_message(self, keep: discord.Message | None = None):
         """Delete the last-tracked queue message unless it's `keep`, then record
@@ -441,13 +410,13 @@ class Matchmaking(commands.Cog):
         return [self._queued_player(u) for u in self.queue.values()]
 
     def _status_embed(self) -> discord.Embed:
-        return match_embeds.queue_status(self._players(), QUEUE_TARGET, CONFIG.queue_timeout_minutes)
+        return match_embeds.queue_status(self._players(), QUEUE_TARGET, self.config.queue_timeout_minutes)
 
     async def _refresh_message(self):
         """Update the tracked queue message after a command changes the queue."""
         if self.queue_message is not None:
             try:
-                await self.queue_message.edit(embed=self._status_embed(), view=QueueView(self))
+                await self.queue_message.edit(embed=self._status_embed(), view=QueueView(self.lobby_for))
             except discord.HTTPException:
                 self.queue_message = None
                 self.store.set_meta(QUEUE_MSG_META_KEY, "")
@@ -461,9 +430,7 @@ class Matchmaking(commands.Cog):
 
     # -- commands & interactions -----------------------------------------
 
-    @commands.hybrid_command(help="open the matchmaking queue")
-    @commands.cooldown(1, 30, commands.BucketType.channel)
-    async def queue(self, ctx):
+    async def open_queue(self, ctx):
         # Only one live queue message at a time: re-running !queue moves it to
         # the bottom of the chat rather than opening a duplicate. No role ping
         # — re-opening the queue mid-session is routine (re-teaming, a late
@@ -471,7 +438,7 @@ class Matchmaking(commands.Cog):
         # the community called in can @ the role themselves.
         self.queue_message = await ctx.send(
             embed=self._status_embed(),
-            view=QueueView(self),
+            view=QueueView(self.lobby_for),
         )
         await self._clear_old_queue_message(keep=self.queue_message)
 
@@ -503,10 +470,7 @@ class Matchmaking(commands.Cog):
             return None
         return ctx.guild.get_member(int(person.discord_id))
 
-    @commands.hybrid_command(
-        aliases=["remove"], help="sit a player out of the next game, or take them out of the queue"
-    )
-    async def bump(self, ctx, *, player: str):
+    async def bump(self, ctx, player: str):
         # Open to everyone: it only moves people in the queue and the next
         # game's lineup, which the next re-team or a Join press undoes.
         # Someone in the live match is sat out as if they'd pressed Sit out;
@@ -546,8 +510,6 @@ class Matchmaking(commands.Cog):
         await self._redraw_lineup()
         return f"**{label}** will sit out the next game; the first person on the waitlist takes their spot."
 
-    @commands.hybrid_command(help="re-post the last match with freshly balanced teams")
-    @commands.cooldown(1, 10, commands.BucketType.channel)
     async def teams(self, ctx):
         """Re-split the last match's roster without going back through the
         queue. Swapping people in and out is Sit out / Waitlist's job."""
@@ -559,7 +521,7 @@ class Matchmaking(commands.Cog):
         if isinstance(lineup, str):
             # With the buttons, so whoever wants the spot can take it
             # right here and the group can re-team once they have.
-            view = NextGameView(self)
+            view = NextGameView(self.lobby_for)
             embed = self.lineup_embed(match_embeds.waiting_for_players(lineup))
             view.track(await ctx.send(embed=embed, view=view))
             return
@@ -569,17 +531,13 @@ class Matchmaking(commands.Cog):
             return
         await self.post_match(ctx.channel, roster, promoted=promoted)
 
-    @commands.hybrid_command(
-        name="waitlist", aliases=["lineup"], help="show the current teams and waitlist at the bottom of chat"
-    )
-    @commands.cooldown(1, 10, commands.BucketType.channel)
     async def show_lineup(self, ctx):
         """Bring the live teams, with who's sitting out and who's waiting, back
         to the bottom of chat without re-teaming — the Sit out / Waitlist
         buttons live on messages that scroll away once a game starts. Moves
         the proposal rather than copying it, so one set of teams stays live."""
         if self.match_view is not None and self.match_message is not None:
-            message = await ctx.send(embed=self.match_view.embed(), view=self.match_view)
+            message = await ctx.send(embed=self.match_view.embed(self), view=self.match_view)
             await self._clear_match_message(keep=message)
             return
         roster = self.stored_roster_ids()
@@ -587,11 +545,10 @@ class Matchmaking(commands.Cog):
             await ctx.send("No match in progress — run `!queue` to start one.")
             return
         # A restart lost the split, but the roster and lineup are stored.
-        view = NextGameView(self)
+        view = NextGameView(self.lobby_for)
         view.track(await ctx.send(embed=self.lineup_embed(match_embeds.current_lineup(roster)), view=view))
 
-    @commands.hybrid_command(help="put a player into the queue")
-    async def add(self, ctx, *, player: str):
+    async def add(self, ctx, player: str):
         async def picked(interaction, person):
             member = await self._member_of(ctx, person)
             if member is None:
@@ -633,8 +590,7 @@ class Matchmaking(commands.Cog):
         roster = self._take_queue() if len(self.queue) >= QUEUE_TARGET else None
         return f"Added **{member.display_name}** to the queue.", roster
 
-    @commands.hybrid_command(help="clear the matchmaking queue")
-    async def clearqueue(self, ctx):
+    async def clear_queue(self, ctx):
         self.queue.clear()
         await self._refresh_message()
         await ctx.send("Queue cleared.")
@@ -652,7 +608,7 @@ class Matchmaking(commands.Cog):
             self.renew(uid)
             await interaction.response.send_message(
                 f"You're already in the queue — your timer's restarted, you'll stay in for another "
-                f"{CONFIG.queue_timeout_minutes} minutes.",
+                f"{self.config.queue_timeout_minutes} minutes.",
                 ephemeral=True,
             )
             return
@@ -660,7 +616,7 @@ class Matchmaking(commands.Cog):
         self.renew(uid)
         roster = self._take_queue() if len(self.queue) >= QUEUE_TARGET else None
         # Reset the queue message either way, then announce any formed match.
-        await interaction.response.edit_message(embed=self._status_embed(), view=QueueView(self))
+        await interaction.response.edit_message(embed=self._status_embed(), view=QueueView(self.lobby_for))
         if roster:
             await self.post_match(interaction.channel, roster, announce=True)
 
@@ -670,7 +626,7 @@ class Matchmaking(commands.Cog):
         if self.queue.pop(uid, None) is None:
             await interaction.response.send_message("You're not in the queue.", ephemeral=True)
             return
-        await interaction.response.edit_message(embed=self._status_embed(), view=QueueView(self))
+        await interaction.response.edit_message(embed=self._status_embed(), view=QueueView(self.lobby_for))
 
     def _take_queue(self) -> list[discord.abc.User]:
         """Empty the queue and hand back the roster for a match. Callers refresh
@@ -712,7 +668,7 @@ class Matchmaking(commands.Cog):
         lineup_changed |= len(self.waitlist) != waiting
         self.save_lineup()
         queue_changed = any([self.queue.pop(str(u.id), None) for u in promoted])
-        view = ProposedMatchView(self, list(users), options)
+        view = ProposedMatchView(self.lobby_for, list(users), options, self.store.match_count())
         pinged = list(users) if announce else list(promoted)
         content = None
         if announce:
@@ -721,7 +677,7 @@ class Matchmaking(commands.Cog):
             content = " ".join(f"<@{u.id}>" for u in promoted) + " — a spot opened up, you're in!"
         message = await channel.send(
             content=content,
-            embed=view.embed(),
+            embed=view.embed(self),
             view=view,
             allowed_mentions=discord.AllowedMentions(users=pinged),
         )
@@ -827,7 +783,7 @@ class Matchmaking(commands.Cog):
         if not roster:
             return None
         played = sum(1 for uid in roster if handles & set(self.store.handles_for(uid)))
-        return NextGameView(self) if played * 2 >= len(roster) else None
+        return NextGameView(self.lobby_for) if played * 2 >= len(roster) else None
 
     def lineup_for_next(
         self, guild: discord.Guild | None, users: list[discord.abc.User]
@@ -874,6 +830,105 @@ class Matchmaking(commands.Cog):
             await old.delete()
         except discord.HTTPException:
             pass
+
+
+class Matchmaking(commands.Cog):
+    """Routes each command and button press to its server's Lobby."""
+
+    def __init__(self, client):
+        self.client = client
+        self.lobbies: dict[Community, Lobby] = {}
+        self.daily_resets: list[tasks.Loop] = []
+
+    def lobby_for(self, where) -> Lobby | None:
+        """The lobby of a Community, or of the one a guild belongs to (None if
+        it has none). Made on first use."""
+        community = where if isinstance(where, Community) else self.client.communities.for_guild(where)
+        if community is None:
+            return None
+        if community not in self.lobbies:
+            self.lobbies[community] = Lobby(self.client, community, self.lobby_for)
+        return self.lobbies[community]
+
+    async def cog_check(self, ctx) -> bool:
+        if self.lobby_for(ctx.guild) is None:
+            raise NotACommunity(ctx)
+        return True
+
+    async def cog_load(self):
+        # Register the persistent views so Join/Leave on queue messages, New
+        # teams on proposals and the lineup buttons on match summaries from
+        # before the last restart still dispatch here.
+        self.client.add_view(QueueView(self.lobby_for))
+        self.client.add_view(ProposedMatchView(self.lobby_for))
+        self.client.add_view(NextGameView(self.lobby_for))
+        self.daily_resets = start_daily(
+            self.client, _reset_time, lambda community: self.lobby_for(community).daily_reset(), "Daily queue reset"
+        )
+        if any(c.config.queue_timeout_minutes for c in self.client.communities.all()):
+            self.timeout_sweep.start()
+
+    async def cog_unload(self):
+        for loop in self.daily_resets:
+            loop.cancel()
+        self.timeout_sweep.cancel()
+
+    @tasks.loop(seconds=TIMEOUT_SWEEP_SECONDS)
+    async def timeout_sweep(self):
+        for community in self.client.communities.all():
+            if community.config.queue_timeout_minutes:
+                await self.lobby_for(community).sweep_timeouts()
+
+    @timeout_sweep.before_loop
+    async def before_timeout_sweep(self):
+        await self.client.wait_until_ready()
+
+    @timeout_sweep.error
+    async def timeout_sweep_error(self, error):
+        # A loop task dies on an unhandled exception; log it and keep sweeping.
+        logger.exception("Queue timeout sweep failed", exc_info=error)
+        self.timeout_sweep.restart()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        # Sweep a queue message left over from before a restart so a stale,
+        # unbacked queue isn't left sitting in chat. keep=lobby.queue_message is
+        # None on a fresh process (deletes the leftover) but the live message
+        # on a mid-session gateway reconnect (so it's preserved, not deleted).
+        for community in self.client.communities.all():
+            lobby = self.lobby_for(community)
+            await lobby._clear_old_queue_message(keep=lobby.queue_message)
+
+    @commands.hybrid_command(help="open the matchmaking queue")
+    @commands.cooldown(1, 30, commands.BucketType.channel)
+    async def queue(self, ctx):
+        await self.lobby_for(ctx.guild).open_queue(ctx)
+
+    @commands.hybrid_command(
+        aliases=["remove"], help="sit a player out of the next game, or take them out of the queue"
+    )
+    async def bump(self, ctx, *, player: str):
+        await self.lobby_for(ctx.guild).bump(ctx, player)
+
+    @commands.hybrid_command(help="re-post the last match with freshly balanced teams")
+    @commands.cooldown(1, 10, commands.BucketType.channel)
+    async def teams(self, ctx):
+        await self.lobby_for(ctx.guild).teams(ctx)
+
+    @commands.hybrid_command(
+        name="waitlist", aliases=["lineup"], help="show the current teams and waitlist at the bottom of chat"
+    )
+    @commands.cooldown(1, 10, commands.BucketType.channel)
+    async def show_lineup(self, ctx):
+        await self.lobby_for(ctx.guild).show_lineup(ctx)
+
+    @commands.hybrid_command(help="put a player into the queue")
+    async def add(self, ctx, *, player: str):
+        await self.lobby_for(ctx.guild).add(ctx, player)
+
+    @commands.hybrid_command(help="clear the matchmaking queue")
+    async def clearqueue(self, ctx):
+        await self.lobby_for(ctx.guild).clear_queue(ctx)
 
 
 async def setup(client):

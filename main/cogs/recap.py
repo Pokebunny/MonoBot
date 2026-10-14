@@ -7,11 +7,10 @@ import zoneinfo
 
 import discord
 from checks import is_bot_admin
-from discord.ext import commands, tasks
-from resources.config import CONFIG
+from community import CommunityCog, daily_time, start_daily
+from discord.ext import commands
 from services import match_embeds, recap
 from services.rating import season_start
-from services.storage import MatchStore
 from views import PagedBoardView
 
 logger = logging.getLogger(__name__)
@@ -25,44 +24,31 @@ RECAP_CHANNEL_META_KEY = "recap_channel"
 DAILY_WINDOW = dt.timedelta(hours=24)
 
 
-def _recap_timezone() -> dt.tzinfo:
+def _recap_timezone(config) -> dt.tzinfo:
     try:
-        return zoneinfo.ZoneInfo(CONFIG.recap_timezone)
+        return zoneinfo.ZoneInfo(config.recap_timezone)
     except ValueError, zoneinfo.ZoneInfoNotFoundError:
-        logger.warning("Bad recap_timezone %r; using UTC", CONFIG.recap_timezone)
+        logger.warning("Bad recap_timezone %r; using UTC", config.recap_timezone)
         return dt.UTC
 
 
-def _recap_time() -> dt.time | None:
-    """The configured morning-post time, or None if it's disabled or
-    unparseable (a bad value shouldn't stop the bot from booting)."""
-    raw = CONFIG.recap_time
-    if not raw:
-        return None
-    try:
-        hour, minute = (int(part) for part in raw.split(":"))
-        return dt.time(hour=hour, minute=minute, tzinfo=_recap_timezone())
-    except ValueError:
-        logger.warning("Ignoring bad recap_time %r; morning recap disabled", raw)
-        return None
+def _recap_time(config) -> dt.time | None:
+    """A community's morning-post time, or None if it's disabled."""
+    return daily_time(config.recap_time, config.recap_timezone, "recap_time")
 
 
-class Recap(commands.Cog):
-    def __init__(self, client):
-        self.client = client
-        if not hasattr(client, "match_store"):
-            client.match_store = MatchStore()
-        self.store: MatchStore = client.match_store
-        self.tz = _recap_timezone()
-
+class Recap(CommunityCog):
     async def cog_load(self):
-        post_at = _recap_time()
-        if post_at is not None:
-            self.daily_recap.change_interval(time=post_at)
-            self.daily_recap.start()
+        self.daily_recaps = start_daily(
+            self.client,
+            _recap_time,
+            lambda community: self.at(community).post_daily_recap(),
+            "Morning recap",
+        )
 
     async def cog_unload(self):
-        self.daily_recap.cancel()
+        for loop in self.daily_recaps:
+            loop.cancel()
 
     @commands.hybrid_command(
         aliases=["session", "nightly"],
@@ -70,6 +56,7 @@ class Recap(commands.Cog):
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def recap(self, ctx):
+        self = self.at(ctx)
         # Sessions with no decided game have nothing to report, so they get
         # no page rather than a blank one.
         sessions = [s for s in recap.split_sessions(self.store.all_matches()) if any(recap.is_decided(m) for _, m in s)]
@@ -95,17 +82,22 @@ class Recap(commands.Cog):
     )
     @is_bot_admin()
     async def recapchannel(self, ctx, channel: discord.TextChannel | None = None):
+        self = self.at(ctx)
         target = channel or ctx.channel
         if self.store.get_meta(RECAP_CHANNEL_META_KEY) == str(target.id):
             self.store.set_meta(RECAP_CHANNEL_META_KEY, "")
             await ctx.send(f"Morning recap no longer pinned to {target.mention}; it goes to the replay channels.")
             return
         self.store.set_meta(RECAP_CHANNEL_META_KEY, str(target.id))
-        when = f"at {CONFIG.recap_time} {CONFIG.recap_timezone}" if _recap_time() else "(currently disabled in config)"
+        config = self.community.config
+        when = (
+            f"at {config.recap_time} {config.recap_timezone}"
+            if _recap_time(config)
+            else "(currently disabled in config)"
+        )
         await ctx.send(f"The morning recap will be posted in {target.mention} {when}.")
 
-    @tasks.loop(time=dt.time(hour=8))
-    async def daily_recap(self):
+    async def post_daily_recap(self):
         now = dt.datetime.now(dt.UTC)
         since = (now - DAILY_WINDOW).isoformat()
         session = self.store.all_matches(since=since)
@@ -123,15 +115,11 @@ class Recap(commands.Cog):
             except discord.HTTPException:
                 logger.exception("Morning recap: failed to post in %s", channel)
 
-    @daily_recap.before_loop
-    async def before_daily_recap(self):
-        await self.client.wait_until_ready()
-
     def _recap_channel_ids(self) -> list[int]:
         pinned = self.store.get_meta(RECAP_CHANNEL_META_KEY)
         if pinned:
             return [int(pinned)]
-        return sorted(self.store.replay_channel_ids() | set(CONFIG.replays_channel_ids))
+        return sorted(self.community.watched_channels())
 
     def _embed(self, session, title: str, guild) -> discord.Embed | None:
         if not session:
@@ -148,7 +136,7 @@ class Recap(commands.Cog):
         if summary is None:
             return None
         names = {p.handle: self._shown_name(guild, p.handle, p.name) for p in summary.players}
-        return match_embeds.session_recap(summary, names, self.tz, title)
+        return match_embeds.session_recap(summary, names, _recap_timezone(self.community.config), title)
 
     def _shown_name(self, guild, handle: str, fallback: str) -> str:
         """The linked member's Discord name, else the SC2 name — the same

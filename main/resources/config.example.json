@@ -1,4 +1,5 @@
 {
+  "home_guild_id": 111111111111111111,
   "replays_channel_ids": [
     123456789012345678
   ],
@@ -10,5 +11,14 @@
   "admin_user_ids": [
     111111111111111111,
     222222222222222222
-  ]
+  ],
+  "guilds": {
+    "333333333333333333": {
+      "replays_channel_ids": [
+        444444444444444444
+      ],
+      "recap_timezone": "Europe/Berlin",
+      "queue_reset_timezone": "Europe/Berlin"
+    }
+  }
 }

@@ -7,6 +7,7 @@ import datetime
 from types import SimpleNamespace
 
 import pytest
+from conftest import community_cog
 from discord.ext import commands
 from models.replay import MatchPlayer, MonobattleMatch
 from services import identity
@@ -142,7 +143,7 @@ def jay(store):
 def _identity_cog(store):
     from cogs.identity import Identity
 
-    return Identity(SimpleNamespace(match_store=store))
+    return community_cog(Identity, store)
 
 
 def test_unlinking_an_sc2_name_drops_only_that_name(jay):
@@ -193,7 +194,7 @@ def test_whois_on_an_unlinked_account_lists_it(store):
 def _leaderboard_cog(store):
     from cogs.leaderboard import Leaderboard
 
-    return Leaderboard(SimpleNamespace(match_store=store, get_user=lambda _id: None))
+    return community_cog(Leaderboard, store, get_user=lambda _id: None)
 
 
 def test_h2h_accepts_discord_names(store):

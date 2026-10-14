@@ -231,6 +231,27 @@ def content_key_for(played_at: datetime.datetime, names: list[str]) -> str:
     return hashlib.sha256(f"{minute.isoformat()}|{'|'.join(sorted(names))}".encode()).hexdigest()
 
 
+def combined_unit_records(stores, confidence_gate: float, min_duration: int) -> dict[str, list[int]]:
+    """pick -> [wins, losses] across several stores' decided matches, each
+    game counted once however many stores hold it (keyed by content_key).
+    The first store holding a game supplies it, so list the most up-to-date
+    first."""
+    games: dict[str, list[tuple[str, bool]]] = {}
+    for store in stores:
+        for key, picks in store.picks_by_game(confidence_gate, min_duration).items():
+            games.setdefault(key, picks)
+    records: dict[str, list[int]] = {}
+    for picks in games.values():
+        for pick, won in picks:
+            records.setdefault(pick, [0, 0])[0 if won else 1] += 1
+    return records
+
+
+def combined_game_count(stores) -> int:
+    """Distinct games across several stores, by content_key."""
+    return len(set().union(*(store.content_keys() for store in stores)))
+
+
 def _migration_1_content_key(conn: sqlite3.Connection) -> None:
     """Backfill content_key on DBs created before it existed. No-op on DBs
     that already have the column (the pre-versioning baseline)."""
@@ -1199,21 +1220,29 @@ class MatchStore:
 
     def unit_records(self, confidence_gate: float, min_duration: int) -> dict[str, list[int]]:
         """pick -> [wins, losses] across decided matches."""
+        return combined_unit_records([self], confidence_gate, min_duration)
+
+    def picks_by_game(self, confidence_gate: float, min_duration: int) -> dict[str, list[tuple[str, bool]]]:
+        """content_key -> [(pick, won)] for every pick in each decided match:
+        unit records before they're summed, so several stores can be combined
+        without counting a game that more than one of them holds twice."""
         rows = self._conn.execute(
-            """SELECT mp.pick AS pick, (mp.team = m.winning_team) AS won, COUNT(*) AS n
+            """SELECT m.content_key AS key, mp.pick AS pick, (mp.team = m.winning_team) AS won
                FROM match_players mp JOIN matches m ON m.id = mp.match_id
                WHERE m.winning_team IS NOT NULL
                  AND m.winner_confidence >= ?
                  AND m.duration_seconds >= ?
-                 AND mp.pick IS NOT NULL
-               GROUP BY mp.pick, won""",
+                 AND mp.pick IS NOT NULL""",
             (confidence_gate, min_duration),
         ).fetchall()
-        records: dict[str, list[int]] = {}
+        games: dict[str, list[tuple[str, bool]]] = {}
         for row in rows:
-            entry = records.setdefault(row["pick"], [0, 0])
-            entry[0 if row["won"] else 1] = row["n"]
-        return records
+            games.setdefault(row["key"], []).append((row["pick"], bool(row["won"])))
+        return games
+
+    def content_keys(self) -> set[str]:
+        """Every stored game's content_key, decided or not."""
+        return {row["content_key"] for row in self._conn.execute("SELECT content_key FROM matches")}
 
     # -- internals -------------------------------------------------------
 

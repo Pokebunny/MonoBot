@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import converters
 import pytest
+from conftest import community_cog
 from discord.ext import commands
 
 
@@ -94,7 +95,7 @@ def cog(tmp_path):
     from services.storage import MatchStore
 
     store = MatchStore(str(tmp_path / "t.db"))
-    yield Leaderboard(SimpleNamespace(match_store=store))
+    yield community_cog(Leaderboard, store)
     store.close()
 
 

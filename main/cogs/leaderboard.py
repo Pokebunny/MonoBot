@@ -4,22 +4,18 @@ import logging
 
 import discord
 from checks import is_bot_admin
+from community import CommunityCog
 from discord.ext import commands
 from services import achievements, identity, map_versions, match_embeds
-from services.achievements import AchievementCache
 from services.rating import (
     MIN_DURATION_SECONDS,
     MIN_RANKED_GAMES,
     MIN_WINNER_CONFIDENCE,
     SOFT_RESET_CARRYOVER,
     SOFT_RESET_SIGMA,
-    DuoCache,
-    RatingCache,
-    UnitCache,
     season_book,
     unit_baseline,
 )
-from services.storage import MatchStore
 from views import ExpiringView, PagedBoardView, person_or_pick
 
 logger = logging.getLogger(__name__)
@@ -232,26 +228,7 @@ def _text(content: str) -> dict:
     return {"content": content, "embed": None}
 
 
-class Leaderboard(commands.Cog):
-    def __init__(self, client):
-        self.client = client
-        if not hasattr(client, "match_store"):
-            client.match_store = MatchStore()
-        if not hasattr(client, "rating_cache"):
-            client.rating_cache = RatingCache(client.match_store)
-        if not hasattr(client, "achievement_cache"):
-            client.achievement_cache = AchievementCache(client.match_store)
-        if not hasattr(client, "duo_cache"):
-            client.duo_cache = DuoCache(client.match_store)
-        if not hasattr(client, "unit_cache"):
-            client.unit_cache = UnitCache(client.match_store)
-        self.store: MatchStore = client.match_store
-        self.duos_cache: DuoCache = client.duo_cache
-        self.units_cache: UnitCache = client.unit_cache
-        self.ratings: RatingCache = client.rating_cache
-        self.achievements: AchievementCache = client.achievement_cache
-        achievements.ensure_seeded(self.store, self.achievements)
-
+class Leaderboard(CommunityCog):
     @commands.hybrid_command(
         aliases=["ladder"],
         description="show the rating leaderboard (a race, a season like s1, career, or units)",
@@ -260,6 +237,7 @@ class Leaderboard(commands.Cog):
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def leaderboard(self, ctx, *, query: str = ""):
+        self = self.at(ctx)
         if any(token.lower() in _UNIT_WORDS for token in query.split()):
             await self._unit_board(ctx, query)
             return
@@ -404,6 +382,7 @@ class Leaderboard(commands.Cog):
     @commands.hybrid_command(aliases=["rank"], help="show a player's full profile (yourself if no name given)")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def profile(self, ctx, *, player: str | None = None):
+        self = self.at(ctx)
         if player is None:
             resolved = await self._resolve_or_reply(ctx, None)
             if resolved is not None:
@@ -468,6 +447,7 @@ class Leaderboard(commands.Cog):
     @commands.hybrid_command(aliases=["ach"], help="show a player's achievements (yourself if no name given)")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def achievements(self, ctx, *, player: str | None = None):
+        self = self.at(ctx)
         # A slash invocation renders privately, which is what lets it unmask
         # the recipes of secrets the VIEWER has earned (same gate as
         # /gallery). Text !ach stays public, so it stays masked.
@@ -517,6 +497,7 @@ class Leaderboard(commands.Cog):
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def gallery(self, ctx):
+        self = self.at(ctx)
         # Recipes for secrets you've earned are only revealed on a PRIVATE
         # (ephemeral) render, which needs a slash invocation. A text !catalog
         # still works — it just keeps secret recipes masked, since the message
@@ -532,6 +513,7 @@ class Leaderboard(commands.Cog):
     @commands.hybrid_command(help="browse recent matches (◀ steps back in time) — optionally a player's")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def last(self, ctx, *, player: str | None = None):
+        self = self.at(ctx)
         matches = self.store.all_matches()  # oldest first
         if player:
 
@@ -569,6 +551,8 @@ class Leaderboard(commands.Cog):
     @commands.hybrid_command(help="head-to-head between two players — !h2h <name> means you vs them")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def h2h(self, ctx, player1: str, player2: str | None = None):
+        self = self.at(ctx)
+
         # Either name can need a picker; the second is only asked once the
         # first is settled, so each prompt is about one name.
         async def first_picked(interaction, person):
@@ -626,11 +610,12 @@ class Leaderboard(commands.Cog):
         so either argument order finds the same row."""
         merge = self.store.merge_map()
         pair = tuple(sorted({merge.get(group1[0], group1[0]), merge.get(group2[0], group2[0])}))
-        return self.duos_cache.records().get(pair)
+        return self.duos.records().get(pair)
 
     @commands.hybrid_command(aliases=["mvps"], help="rank players by how often they're the MVP")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def mvprate(self, ctx, min_games: int = MVP_RATE_MIN_GAMES):
+        self = self.at(ctx)
         # Career, not seasonal: MVP rate is a slow stat and a season's worth of
         # games is far too few for it to mean anything.
         min_games = max(1, min_games)
@@ -655,8 +640,9 @@ class Leaderboard(commands.Cog):
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def duos(self, ctx, *, query: str = ""):
+        self = self.at(ctx)
         min_games, sort = self._parse_duo_query(query)
-        rows = [d for d in self.duos_cache.records().values() if d.games >= min_games]
+        rows = [d for d in self.duos.records().values() if d.games >= min_games]
         if not rows:
             await ctx.send(f"No pair has played {min_games} games together yet.")
             return
@@ -693,11 +679,12 @@ class Leaderboard(commands.Cog):
     @commands.hybrid_command(help="rate unit picks, adjusted for who picked them — same as !leaderboard units")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def unitstats(self, ctx, *, query: str = ""):
+        self = self.at(ctx)
         await self._unit_board(ctx, query)
 
     async def _unit_board(self, ctx, query: str):
         min_games, raw = self._parse_unit_query(query)
-        units = self.units_cache.units()
+        units = self.units.units()
         # The zero is the average pick across every unit, not just the ones
         # shown, so raising the floor doesn't shift everyone's number.
         baseline = unit_baseline(units.values())
@@ -728,6 +715,7 @@ class Leaderboard(commands.Cog):
     @commands.hybrid_command(help="show the current ladder season")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def season(self, ctx):
+        self = self.at(ctx)
         current = self.store.current_season()
         played = len(self.store.season_matches(current))
         past = [s for s in self.store.seasons() if s.id != current.id]
@@ -765,6 +753,7 @@ class Leaderboard(commands.Cog):
     )
     @is_bot_admin()
     async def newseason(self, ctx, *, name: str | None = None):
+        self = self.at(ctx)
         current = self.store.current_season()
         words = (name or "").split()
         hard = "--hard" in words
@@ -792,6 +781,7 @@ class Leaderboard(commands.Cog):
     @commands.hybrid_command(help="how many matches are stored")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def matchcount(self, ctx):
+        self = self.at(ctx)
         await ctx.send(f"{self.store.match_count()} matches stored.")
 
 

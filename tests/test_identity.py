@@ -1,6 +1,7 @@
 import datetime
 
 import pytest
+from conftest import community_cog
 from models.replay import MatchPlayer, MonobattleMatch
 from services.storage import MatchStore, hash_replay
 
@@ -290,11 +291,10 @@ def test_unlink_second_account_by_alias(store):
 
 
 def test_free_candidates_filter(store):
-    from types import SimpleNamespace
 
     from cogs.identity import Identity
 
-    cog = Identity(SimpleNamespace(match_store=store))
+    cog = community_cog(Identity, store)
     _two_rains(store)
     candidates, free = cog._free_candidates("Rain")
     assert len(candidates) == 2 and len(free) == 2

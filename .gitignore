@@ -7,6 +7,7 @@ main/.env
 main/resources/*.db
 main/resources/config.json
 main/resources/replays/
+main/resources/guilds/
 /scratch/
 /test_replays/
 /.claude/settings.local.json

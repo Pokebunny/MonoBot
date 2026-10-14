@@ -9,8 +9,8 @@ from collections import Counter
 
 import discord
 from checks import is_bot_admin
+from community import CommunityCog
 from discord.ext import commands
-from resources.config import CONFIG
 from services import achievements, map_versions, match_embeds, replay_parser, storage
 from services.achievements import AchievementCache
 from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, match_rating_deltas, season_start
@@ -99,7 +99,7 @@ class ConfirmWinnerView(ExpiringView):
         embed.set_footer(text=f"Match #{self.match_id} · confirmed by {interaction.user.display_name}")
         self.stop()
         if self.next_view is not None:
-            embed = self.next_view.cog.lineup_embed(embed)
+            embed = self.next_view.lobby_for(interaction.guild).lineup_embed(embed)
             await interaction.response.edit_message(embed=embed, view=self.next_view)
             self.next_view.track(interaction.message)
         else:
@@ -126,18 +126,9 @@ class ConfirmWinnerView(ExpiringView):
         await self._confirm(interaction, 2)
 
 
-class Replays(commands.Cog):
+class Replays(CommunityCog):
     def __init__(self, client):
-        self.client = client
-        if not hasattr(client, "match_store"):
-            client.match_store = MatchStore()
-        if not hasattr(client, "achievement_cache"):
-            client.achievement_cache = AchievementCache(client.match_store)
-        self.store: MatchStore = client.match_store
-        self.achievements: AchievementCache = client.achievement_cache
-        # First run over an existing history: grant the career backfill
-        # silently so the first upload doesn't announce years of badges.
-        achievements.ensure_seeded(self.store, self.achievements)
+        super().__init__(client)
         self._swept = False
 
     @commands.Cog.listener()
@@ -157,6 +148,10 @@ class Replays(commands.Cog):
         if self._swept:
             return
         self._swept = True
+        for community in self.client.communities.all():
+            await self.at(community).announce_reconcile()
+
+    async def announce_reconcile(self):
         try:
             granted, revoked = achievements.reconcile(self.store, self.achievements)
         except Exception:
@@ -177,14 +172,15 @@ class Replays(commands.Cog):
                 logger.exception("Could not announce the achievement reconcile in %s", channel_id)
 
     def _watched_channels(self) -> set[int]:
-        """Channels watched for replays: the runtime !watchreplays set plus
-        any config-file channels. Empty = watch everywhere (dev default)."""
-        return self.store.replay_channel_ids() | set(CONFIG.replays_channel_ids)
+        return self.community.watched_channels()
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.author.bot:
+        if message.author.bot or message.guild is None:
             return
+        if self.client.communities.for_guild(message.guild) is None:
+            return
+        self = self.at(message)
         watched = self._watched_channels()
         if watched and message.channel.id not in watched:
             return
@@ -199,8 +195,9 @@ class Replays(commands.Cog):
     @commands.hybrid_command(help="toggle watching this channel (or #channel) for replay uploads (mods)")
     @is_bot_admin()
     async def watchreplays(self, ctx, channel: discord.TextChannel | None = None):
+        self = self.at(ctx)
         target = channel or ctx.channel
-        if target.id in set(CONFIG.replays_channel_ids) - self.store.replay_channel_ids():
+        if target.id in set(self.community.config.replays_channel_ids) - self.store.replay_channel_ids():
             await ctx.send(f"{target.mention} is watched via the config file — remove it there to stop.")
             return
         guild_id = target.guild.id if target.guild else None
@@ -274,9 +271,10 @@ class Replays(commands.Cog):
         # The current group's game gets Sit out / Waitlist / New teams, since
         # its summary is the message the players are looking at between games.
         matchmaking = self.client.get_cog("Matchmaking")
-        next_view = matchmaking.next_game_view({p.toon_handle for p in match.players}) if matchmaking else None
+        lobby = matchmaking.lobby_for(self.community) if matchmaking else None
+        next_view = lobby.next_game_view({p.toon_handle for p in match.players}) if lobby else None
         if next_view is not None:
-            embed = matchmaking.lineup_embed(embed)
+            embed = lobby.lineup_embed(embed)
         if needs_confirmation:
             view = ConfirmWinnerView(self.store, result.match_id, self.achievements, next_view)
             view.message = await send_with_retry(channel, embed=embed, view=view)
@@ -310,6 +308,7 @@ class Replays(commands.Cog):
         """Downloads every .SC2Replay ever posted in the channel, archives the
         raw files, re-parses already-stored games in place (so new parser
         fields apply retroactively), and ingests any games we missed."""
+        self = self.at(ctx)
         target = channel or ctx.channel
         await ctx.send(f"Scanning the last {limit} messages of {target.mention} for replays…")
         stats = Counter()
@@ -358,6 +357,7 @@ class Replays(commands.Cog):
     @commands.hybrid_command(help="list stored matches that still need a winner confirmed")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def pending(self, ctx):
+        self = self.at(ctx)
         pending = self.store.pending_confirmations(MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
         if not pending:
             await ctx.send("No matches waiting on confirmation.")

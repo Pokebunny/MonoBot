@@ -3,7 +3,8 @@ import datetime as dt
 import types
 
 import pytest
-from cogs.matchmaking import Matchmaking, NextGameView, ProposedMatchView
+from cogs.matchmaking import Lobby, NextGameView, ProposedMatchView
+from models.config import GuildConfig
 from models.matchmaking import QueuedPlayer
 from services.matchmaking import balance_teams, expired, next_roster, ranked_matches
 from services.rating import DEFAULT_MU, DEFAULT_SIGMA, predict_win_probability
@@ -143,8 +144,12 @@ class _Store:
 
 
 class _Cog:
+    """A Lobby's lineup state with the Discord-facing parts faked."""
+
     def __init__(self, store, stored_ids=(), resolved=None):
         self.store = store
+        self.config = GuildConfig()
+        self.lobby_for = lambda _guild: self  # every view finds this lobby
         self.reposted = None
         self.stored_ids = list(stored_ids)
         self.resolved = list(resolved) if resolved is not None else None
@@ -157,12 +162,12 @@ class _Cog:
         self.match_view = None
 
     # The real lineup logic, run against this fake's state.
-    lineup_for_next = Matchmaking.lineup_for_next
-    lineup_embed = Matchmaking.lineup_embed
-    toggle_lineup = Matchmaking.toggle_lineup
-    re_team = Matchmaking.re_team
-    _redraw_lineup = Matchmaking._redraw_lineup
-    _clear_match_message = Matchmaking._clear_match_message
+    lineup_for_next = Lobby.lineup_for_next
+    lineup_embed = Lobby.lineup_embed
+    toggle_lineup = Lobby.toggle_lineup
+    re_team = Lobby.re_team
+    _redraw_lineup = Lobby._redraw_lineup
+    _clear_match_message = Lobby._clear_match_message
 
     def save_lineup(self):
         pass
@@ -183,7 +188,8 @@ def _view(store, option_count=3):
     players = [_p(f"p{i}") for i in range(8)]
     options = ranked_matches(players, limit=option_count)
     users = [types.SimpleNamespace(id=str(i)) for i in range(8)]
-    return ProposedMatchView(_Cog(store), users, options), users
+    cog = _Cog(store)
+    return ProposedMatchView(cog.lobby_for, users, options, store.match_count()), users
 
 
 class TestNewTeamsButton:
@@ -196,7 +202,7 @@ class TestNewTeamsButton:
         asyncio.run(view.new_teams.callback(interaction))
         assert view.index == 1
         assert interaction.response.edited  # edited in place, not reposted
-        assert view.cog.reposted is None
+        assert view.lobby_for(None).reposted is None
 
     def test_rebalances_once_a_game_is_stored(self):
         store = _Store(count=5)
@@ -204,7 +210,7 @@ class TestNewTeamsButton:
         store.count += 1  # a replay went up while the teams sat there
         interaction = _Interaction()
         asyncio.run(view.new_teams.callback(interaction))
-        assert view.cog.reposted == users  # re-split from current ratings
+        assert view.lobby_for(None).reposted == users  # re-split from current ratings
         assert view.index == 0  # the stale options were not cycled
 
     def test_single_split_and_no_games_says_so(self):
@@ -229,7 +235,7 @@ class TestRestoredAfterRestart:
     def test_rebalances_from_the_stored_roster(self):
         users = [types.SimpleNamespace(id=str(i)) for i in range(8)]
         cog = _Cog(_Store(count=5), stored_ids=[str(i) for i in range(8)], resolved=users)
-        view = ProposedMatchView(cog)  # no users, no options: restored
+        view = ProposedMatchView(cog.lobby_for)  # no users, no options: restored
         interaction = _Interaction()
         asyncio.run(view.new_teams.callback(interaction))
         assert cog.reposted == users
@@ -237,7 +243,7 @@ class TestRestoredAfterRestart:
 
     def test_says_so_when_the_roster_cannot_be_resolved(self):
         cog = _Cog(_Store(count=5), stored_ids=["1"], resolved=[])
-        view = ProposedMatchView(cog)
+        view = ProposedMatchView(cog.lobby_for)
         interaction = _Interaction()
         asyncio.run(view.new_teams.callback(interaction))
         assert "run `!teams`" in interaction.response.message
@@ -245,7 +251,7 @@ class TestRestoredAfterRestart:
 
     def test_permission_falls_back_to_the_stored_roster(self):
         cog = _Cog(_Store(count=5), stored_ids=["7"], resolved=[])
-        view = ProposedMatchView(cog)
+        view = ProposedMatchView(cog.lobby_for)
         interaction = _Interaction(user_id="stranger")
         asyncio.run(view.new_teams.callback(interaction))
         assert "Only a player in this match" in interaction.response.message
@@ -268,12 +274,12 @@ class TestWaitlistCommand:
 
     def test_moves_the_live_proposal_down_without_re_teaming(self):
         view, _ = _view(_Store(count=5))
-        cog = view.cog
+        cog = view.lobby_for(None)
         view.index = 2  # someone had cycled to the third split
         old = _Message(id=-1)
         cog.match_message, cog.match_view = old, view
         ctx = _Ctx()
-        asyncio.run(Matchmaking.show_lineup.callback(cog, ctx))
+        asyncio.run(Lobby.show_lineup(cog, ctx))
         reposted = ctx.sent[0]
         assert reposted.kwargs["view"] is view and view.index == 2  # same split, same buttons
         assert "Option 3 of 3" in reposted.kwargs["embed"].description
@@ -282,11 +288,11 @@ class TestWaitlistCommand:
 
     def test_shows_the_waitlist_under_the_teams(self):
         view, _ = _view(_Store(count=5))
-        cog = view.cog
+        cog = view.lobby_for(None)
         cog.waitlist = ["42"]
         cog.match_message, cog.match_view = _Message(id=-1), view
         ctx = _Ctx()
-        asyncio.run(Matchmaking.show_lineup.callback(cog, ctx))
+        asyncio.run(Lobby.show_lineup(cog, ctx))
         fields = {f.name: f.value for f in ctx.sent[0].kwargs["embed"].fields}
         assert "<@42>" in fields["Waitlist"]
 
@@ -294,7 +300,7 @@ class TestWaitlistCommand:
         cog = _Cog(_Store(), stored_ids=["1", "2"])
         cog.waitlist = ["42"]
         ctx = _Ctx()
-        asyncio.run(Matchmaking.show_lineup.callback(cog, ctx))
+        asyncio.run(Lobby.show_lineup(cog, ctx))
         sent = ctx.sent[0]
         assert isinstance(sent.kwargs["view"], NextGameView)
         fields = {f.name: f.value for f in sent.kwargs["embed"].fields}
@@ -303,7 +309,7 @@ class TestWaitlistCommand:
 
     def test_with_no_match_says_so(self):
         ctx = _Ctx()
-        asyncio.run(Matchmaking.show_lineup.callback(_Cog(_Store()), ctx))
+        asyncio.run(Lobby.show_lineup(_Cog(_Store()), ctx))
         assert "No match in progress" in ctx.sent[0].content
 
 
@@ -317,7 +323,7 @@ class TestQueueTimeout:
         assert expired(joined, _T0 + _TIMEOUT, _TIMEOUT) == ["a"]
 
     def test_pressing_join_again_restarts_the_timer(self):
-        cog = object.__new__(Matchmaking)  # just the queue state, no Discord client
+        cog = object.__new__(Lobby)  # just the queue state, no Discord client
         cog.store, cog.queue, cog.joined_at = _Store(), {}, {}
         member = types.SimpleNamespace(id=1, display_name="p1")
         cog._add(member)
@@ -351,8 +357,8 @@ class TestSitOutAndWaitlist:
         asyncio.run(view.sit_out.callback(_Interaction(user_id="3")))
         # No game stored yet, but the roster changed, so it re-balances.
         asyncio.run(view.new_teams.callback(_Interaction()))
-        assert [u.id for u in view.cog.reposted] == [u.id for u in users if u.id != "3"] + ["101"]
-        assert [u.id for u in view.cog.promoted] == ["101"]
+        assert [u.id for u in view.lobby_for(None).reposted] == [u.id for u in users if u.id != "3"] + ["101"]
+        assert [u.id for u in view.lobby_for(None).promoted] == ["101"]
 
     def test_pressing_again_takes_it_back(self):
         view, _ = _view(_Store(count=5))
@@ -360,7 +366,7 @@ class TestSitOutAndWaitlist:
         asyncio.run(view.sit_out.callback(_Interaction(user_id="3")))
         asyncio.run(view.waitlist.callback(_Interaction(user_id="101")))
         asyncio.run(view.waitlist.callback(_Interaction(user_id="101")))
-        assert view.cog.sitting_out == [] and view.cog.waitlist == []
+        assert view.lobby_for(None).sitting_out == [] and view.lobby_for(None).waitlist == []
 
     def test_no_swap_without_someone_to_take_the_spot(self):
         view, _ = _view(_Store(count=5))
@@ -368,8 +374,8 @@ class TestSitOutAndWaitlist:
         interaction = _Interaction()
         asyncio.run(view.new_teams.callback(interaction))
         assert "need 1 more" in interaction.response.message
-        assert view.cog.reposted is None
-        assert view.cog.sitting_out == ["3"]  # still waiting for a taker
+        assert view.lobby_for(None).reposted is None
+        assert view.lobby_for(None).sitting_out == ["3"]  # still waiting for a taker
 
     def test_players_sit_out_and_outsiders_wait(self):
         view, _ = _view(_Store(count=5))
@@ -379,7 +385,7 @@ class TestSitOutAndWaitlist:
         player = _Interaction(user_id="3")
         asyncio.run(view.waitlist.callback(player))
         assert "Sit out" in player.response.message
-        assert view.cog.sitting_out == [] and view.cog.waitlist == []
+        assert view.lobby_for(None).sitting_out == [] and view.lobby_for(None).waitlist == []
 
 
 class TestBumpFromMatch:
@@ -389,8 +395,8 @@ class TestBumpFromMatch:
     def _cog(self):
         cog = _Cog(_Store(count=5), stored_ids=[str(i) for i in range(8)])
         cog.queue = {}
-        cog._bump = types.MethodType(Matchmaking._bump, cog)
-        cog._bump_from_match = types.MethodType(Matchmaking._bump_from_match, cog)
+        cog._bump = types.MethodType(Lobby._bump, cog)
+        cog._bump_from_match = types.MethodType(Lobby._bump_from_match, cog)
         return cog
 
     def test_sits_the_player_out_and_the_waitlister_takes_the_spot(self):
@@ -419,7 +425,7 @@ class TestNextGameButtonsOnSummary:
         users = [types.SimpleNamespace(id=str(i)) for i in range(8)]
         cog = _Cog(_Store(count=5), stored_ids=[u.id for u in users])
         cog.last_roster = users
-        return NextGameView(cog), users
+        return NextGameView(cog.lobby_for), users
 
     def test_sit_out_and_new_teams_swap_in_the_waitlister(self):
         view, users = self._view()
@@ -427,7 +433,7 @@ class TestNextGameButtonsOnSummary:
         asyncio.run(view.sit_out.callback(_Interaction(user_id="3")))
         interaction = _Interaction()
         asyncio.run(view.new_teams.callback(interaction))
-        assert [u.id for u in view.cog.promoted] == ["101"]
+        assert [u.id for u in view.lobby_for(None).promoted] == ["101"]
         assert not interaction.message.deleted  # the summary stays
 
     def test_only_players_on_the_roster_may_re_team(self):
@@ -435,7 +441,7 @@ class TestNextGameButtonsOnSummary:
         interaction = _Interaction(user_id="stranger")
         asyncio.run(view.new_teams.callback(interaction))
         assert "Only a player" in interaction.response.message
-        assert view.cog.reposted is None
+        assert view.lobby_for(None).reposted is None
 
 
 class _MetaStore(_Store):
@@ -455,8 +461,9 @@ class TestJoinButton:
     unnoticed again."""
 
     def test_join_queues_the_player_and_adopts_the_message(self):
-        cog = object.__new__(Matchmaking)
+        cog = object.__new__(Lobby)
         cog.store, cog.queue, cog.joined_at = _MetaStore(), {}, {}
+        cog.config, cog.lobby_for = GuildConfig(), lambda _guild: cog
         cog.queue_message = None
         cog._players = lambda: []  # no ratings to look up
         interaction = _Interaction(user_id=1)

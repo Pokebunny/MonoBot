@@ -3,7 +3,7 @@ import datetime
 import pytest
 from models.replay import MatchPlayer, MonobattleMatch
 from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, RatingBook
-from services.storage import MatchStore, content_key, hash_replay
+from services.storage import MatchStore, combined_game_count, combined_unit_records, content_key, hash_replay
 
 BASE = datetime.datetime(2026, 7, 17, 12, 0, tzinfo=datetime.timezone.utc)
 
@@ -200,6 +200,21 @@ def test_unit_records(store):
     # 4 players per pick per match: Zergling team won twice, lost once.
     assert records["Zergling"] == [8, 4]
     assert records["Marine"] == [4, 8]
+
+
+def test_combined_unit_records_count_a_shared_game_once(store, tmp_path):
+    """Pub stats pool every community with the pub archive, which also holds
+    the home ladder's older games — a game in two stores counts once, as the
+    first store has it (there, a confirmation the snapshot never saw)."""
+    pubs = MatchStore(str(tmp_path / "pubs.db"))
+    store.ingest(_match(winning_team=1, played_at=_at(0)), hash_replay(b"shared"))
+    store.ingest(_match(winning_team=2, played_at=_at(20)), hash_replay(b"ladder-only"))
+    pubs.ingest(_match(winning_team=2, played_at=_at(0)), hash_replay(b"shared-snapshot"))
+    pubs.ingest(_match(winning_team=1, played_at=_at(40)), hash_replay(b"pub-only"))
+    records = combined_unit_records([store, pubs], MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
+    assert records["Zergling"] == [8, 4]  # three games, not four; the shared one read from `store`
+    assert combined_game_count([store, pubs]) == 3
+    pubs.close()
 
 
 def test_player_records_by(store):

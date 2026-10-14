@@ -5,9 +5,12 @@ import os
 
 import converters
 import discord
+from community import Communities, NotACommunity
 from context import MonoContext
 from discord.ext import commands
 from dotenv import load_dotenv
+from resources.config import CONFIG
+from services import achievements
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +35,13 @@ cog_files = [
 
 class MonoBot(commands.Bot):
     async def setup_hook(self):
+        # Before the cogs: every one of them reads its server's community.
+        self.communities = Communities(CONFIG)
+        for community in self.communities.all():
+            # First run over an existing history: grant the career backfill
+            # silently so the first upload doesn't announce years of badges.
+            achievements.ensure_seeded(community.store, community.achievements)
+        logger.info("Serving %d communities", len(self.communities.all()))
         for cog in cog_files:
             await self.load_extension("cogs." + cog)
             logger.info("%s cog loaded", cog)
@@ -57,7 +67,7 @@ async def on_command_error(ctx, error):
 
     logger.warning("Command error in %s: %s", ctx.command, error)
 
-    if isinstance(error, (commands.CommandOnCooldown, commands.MissingRole)):
+    if isinstance(error, (commands.CommandOnCooldown, commands.MissingRole, NotACommunity)):
         # Only the person who tripped it needs to know. Ephemeral only takes
         # on a slash invocation; a text command still replies in the channel.
         embed = discord.Embed(title=str(error), color=0xEA7D07)

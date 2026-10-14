@@ -1,9 +1,9 @@
 """Non-secret, per-deployment config loaded at import.
 
 `config.json` (gitignored) holds deployment-specific values like the replays
-channel ID. Secrets stay in `.env`; this file is for things safe to read but
-specific to one server. Missing file -> permissive defaults so a fresh
-checkout still boots.
+channel ID. Its top-level fields are the home community's; each server under
+`guilds` is a separate community (see community.py). Secrets stay in `.env`.
+Missing file -> permissive defaults so a fresh checkout still boots.
 """
 
 import logging

@@ -96,3 +96,7 @@ replay can regenerate. Nightly copy to S3:
 ```
 
 `sqlite3 .backup` is safe against a live writer (plain `cp` is not).
+
+Each extra community (a server under `guilds` in config.json) has its own
+database at `main/resources/guilds/<guild_id>/monobot.db`, created on first
+start — back those up the same way.

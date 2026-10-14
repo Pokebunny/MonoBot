@@ -10,9 +10,9 @@ import types
 
 import pytest
 from cogs.leaderboard import Leaderboard
+from conftest import community_cog
 from models.replay import MatchPlayer, MonobattleMatch
 from services import identity, match_embeds
-from services.rating import RatingCache
 from services.storage import MatchStore, hash_replay
 
 BASE = datetime.datetime(2026, 7, 17, 12, 0, tzinfo=datetime.timezone.utc)
@@ -51,8 +51,7 @@ def cog(tmp_path):
     store = MatchStore(str(tmp_path / "profile.db"))
     for i in range(6):
         store.ingest(_match(i), hash_replay(f"g{i}".encode()))
-    client = types.SimpleNamespace(match_store=store, rating_cache=RatingCache(store))
-    yield Leaderboard(client)
+    yield community_cog(Leaderboard, store)
     store.close()
 
 

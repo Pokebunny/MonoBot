@@ -258,7 +258,7 @@ class Leaderboard(commands.Cog):
         help="show the rating leaderboard — add a race (!leaderboard zerg), a season (s1), 'career' for all-time, "
         "or 'units' to rate unit picks",
     )
-    @commands.cooldown(1, 5, commands.BucketType.channel)
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def leaderboard(self, ctx, *, query: str = ""):
         if any(token.lower() in _UNIT_WORDS for token in query.split()):
             await self._unit_board(ctx, query)
@@ -530,7 +530,7 @@ class Leaderboard(commands.Cog):
         view.message = await ctx.send(embed=view.embed(), view=view, ephemeral=private)
 
     @commands.hybrid_command(help="browse recent matches (◀ steps back in time) — optionally a player's")
-    @commands.cooldown(1, 5, commands.BucketType.channel)
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def last(self, ctx, *, player: str | None = None):
         matches = self.store.all_matches()  # oldest first
         if player:
@@ -629,7 +629,7 @@ class Leaderboard(commands.Cog):
         return self.duos_cache.records().get(pair)
 
     @commands.hybrid_command(aliases=["mvps"], help="rank players by how often they're the MVP")
-    @commands.cooldown(1, 5, commands.BucketType.channel)
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def mvprate(self, ctx, min_games: int = MVP_RATE_MIN_GAMES):
         # Career, not seasonal: MVP rate is a slow stat and a season's worth of
         # games is far too few for it to mean anything.
@@ -653,7 +653,7 @@ class Leaderboard(commands.Cog):
         aliases=["pairs", "duo"],
         help="rank the best pairs of teammates — !duos raw and !duos synergy sort other ways",
     )
-    @commands.cooldown(1, 5, commands.BucketType.channel)
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def duos(self, ctx, *, query: str = ""):
         min_games, sort = self._parse_duo_query(query)
         rows = [d for d in self.duos_cache.records().values() if d.games >= min_games]
@@ -691,7 +691,7 @@ class Leaderboard(commands.Cog):
         view.message = await ctx.send(embed=view.embed(), view=view if view.multipage else None)
 
     @commands.hybrid_command(help="rate unit picks, adjusted for who picked them — same as !leaderboard units")
-    @commands.cooldown(1, 5, commands.BucketType.channel)
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def unitstats(self, ctx, *, query: str = ""):
         await self._unit_board(ctx, query)
 
@@ -726,7 +726,7 @@ class Leaderboard(commands.Cog):
         return min_games, raw
 
     @commands.hybrid_command(help="show the current ladder season")
-    @commands.cooldown(1, 5, commands.BucketType.channel)
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def season(self, ctx):
         current = self.store.current_season()
         played = len(self.store.season_matches(current))
@@ -790,7 +790,7 @@ class Leaderboard(commands.Cog):
         return f"Season {len(self.store.seasons()) + 1}"
 
     @commands.hybrid_command(help="how many matches are stored")
-    @commands.cooldown(1, 5, commands.BucketType.channel)
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def matchcount(self, ctx):
         await ctx.send(f"{self.store.match_count()} matches stored.")
 

@@ -68,7 +68,7 @@ class Recap(commands.Cog):
         aliases=["session", "nightly"],
         help="recap the latest session: records, rating changes, MVPs and achievements (◀ for older sessions)",
     )
-    @commands.cooldown(1, 10, commands.BucketType.channel)
+    @commands.cooldown(1, 10, commands.BucketType.user)
     async def recap(self, ctx):
         # Sessions with no decided game have nothing to report, so they get
         # no page rather than a blank one.

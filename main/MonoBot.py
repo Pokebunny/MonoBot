@@ -58,8 +58,10 @@ async def on_command_error(ctx, error):
     logger.warning("Command error in %s: %s", ctx.command, error)
 
     if isinstance(error, (commands.CommandOnCooldown, commands.MissingRole)):
+        # Only the person who tripped it needs to know. Ephemeral only takes
+        # on a slash invocation; a text command still replies in the channel.
         embed = discord.Embed(title=str(error), color=0xEA7D07)
-        await ctx.send(embed=embed)
+        await ctx.send(embed=embed, ephemeral=True)
     else:
         embed = discord.Embed(title="Something went wrong!", color=0xEA7D07)
         embed.add_field(name="Error:", value=str(error), inline=True)

@@ -356,7 +356,7 @@ class Replays(commands.Cog):
         await ctx.send(f"Backfill of {target.mention} done — {summary}.")
 
     @commands.hybrid_command(help="list stored matches that still need a winner confirmed")
-    @commands.cooldown(1, 5, commands.BucketType.channel)
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def pending(self, ctx):
         pending = self.store.pending_confirmations(MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
         if not pending:

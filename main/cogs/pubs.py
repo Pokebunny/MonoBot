@@ -23,7 +23,7 @@ class Pubs(commands.Cog):
         self.store = MatchStore(PUBS_DB_PATH)
 
     @commands.hybrid_command(help="unit win rates across the pub (non-community) archive")
-    @commands.cooldown(1, 5, commands.BucketType.channel)
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def pubunitstats(self, ctx, min_games: int = 10):
         records = self.store.unit_records(MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
         if not records:
@@ -34,7 +34,7 @@ class Pubs(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(help="how many pub games are archived")
-    @commands.cooldown(1, 5, commands.BucketType.channel)
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def pubcount(self, ctx):
         await ctx.send(f"{self.store.match_count()} pub games archived.")
 

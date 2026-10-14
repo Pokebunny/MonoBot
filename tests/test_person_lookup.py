@@ -216,3 +216,25 @@ def test_h2h_asks_about_a_shared_first_name_before_the_second(store):
     ctx = _Ctx()
     _run(cog.h2h.callback(cog, ctx, "Twin", "ghost"))
     assert len(ctx.sent) == 1 and "which one?" in ctx.sent[0].content
+
+
+# -- !link -------------------------------------------------------------------
+
+
+def test_link_drops_angle_brackets_copied_from_the_usage_text(store):
+    """`!link <your SC2 name>` gets typed literally; SC2 names can't hold
+    < or >, so they're dropped rather than stored as part of the name."""
+    _play(store, [("Rain", "h-rain"), *_filler(5)], 0)
+    cog = _identity_cog(store)
+    ctx = _Ctx()
+    _run(cog.link.callback(cog, ctx, sc2_name="<Rain>"))
+    assert store.handles_for("999") == ["h-rain"]
+    _run(cog.unlink.callback(cog, ctx, sc2_name="<Rain>"))
+    assert store.handles_for("999") == []
+
+
+def test_link_with_only_brackets_shows_the_usage(store):
+    cog = _identity_cog(store)
+    ctx = _Ctx()
+    _run(cog.link.callback(cog, ctx, sc2_name="<>"))
+    assert "Usage" in ctx.sent[0].content

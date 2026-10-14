@@ -65,6 +65,13 @@ class Person:
         return _WHY[self.via]
 
 
+def clean_name(text: str | None) -> str:
+    """A typed SC2 name without angle brackets. SC2 names can't contain them,
+    but the usage text writes `!link <your SC2 name>` and people copy the
+    brackets in."""
+    return (text or "").replace("<", "").replace(">", "").strip()
+
+
 def resolve(store, query: str) -> list[Person]:
     """People matching a typed name, best match first. Empty if nothing
     matches. Several results mean the name is shared; check `ambiguous` before

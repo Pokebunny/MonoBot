@@ -170,7 +170,7 @@ class Identity(CommunityCog):
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def link(self, ctx, *, sc2_name: str):
         self = self.at(ctx)
-        sc2_name = sc2_name.strip()
+        sc2_name = identity.clean_name(sc2_name)
         if not sc2_name:
             await ctx.send("Usage: `!link <your SC2 name>`")
             return
@@ -254,7 +254,10 @@ class Identity(CommunityCog):
     @is_bot_admin()
     async def linkuser(self, ctx, member: discord.Member, *, sc2_name: str):
         self = self.at(ctx)
-        sc2_name = sc2_name.strip()
+        sc2_name = identity.clean_name(sc2_name)
+        if not sc2_name:
+            await ctx.send("Usage: `!linkuser @member <their SC2 name>`")
+            return
         discord_id = str(member.id)
         candidates, free = self._free_candidates(sc2_name)
         if not candidates:
@@ -350,8 +353,8 @@ class Identity(CommunityCog):
 
     def _unlink_member(self, discord_id: str, display_name: str, sc2_name: str | None) -> str:
         """Unlink one name from a member, or all of them; returns the reply."""
+        sc2_name = identity.clean_name(sc2_name)
         if sc2_name:
-            sc2_name = sc2_name.strip()
             if self.store.unlink_player(discord_id, sc2_name):
                 return f"Unlinked **{sc2_name}** from {display_name}."
             return f"{display_name} doesn't have **{sc2_name}** linked."
@@ -366,10 +369,11 @@ class Identity(CommunityCog):
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def unlink(self, ctx, *, sc2_name: str):
         self = self.at(ctx)
-        if self.store.unlink_player(str(ctx.author.id), sc2_name.strip()):
-            await ctx.send(f"Unlinked **{sc2_name.strip()}**.")
+        sc2_name = identity.clean_name(sc2_name)
+        if self.store.unlink_player(str(ctx.author.id), sc2_name):
+            await ctx.send(f"Unlinked **{sc2_name}**.")
         else:
-            await ctx.send(f"You don't have **{sc2_name.strip()}** linked.")
+            await ctx.send(f"You don't have **{sc2_name}** linked.")
 
     def _accounts_embed(self, discord_id: str, title: str) -> discord.Embed | None:
         handles = self.store.handles_for(discord_id)

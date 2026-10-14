@@ -87,12 +87,13 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   their games with that unit, where only the focal player's slot is a
   per-unit entry and the other seven enter at their overall rating — fully
   per-unit lineups (the race-board way) would be too noisy at a handful of
-  games per player per unit. All-time unless a season is named. A cannon
-  rush (`match_players.cannon_rush`, set by the parser) is one more board,
-  `CannonRush`, that a rushing player's game counts on *as well as* their
-  pick's (`rating.boards_of`) — never instead of it.
-  `scripts/backfill_cannon_rush.py` fills the flag in for old games without
-  touching anything else they store.
+  games per player per unit. All-time unless a season is named. Rushes are
+  boards too: a cannon rush or a spine rush (`match_players.cannon_rush`/
+  `spine_rush`, set by the parser; thresholds and why in
+  `replay_parser.py`) adds a `CannonRush`/`SpineRush` board that the game
+  counts on *as well as* the rusher's pick (`rating.boards_of`) — never
+  instead of it. `scripts/backfill_rushes.py` fills the flags in for old
+  games without touching anything else they store.
 - **Achievements** are derived from history but *held* in the
   `achievement_unlocks` ledger, which is reconciled rather than append-only:
   `achievements.reconcile` grants and revokes, and the startup hook announces

@@ -67,7 +67,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS match_players (
     orbitals INTEGER,
     lost_all_bases INTEGER,
     cannon_rush INTEGER,
+    spine_rush INTEGER,
     unit_counts TEXT NOT NULL,
     kills_by_unit TEXT NOT NULL DEFAULT '{}'
 );
@@ -412,6 +413,13 @@ def _migration_14_cannon_rush(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE match_players ADD COLUMN cannon_rush INTEGER")
 
 
+def _migration_15_spine_rush(conn: sqlite3.Connection) -> None:
+    """The Zerg counterpart of cannon_rush, with the same NULL meaning."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(match_players)")}
+    if "spine_rush" not in cols:
+        conn.execute("ALTER TABLE match_players ADD COLUMN spine_rush INTEGER")
+
+
 _MIGRATIONS = {
     1: _migration_1_content_key,
     2: _migration_2_replay_channels,
@@ -427,6 +435,7 @@ _MIGRATIONS = {
     12: _migration_12_kills_by_unit,
     13: _migration_13_soft_season_reset,
     14: _migration_14_cannon_rush,
+    15: _migration_15_spine_rush,
 }
 
 
@@ -543,8 +552,9 @@ class MatchStore:
             """INSERT INTO match_players
                (match_id, name, toon_handle, team, race, pick, repick_used, repick_from, resources_killed,
                 econ_killed, tech_killed, resources_lost, resources_floated, drop_commands, static_defense,
-                bases_before_unit, orbitals, lost_all_bases, cannon_rush, unit_counts, kills_by_unit)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                bases_before_unit, orbitals, lost_all_bases, cannon_rush, spine_rush, unit_counts,
+                kills_by_unit)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     match_id,
@@ -566,6 +576,7 @@ class MatchStore:
                     p.orbitals,
                     None if p.lost_all_bases is None else int(p.lost_all_bases),
                     None if p.cannon_rush is None else int(p.cannon_rush),
+                    None if p.spine_rush is None else int(p.spine_rush),
                     json.dumps(p.unit_counts),
                     json.dumps(p.kills_by_unit),
                 )
@@ -645,18 +656,22 @@ class MatchStore:
         self._conn.commit()
         self.change_count += 1
 
-    def set_cannon_rush(self, file_hash: str, rushed: dict[str, bool | None]) -> bool:
-        """Backfill cannon_rush (by toon handle) on the game stored from this
-        exact replay file, touching nothing else about it — unlike
-        refresh_parse, which would also land every other parser change since
-        the game was stored. False if the file isn't stored. See
-        scripts/backfill_cannon_rush.py."""
+    def set_rushes(self, file_hash: str, rushes: dict[str, tuple[bool | None, bool | None]]) -> bool:
+        """Backfill (cannon_rush, spine_rush), by toon handle, on the game
+        stored from this exact replay file, touching nothing else about it --
+        unlike refresh_parse, which would also land every other parser change
+        since the game was stored. False if the file isn't stored. See
+        scripts/backfill_rushes.py."""
         row = self._conn.execute("SELECT id FROM matches WHERE file_hash = ?", (file_hash,)).fetchone()
         if row is None:
             return False
+
+        def flag(value: bool | None) -> int | None:
+            return None if value is None else int(value)
+
         self._conn.executemany(
-            "UPDATE match_players SET cannon_rush = ? WHERE match_id = ? AND toon_handle = ?",
-            [(None if r is None else int(r), row["id"], handle) for handle, r in rushed.items()],
+            "UPDATE match_players SET cannon_rush = ?, spine_rush = ? WHERE match_id = ? AND toon_handle = ?",
+            [(flag(cannon), flag(spine), row["id"], handle) for handle, (cannon, spine) in rushes.items()],
         )
         self._conn.commit()
         self.change_count += 1
@@ -1304,6 +1319,7 @@ class MatchStore:
                 orbitals=p["orbitals"],
                 lost_all_bases=None if p["lost_all_bases"] is None else bool(p["lost_all_bases"]),
                 cannon_rush=None if p["cannon_rush"] is None else bool(p["cannon_rush"]),
+                spine_rush=None if p["spine_rush"] is None else bool(p["spine_rush"]),
                 unit_counts=json.loads(p["unit_counts"]),
                 kills_by_unit=json.loads(p["kills_by_unit"]),
             )

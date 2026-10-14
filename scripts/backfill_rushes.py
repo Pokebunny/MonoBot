@@ -1,13 +1,13 @@
-"""One-shot backfill: record who cannon rushed in games stored before
-match_players.cannon_rush existed.
+"""One-shot backfill: record who cannon rushed and who spine rushed in games
+stored before match_players.cannon_rush/spine_rush existed.
 
-Re-parses each archived replay and sets ONLY that column on the game stored
-from the same file (matched by file hash). Everything else stays as stored —
-scripts/reparse_stored.py would also apply every other parser change since
-each game was ingested, which can move winners and picks.
+Re-parses each archived replay and sets ONLY those two columns on the game
+stored from the same file (matched by file hash). Everything else stays as
+stored -- scripts/reparse_stored.py would also apply every other parser
+change since each game was ingested, which can move winners and picks.
 
 Usage (from repo root):
-    uv run python scripts/backfill_cannon_rush.py [archive_dir]
+    uv run python scripts/backfill_rushes.py [archive_dir]
 
 archive_dir defaults to main/resources/replays (where the bot archives
 uploads). Set MONOBOT_DB to backfill a database other than the default one.
@@ -33,7 +33,7 @@ def main() -> None:
     print(f"{len(paths)} archived replays")
 
     store = MatchStore(os.environ["MONOBOT_DB"]) if os.environ.get("MONOBOT_DB") else MatchStore()
-    updated = not_stored = failed = rushes = 0
+    updated = not_stored = failed = cannon = spine = 0
     for i, path in enumerate(paths):
         with open(path, "rb") as f:
             file_hash = storage.hash_replay(f.read())
@@ -43,15 +43,16 @@ def main() -> None:
             print(f"  parse failed: {os.path.basename(path)}: {e}")
             failed += 1
             continue
-        if store.set_cannon_rush(file_hash, {p.toon_handle: p.cannon_rush for p in match.players}):
+        if store.set_rushes(file_hash, {p.toon_handle: (p.cannon_rush, p.spine_rush) for p in match.players}):
             updated += 1
-            rushes += sum(1 for p in match.players if p.cannon_rush)
+            cannon += sum(1 for p in match.players if p.cannon_rush)
+            spine += sum(1 for p in match.players if p.spine_rush)
         else:
             not_stored += 1
         if (i + 1) % 100 == 0:
             print(f"  {i + 1}/{len(paths)}...")
 
-    print(f"updated={updated} not_stored={not_stored} failed={failed} cannon_rushes={rushes}")
+    print(f"updated={updated} not_stored={not_stored} failed={failed} cannon_rushes={cannon} spine_rushes={spine}")
 
 
 if __name__ == "__main__":

@@ -62,6 +62,20 @@ _STATIC_DEFENSE = {
 # defense at bases taken mid-game, so the window keeps those out.
 _CANNON_RUSH_WINDOW_SECONDS = 240
 
+# The Zerg version: a spine or spore crawler started within this window, at
+# least _CRAWLER_RUSH_REACH of the way from the builder's start to an enemy's
+# (crawlers need creep, so this means a proxy hatchery). Before 8:00 spines
+# sit either at home (under ~40% of the way) or at an enemy base (70%+), and
+# every first forward spine lands by 6:00 or after 7:00 -- the late ones are
+# bases taken mid-game. The reach is stricter than the cannons' halfway mark
+# because early hatcheries 30-60% across are expansions (1 in 101 was
+# followed by a rush), and a spore at one of those is defense; 60% keeps the
+# proxy spores (hatch 70-95% across, spores instead of spines) and loses 3
+# borderline spine games of 125.
+_CRAWLER_RUSH_WINDOW_SECONDS = 360
+_CRAWLER_RUSH_REACH = 0.6
+_RUSH_CRAWLERS = {"SpineCrawler", "SporeCrawler"}
+
 # Units that never count toward a player's mono pick: workers, map objects,
 # spawned sub-units, and other free/incidental units.
 _NOISE_PREFIXES = ("Beacon", "Changeling", "Locust", "Broodling")
@@ -247,6 +261,7 @@ class _PlayerTally:
         self.kills_by_unit = Counter()
         self.home: tuple[float, float] | None = None  # where their starting town hall spawned
         self.cannon_starts: list[tuple[int, float, float]] = []  # (second, x, y) per cannon begun
+        self.crawler_starts: list[tuple[int, float, float]] = []  # same, per spine/spore crawler
 
     def race(self, fallback: str) -> str:
         if self.worker_races:
@@ -281,16 +296,38 @@ def _detect_pick(tally: _PlayerTally, play_race: str) -> str | None:
     return pick
 
 
-def _cannon_rushed(tally: _PlayerTally, enemy_homes: list[tuple[float, float]], game_start: int) -> bool | None:
-    """Whether the player cannon rushed (see _CANNON_RUSH_WINDOW_SECONDS).
-    None when either side's starting base is unknown, so there's nothing to
+def _rushed(
+    tally: _PlayerTally,
+    starts: list[tuple[int, float, float]],
+    enemy_homes: list[tuple[float, float]],
+    game_start: int,
+    window: int,
+    reach: float,
+) -> bool | None:
+    """Whether any of `starts` (second, x, y) went down within `window` of
+    the pick phase and more than `reach` of the way from the player's own
+    starting base to the nearest enemy one (0.5 = nearer the enemy). None
+    when either side's starting base is unknown, so there's nothing to
     measure against."""
     if tally.home is None or not enemy_homes:
         return None
-    return any(
-        second - game_start <= _CANNON_RUSH_WINDOW_SECONDS
-        and min(math.dist(home, (x, y)) for home in enemy_homes) < math.dist(tally.home, (x, y))
-        for second, x, y in tally.cannon_starts
+    for second, x, y in starts:
+        own = math.dist(tally.home, (x, y))
+        enemy = min(math.dist(home, (x, y)) for home in enemy_homes)
+        if second - game_start <= window and own > reach * (own + enemy):
+            return True
+    return False
+
+
+def _cannon_rushed(tally: _PlayerTally, enemy_homes: list[tuple[float, float]], game_start: int) -> bool | None:
+    """See _CANNON_RUSH_WINDOW_SECONDS: nearer an enemy's start than one's own."""
+    return _rushed(tally, tally.cannon_starts, enemy_homes, game_start, _CANNON_RUSH_WINDOW_SECONDS, 0.5)
+
+
+def _spine_rushed(tally: _PlayerTally, enemy_homes: list[tuple[float, float]], game_start: int) -> bool | None:
+    """See _CRAWLER_RUSH_WINDOW_SECONDS."""
+    return _rushed(
+        tally, tally.crawler_starts, enemy_homes, game_start, _CRAWLER_RUSH_WINDOW_SECONDS, _CRAWLER_RUSH_REACH
     )
 
 
@@ -399,10 +436,13 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
             _credit_kill(tallies, event, game_start)
             continue
         if event_name == "UnitInitEvent":
-            # A building begun — only cannons matter, and where they went.
+            # A building begun -- only rush structures matter, and where they went.
             owner = event.unit.owner
-            if owner is not None and event.unit.name == "PhotonCannon" and event.second >= game_start:
-                tallies[owner.name].cannon_starts.append((event.second, event.x, event.y))
+            if owner is not None and event.second >= game_start:
+                if event.unit.name == "PhotonCannon":
+                    tallies[owner.name].cannon_starts.append((event.second, event.x, event.y))
+                elif event.unit.name in _RUSH_CRAWLERS:
+                    tallies[owner.name].crawler_starts.append((event.second, event.x, event.y))
             continue
         # UnitBornEvent: instantly-created units. UnitDoneEvent: gradually
         # created ones (warp-ins, morph cocoons, archon merges, buildings).
@@ -614,6 +654,7 @@ def parse_replay(path: str) -> MonobattleMatch:
             if pick == "Queen":
                 clocks.append(tally.first_queen_second)
             cutoff = min((s for s in clocks if s is not None), default=None)
+            enemy_homes = [home for (t, _), home in homes.items() if t != team.number and home is not None]
             players.append(
                 MatchPlayer(
                     name=p.name,
@@ -636,11 +677,8 @@ def parse_replay(path: str) -> MonobattleMatch:
                     bases_before_unit=sum(1 for s in tally.base_times if cutoff is None or s < cutoff),
                     orbitals=tally.orbitals,
                     lost_all_bases=tally.lost_all_bases,
-                    cannon_rush=_cannon_rushed(
-                        tally,
-                        [home for (t, _), home in homes.items() if t != team.number and home is not None],
-                        game_start,
-                    ),
+                    cannon_rush=_cannon_rushed(tally, enemy_homes, game_start),
+                    spine_rush=_spine_rushed(tally, enemy_homes, game_start),
                     unit_counts=dict(tally.units),
                 )
             )

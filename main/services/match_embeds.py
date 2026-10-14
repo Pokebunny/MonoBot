@@ -11,7 +11,7 @@ from services.achievements import RARITIES, RARITY_EMOJI, AchievementSpec, Earne
 from services.achievements import SPECS as ACHIEVEMENT_SPECS
 from services.achievements import SPECS_BY_KEY as ACHIEVEMENT_SPECS_BY_KEY
 from services.awards import SPECS, game_awards, match_awards, mvp_outkilled_team
-from services.rating import MIN_RANKED_GAMES
+from services.rating import CANNON_RUSH, MIN_RANKED_GAMES, SPINE_RUSH
 
 ACCENT = 0x2ECC71
 WARNING = 0xE67E22
@@ -143,6 +143,10 @@ def page_count(rows: list) -> int:
     return max(1, (len(rows) + BOARD_PAGE_SIZE - 1) // BOARD_PAGE_SIZE)
 
 
+# What a rush board's games are, for its footer.
+RUSH_GAMES = {CANNON_RUSH: "Games where they cannon rushed", SPINE_RUSH: "Games where they spine rushed"}
+
+
 def leaderboard(
     ratings: list[PlayerRating],
     page: int = 0,
@@ -185,7 +189,8 @@ def leaderboard(
     show_all = f"!leaderboard {subject.lower()} 1" if subject else "!leaderboard 1"
     more = f" · {hidden} more below the minimum ({show_all} shows all)" if hidden else ""
     closed = "Final standings · " if final else ""
-    how = f"\nGames on {pick} only, against everyone else's overall rating" if pick else ""
+    games = RUSH_GAMES.get(pick, f"Games on {pick} only")
+    how = f"\n{games}, against everyone else's overall rating" if pick else ""
     embed.set_footer(text=f"{closed}{note}Page {page + 1}/{pages}{more}{how}")
     return embed
 

@@ -114,6 +114,9 @@ class MatchPlayer(BaseModel):
     # alongside the pick, never instead of it. None = not recorded (parsed
     # before it existed) or no starting bases to measure from.
     cannon_rush: bool | None = None
+    # The Zerg version: a spine or spore crawler started early, well toward an
+    # enemy's base (replay_parser._CRAWLER_RUSH_WINDOW_SECONDS). Same rules.
+    spine_rush: bool | None = None
     unit_counts: dict[str, int]  # normalized army-unit production counts
     # Enemy value destroyed, keyed by which of this player's unit types killed
     # it (their pick, but also cannons, workers, and spawned children like

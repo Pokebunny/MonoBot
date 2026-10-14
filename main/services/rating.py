@@ -386,23 +386,28 @@ def season_start(store, season, by_race: bool = False) -> RatingBook:
     return book
 
 
-# The board a cannon rush is rated on, beside the rusher's own pick (see
-# MatchPlayer.cannon_rush). Spelled like a pick so it's typed and shown like one.
+# The boards rushes are rated on, beside the rusher's own pick (see
+# MatchPlayer.cannon_rush/spine_rush). Spelled like picks so they're typed and
+# shown like one.
 CANNON_RUSH = "CannonRush"
+SPINE_RUSH = "SpineRush"
+RUSH_BOARDS = (CANNON_RUSH, SPINE_RUSH)
 
 
 def boards_of(player) -> list[str]:
-    """The unit boards one player's game counts on: their pick, plus
-    CannonRush if they rushed. The rush is extra, never a replacement."""
+    """The unit boards one player's game counts on: their pick, plus a rush
+    board for each rush. A rush is extra, never a replacement."""
     boards = [player.pick] if player.pick else []
     if player.cannon_rush:
         boards.append(CANNON_RUSH)
+    if player.spine_rush:
+        boards.append(SPINE_RUSH)
     return boards
 
 
 def pick_ratings(book: RatingBook, matches, picks: set[str] | None = None) -> dict[str, list[PlayerRating]]:
     """Everyone's rating on each unit, best first: how each player does when
-    they field it. Keyed by pick (and CANNON_RUSH, see boards_of); `picks` limits the walk to those units
+    they field it. Keyed by pick (and the RUSH_BOARDS, see boards_of); `picks` limits the walk to those units
     (None = every unit). `book` is the overall walk to replay `matches` on
     top of (an empty book, or a season_start).
 

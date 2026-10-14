@@ -755,16 +755,18 @@ def test_kills_by_unit_column_is_added_to_an_older_db(tmp_path):
     reopened.close()
 
 
-def test_cannon_rush_round_trips_and_backfills(tmp_path):
-
+def test_rush_flags_round_trip_and_backfill(tmp_path):
     store = MatchStore(str(tmp_path / "c.db"))
     match = _match()
     match.players[0].cannon_rush = True
+    match.players[1].spine_rush = True
     store.ingest(match, "h1")
     ((_, stored),) = store.all_matches()
-    assert stored.players[0].cannon_rush is True and stored.players[1].cannon_rush is None
-    assert store.set_cannon_rush("h1", {p.toon_handle: False for p in stored.players})
+    first, second = stored.players[0], stored.players[1]
+    assert (first.cannon_rush, first.spine_rush, second.cannon_rush, second.spine_rush) == (True, None, None, True)
+    assert store.set_rushes("h1", {p.toon_handle: (False, p is first) for p in stored.players})
     ((_, stored),) = store.all_matches()
     assert all(p.cannon_rush is False for p in stored.players)
-    assert not store.set_cannon_rush("nope", {})
+    assert [p.spine_rush for p in stored.players[:2]] == [True, False]
+    assert not store.set_rushes("nope", {})
     store.close()

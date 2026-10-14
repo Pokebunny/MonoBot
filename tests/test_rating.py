@@ -391,3 +391,16 @@ def test_cannon_rush_is_typed_like_a_unit():
     picks = {"Zealot", CANNON_RUSH}
     assert _find_pick("cannon rush s3", picks) == (CANNON_RUSH, "s3")
     assert _find_pick("cannons", picks) == (CANNON_RUSH, "")
+
+
+def test_a_spine_rush_gets_its_own_board_too():
+    from cogs.leaderboard import _find_pick
+    from services.rating import RUSH_BOARDS, SPINE_RUSH, pick_ratings
+
+    match = _picked(1, {"A1": "Roach"})
+    match.players[0].spine_rush = True
+    boards = pick_ratings(RatingBook(), [match])
+    assert [r.handle for r in boards[SPINE_RUSH]] == ["A1"] and "A1" in {r.handle for r in boards["Roach"]}
+    picks = {"Roach", *RUSH_BOARDS}
+    assert _find_pick("spine rush", picks) == (SPINE_RUSH, "")
+    assert _find_pick("spines", picks) == (SPINE_RUSH, "")

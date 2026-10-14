@@ -23,7 +23,7 @@ import discord
 from discord.ext import commands, tasks
 from models.config import BotConfig, GuildConfig
 from services.achievements import AchievementCache
-from services.rating import DuoCache, RatingCache, UnitCache
+from services.rating import DuoCache, PickCache, RatingCache, UnitCache
 from services.storage import DEFAULT_DB_PATH, MatchStore
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,7 @@ class Community:
         self.achievements = AchievementCache(store)
         self.duos = DuoCache(store)
         self.units = UnitCache(store)
+        self.pick_boards = PickCache(store)
 
     def watched_channels(self) -> set[int]:
         """Channels watched for replays: the runtime !watchreplays set plus
@@ -150,6 +151,7 @@ class CommunityCog(commands.Cog):
         bound.achievements = community.achievements
         bound.duos = community.duos
         bound.units = community.units
+        bound.pick_boards = community.pick_boards
         return bound
 
     async def cog_check(self, ctx) -> bool:

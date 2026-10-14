@@ -304,7 +304,7 @@ def test_pick_board_rates_only_games_on_that_unit():
     from services.rating import pick_ratings
 
     matches = [_picked(1, {"A1": "Marine"}, 0), _picked(2, {"A1": "Roach"}, 1), _picked(2, {"B1": "Marine"}, 2)]
-    board = pick_ratings(RatingBook(), matches, "Marine")
+    board = pick_ratings(RatingBook(), matches, {"Marine"})["Marine"]
     assert {r.handle: (r.wins, r.losses) for r in board} == {"A1": (1, 0), "B1": (1, 0)}
     assert all(r.race is None for r in board)
 
@@ -317,8 +317,8 @@ def test_pick_board_scores_against_overall_ratings():
     warmup = [_picked(1, {}, d) for d in range(5)]  # A-team piles up wins
     upset = _picked(2, {"B1": "Marine"}, 10)
     fair = _picked(1, {"A1": "Marine"}, 10)
-    beat_strong = pick_ratings(RatingBook(), warmup + [upset], "Marine")[0]
-    beat_fresh = pick_ratings(RatingBook(), [fair], "Marine")[0]
+    beat_strong = pick_ratings(RatingBook(), warmup + [upset])["Marine"][0]
+    beat_fresh = pick_ratings(RatingBook(), [fair])["Marine"][0]
     assert beat_strong.mu - 25 > beat_fresh.mu - 25 > 0
 
 
@@ -327,7 +327,7 @@ def test_pick_board_leaves_the_overall_book_as_a_normal_walk():
 
     matches = [_picked(1, {"A1": "Marine"}, d) for d in range(3)]
     book = RatingBook()
-    pick_ratings(book, matches, "Marine")
+    pick_ratings(book, matches)
     assert book.ratings["A1"].mu == RatingBook.from_matches(matches).ratings["A1"].mu
 
 
@@ -345,7 +345,29 @@ def test_unit_board_title_and_footer_name_the_unit():
     from services.match_embeds import leaderboard
     from services.rating import pick_ratings
 
-    board = pick_ratings(RatingBook(), [_picked(1, {"A1": "WidowMine"})], "WidowMine")
+    board = pick_ratings(RatingBook(), [_picked(1, {"A1": "WidowMine"})])["WidowMine"]
     embed = leaderboard(board, min_games=5, hidden=1, season="All-Time", pick="WidowMine")
     assert embed.title == "WidowMine Leaderboard — All-Time"
     assert "!leaderboard widowmine 1" in embed.footer.text
+
+
+def test_linked_accounts_share_one_entry_per_unit():
+    """An alt's games on a unit land on its owner's entry, not a second row."""
+    from services.rating import pick_ratings
+
+    matches = [_picked(1, {"A1": "Marine"}, 0), _picked(1, {"A2": "Marine"}, 1)]
+    boards = pick_ratings(RatingBook({"A2": "A1"}), matches)
+    assert [(r.handle, r.games) for r in boards["Marine"]] == [("A1", 2)]
+
+
+def test_kings_count_each_persons_number_ones():
+    from services.rating import pick_ratings, unit_kings
+
+    picks = {"A1": "Marine", "A2": "Roach", "B1": "Thor"}
+    matches = [_picked(1, picks, d) for d in range(3)]
+    boards = pick_ratings(RatingBook({"A2": "A1"}), matches)  # A2 is A1's alt
+    kings = unit_kings(boards, min_games=3)
+    held = {handle: sorted(pick for pick, _ in tops) for handle, tops in kings}
+    assert held["A1"] == ["Marine", "Roach"]
+    assert kings[0][0] == "A1"
+    assert held["B1"] == ["Thor"]  # the only Thor player is its #1, wins or not

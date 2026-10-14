@@ -24,7 +24,7 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   would lose the user-written `player_links` table.
 - **Communities**: one ladder per Discord server (`community.py`). Each has
   its own match DB, caches (`RatingCache`/`AchievementCache`/`DuoCache`/
-  `UnitCache`) and config slice; nothing is shared except the pub stats (`cogs/pubs.py`),
+  `UnitCache`/`PickCache`) and config slice; nothing is shared except the pub stats (`cogs/pubs.py`),
   which pool `pubs.db` with every community's DB, deduped by `content_key`. The home
   community is `config.json`'s top-level fields + `resources/monobot.db`;
   each server under `guilds` gets `resources/guilds/<id>/monobot.db`.
@@ -32,7 +32,7 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   makes home serve every unlisted server). Cogs reach data only through their
   server's community: a `CommunityCog` command's first line is
   `self = self.at(ctx)`, which binds a per-call copy holding that community's
-  `store`/`ratings`/`achievements`/`duos`/`units` (helpers and view callbacks
+  `store`/`ratings`/`achievements`/`duos`/`units`/`pick_boards` (helpers and view callbacks
   closing over `self` then read the right ladder); listeners and loops bind
   with `self.at(community)`. Matchmaking keeps a `Lobby` per community and its
   persistent views take `lobby_for(guild)`. Daily jobs use

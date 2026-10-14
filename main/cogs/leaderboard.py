@@ -16,6 +16,7 @@ from services.rating import (
     pick_board,
     season_book,
     unit_baseline,
+    unit_kings,
 )
 from views import ExpiringView, PagedBoardView, person_or_pick
 
@@ -43,6 +44,9 @@ UNIT_MIN_GAMES = 10
 # sort by raw win rate instead of rating.
 _UNIT_WORDS = {"unit", "units", "pick", "picks"}
 _UNIT_RAW_WORDS = {"raw", "winrate", "wins", "rate", "record"}
+
+# Words that turn !leaderboard into the count of unit-board #1s.
+_KING_WORDS = {"kings", "king", "crowns", "crown"}
 
 # Words that turn !leaderboard into one race's board.
 _RACES = {
@@ -274,11 +278,15 @@ class Leaderboard(CommunityCog):
         aliases=["ladder"],
         description="show the rating leaderboard (a race, a unit, a season like s1, career, or units)",
         help="show the rating leaderboard — add a race (!leaderboard zerg), a unit (!leaderboard marine), "
+        "'kings' for who tops the most unit boards, "
         "a season (s1), 'career' for all-time, or 'units' to rate unit picks",
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def leaderboard(self, ctx, *, query: str = ""):
         self = self.at(ctx)
+        if any(token.lower() in _KING_WORDS for token in query.split()):
+            await self._kings_board(ctx, query)
+            return
         if any(token.lower() in _UNIT_WORDS for token in query.split()):
             await self._unit_board(ctx, query)
             return
@@ -304,7 +312,7 @@ class Leaderboard(CommunityCog):
 
         if pick:
             race = None  # the unit already implies one
-            everyone = pick_board(self.store, season, pick)
+            everyone = self.pick_boards.boards().get(pick, []) if career else pick_board(self.store, season, pick)
         else:
             book = self._book_for(season, career, by_race=race is not None)
             everyone = book.leaderboard(min_games=1, race=race)
@@ -726,6 +734,21 @@ class Leaderboard(CommunityCog):
     async def _send_board(self, ctx, view: PagedBoardView):
         """Post a paged board, hiding the arrows when there's only one page."""
         view.message = await ctx.send(embed=view.embed(), view=view if view.multipage else None)
+
+    async def _kings_board(self, ctx, query: str):
+        """Who holds #1 on the most unit boards (!leaderboard <unit>), each
+        person once however many accounts they've linked. All-time, like the
+        unit boards it counts; a number sets the games a #1 needs on the unit."""
+        min_games = next((int(t) for t in query.split() if t.isdigit()), DEFAULT_MIN_GAMES)
+        boards = self.pick_boards.boards()
+        kings = unit_kings(boards, min_games)
+        names = {handle: self._shown_name(ctx, handle, tops[0][1].name) for handle, tops in kings}
+        contested = sum(1 for board in boards.values() if any(r.games >= min_games for r in board))
+        view = PagedBoardView(
+            lambda page: match_embeds.kings_board(kings, page, min_games, names, contested),
+            match_embeds.page_count(kings),
+        )
+        await self._send_board(ctx, view)
 
     @commands.hybrid_command(help="rate unit picks, adjusted for who picked them — same as !leaderboard units")
     @commands.cooldown(1, 5, commands.BucketType.user)

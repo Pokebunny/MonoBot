@@ -386,10 +386,11 @@ def season_start(store, season, by_race: bool = False) -> RatingBook:
     return book
 
 
-def pick_ratings(book: RatingBook, matches, pick: str) -> list[PlayerRating]:
-    """Everyone's rating on one unit, best first: how each player does when
-    they field `pick`. `book` is the overall walk to replay `matches` on top
-    of (an empty book, or a season_start).
+def pick_ratings(book: RatingBook, matches, picks: set[str] | None = None) -> dict[str, list[PlayerRating]]:
+    """Everyone's rating on each unit, best first: how each player does when
+    they field it. Keyed by pick; `picks` limits the walk to those units
+    (None = every unit). `book` is the overall walk to replay `matches` on
+    top of (an empty book, or a season_start).
 
     Unlike a race board, only the focal player's entry is on the unit: their
     teammates and opponents enter at their overall rating going into the
@@ -398,25 +399,28 @@ def pick_ratings(book: RatingBook, matches, pick: str) -> list[PlayerRating]:
     leave little more than a raw win rate; the overall ratings are what the
     game was actually played against. The overall walk is never changed by
     it. One slot at a time, so two players on the same unit in one game each
-    get scored against the real lineup."""
-    entries: dict[str, PlayerRating] = {}
+    get scored against the real lineup. Entries are keyed on the canonical
+    handle, so a person's linked accounts share one entry per unit."""
+    entries: dict[str, dict[str, PlayerRating]] = {}
     for match in sorted(matches, key=lambda m: m.played_at):
-        if book.is_rateable(match) and any(p.pick == pick for p in match.players):
-            _rate_pick(book, match, pick, entries)
+        if book.is_rateable(match):
+            _rate_picks(book, match, picks, entries)
         book.rate_match(match)
-    return sorted(entries.values(), key=lambda r: r.ordinal, reverse=True)
+    return {pick: sorted(board.values(), key=lambda r: r.ordinal, reverse=True) for pick, board in entries.items()}
 
 
-def _rate_pick(book: RatingBook, match: MonobattleMatch, pick: str, entries: dict[str, PlayerRating]) -> None:
-    """Score each player on `pick` in one match. Called before the match is
-    rated, so everyone else enters at their pre-match standing."""
+def _rate_picks(
+    book: RatingBook, match: MonobattleMatch, picks: set[str] | None, entries: dict[str, dict[str, PlayerRating]]
+) -> None:
+    """Score each player on their pick in one match. Called before the match
+    is rated, so everyone else enters at their pre-match standing."""
     team_numbers = sorted({p.team for p in match.players})
     ranks = [0 if n == match.winning_team else 1 for n in team_numbers]
     for focal in match.players:
-        if focal.pick != pick:
+        if not focal.pick or (picks is not None and focal.pick not in picks):
             continue
         handle = book.canonical(focal.toon_handle)
-        entry = entries.setdefault(
+        entry = entries.setdefault(focal.pick, {}).setdefault(
             handle, PlayerRating(handle=handle, name=focal.name, mu=DEFAULT_MU, sigma=DEFAULT_SIGMA)
         )
         entry.name = focal.name
@@ -441,10 +445,27 @@ def _rate_pick(book: RatingBook, match: MonobattleMatch, pick: str, entries: dic
 
 
 def pick_board(store, season, pick: str) -> list[PlayerRating]:
-    """pick_ratings over a season (career, all history, when season is None),
-    starting from the same book season_book would."""
+    """One unit's player board over a season (career, all history, when
+    season is None), starting from the same book season_book would. The
+    career boards of every unit are cached in PickCache."""
     matches = store.all_matches() if season is None else store.season_matches(season)
-    return pick_ratings(season_start(store, season), (m for _, m in matches), pick)
+    return pick_ratings(season_start(store, season), (m for _, m in matches), {pick}).get(pick, [])
+
+
+def unit_kings(
+    boards: dict[str, list[PlayerRating]], min_games: int
+) -> list[tuple[str, list[tuple[str, PlayerRating]]]]:
+    """Who is #1 on each unit's board (among players with `min_games` on it),
+    grouped by person: [(canonical handle, [(pick, their entry)] best first)],
+    most #1s first. Ties on count go to the higher best rating."""
+    held: dict[str, list[tuple[str, PlayerRating]]] = {}
+    for pick, board in boards.items():
+        top = next((r for r in board if r.games >= min_games), None)
+        if top is not None:
+            held.setdefault(top.handle, []).append((pick, top))
+    for tops in held.values():
+        tops.sort(key=lambda t: t[1].ordinal, reverse=True)
+    return sorted(held.items(), key=lambda kv: (len(kv[1]), kv[1][0][1].ordinal), reverse=True)
 
 
 def season_book(store, season, by_race: bool = False) -> RatingBook:
@@ -513,6 +534,25 @@ class DuoCache:
             self._records = duo_records((m for _, m in self._store.all_matches()), merge_map)
             self._version = self._store.change_count
         return self._records
+
+
+class PickCache:
+    """Every unit's career player board (pick_ratings), rebuilt only when the
+    store changes — links included, so an alt linked later merges into its
+    owner's entries on the next read. One walk does a model update per
+    player per match, too slow to repeat for every !leaderboard kings."""
+
+    def __init__(self, store):
+        self._store = store
+        self._boards: dict[str, list[PlayerRating]] | None = None
+        self._version = -1
+
+    def boards(self) -> dict[str, list[PlayerRating]]:
+        if self._boards is None or self._version != self._store.change_count:
+            matches = (m for _, m in self._store.all_matches())
+            self._boards = pick_ratings(season_start(self._store, None), matches)
+            self._version = self._store.change_count
+        return self._boards
 
 
 class UnitCache:

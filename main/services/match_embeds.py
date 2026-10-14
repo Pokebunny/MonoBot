@@ -190,6 +190,34 @@ def leaderboard(
     return embed
 
 
+def kings_board(
+    kings: list[tuple[str, list[tuple[str, PlayerRating]]]],
+    page: int = 0,
+    min_games: int = 1,
+    display_names: dict[str, str] | None = None,
+    contested: int = 0,
+) -> discord.Embed:
+    """`kings` from rating.unit_kings: each person with the units they're #1
+    on, best rating first. `contested` is how many unit boards have anyone
+    with `min_games` on them, i.e. how many #1s there are to hold."""
+    display_names = display_names or {}
+    pages = page_count(kings)
+    page = max(0, min(page, pages - 1))
+    start = page * BOARD_PAGE_SIZE
+    lines = []
+    for i, (handle, tops) in enumerate(kings[start : start + BOARD_PAGE_SIZE], start + 1):
+        shown = display_names.get(handle, tops[0][1].name)
+        units = ", ".join(pick for pick, _ in tops)
+        lines.append(f"`{i:>2}` **{shown}** — **{len(tops)}** 👑 {units}")
+    embed = discord.Embed(title="Unit Kings — All-Time", color=ACCENT)
+    embed.description = "\n".join(lines) or f"*Nobody has {min_games} games on any unit yet.*"
+    embed.set_footer(
+        text=f"#1 on !leaderboard <unit> among players with {min_games}+ games on it · "
+        f"{contested} units · Page {page + 1}/{pages}"
+    )
+    return embed
+
+
 def _rating_value(rating: PlayerRating) -> str:
     return f"**{rating.display_rating}**" + ("  *(provisional)*" if rating.provisional else "")
 

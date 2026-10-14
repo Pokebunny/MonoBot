@@ -52,16 +52,28 @@ class Recap(CommunityCog):
 
     @commands.hybrid_command(
         aliases=["session", "nightly"],
-        help="recap the latest session: records, rating changes, MVPs and achievements (◀ for older sessions)",
+        description="recap the latest session, or a past one by its number (!recap 12)",
+        help="recap the latest session: records, rating changes, MVPs and achievements (◀ for older sessions). "
+        "Give a session number (shown in the footer) to post just that one, without page buttons",
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
-    async def recap(self, ctx):
+    async def recap(self, ctx, session: int | None = None):
         self = self.at(ctx)
         # Sessions with no decided game have nothing to report, so they get
         # no page rather than a blank one.
         sessions = [s for s in recap.split_sessions(self.store.all_matches()) if any(recap.is_decided(m) for _, m in s)]
         if not sessions:
             await ctx.send("No decided games to recap yet.")
+            return
+        if session is not None:
+            # One fixed session: a static post that reads the same later,
+            # numbered as the paged recap's footer numbers it.
+            if not 1 <= session <= len(sessions):
+                await ctx.send(f"There's no session {session} — sessions run from 1 to {len(sessions)}.")
+                return
+            embed = self._embed(sessions[session - 1], "📋 Session Recap", ctx.guild)
+            embed.set_footer(text=f"Session {session}/{len(sessions)} · {embed.footer.text}")
+            await ctx.send(embed=embed)
             return
         # Each page is a season rating walk, so build them as they're opened.
         cache: dict[int, discord.Embed] = {}

@@ -115,3 +115,30 @@ def test_split_sessions_breaks_at_long_gaps():
     history = _numbered([_match(1, 0), _match(1, gap), _match(1, 2 * gap + 1), _match(1, 3 * gap + 2)])
     assert [[mid for mid, _ in s] for s in split_sessions(history)] == [[1, 2], [3], [4]]
     assert split_sessions([]) == []
+
+
+def test_recap_by_number_posts_one_session_without_pages(tmp_path):
+    import asyncio
+    from types import SimpleNamespace
+
+    from cogs.recap import Recap
+    from conftest import community_cog
+    from services.storage import hash_replay
+
+    store = MatchStore(str(tmp_path / "t.db"))
+    gap = int(SESSION_GAP.total_seconds() // 60)
+    for minutes in (0, 30, gap + 100):  # two sessions
+        store.ingest(_match(1, minutes), hash_replay(str(minutes).encode()))
+    cog = community_cog(Recap, store, get_user=lambda _id: None)
+    sent = []
+
+    async def send(content=None, **kwargs):
+        sent.append(SimpleNamespace(content=content, **kwargs))
+        return SimpleNamespace()
+
+    ctx = SimpleNamespace(guild=None, send=send)
+    asyncio.run(cog.recap.callback(cog, ctx, 1))
+    assert sent[0].embed.footer.text.startswith("Session 1/2") and "view" not in vars(sent[0])
+    asyncio.run(cog.recap.callback(cog, ctx, 3))
+    assert "no session 3" in sent[1].content
+    store.close()

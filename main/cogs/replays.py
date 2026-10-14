@@ -164,7 +164,7 @@ class Replays(CommunityCog):
         embed = match_embeds.achievement_sweep(granted, names, revoked)
         for channel_id in sorted(self._watched_channels()):
             channel = self.client.get_channel(channel_id)
-            if channel is None:
+            if channel is None or not self.community.owns(channel):
                 continue
             try:
                 await channel.send(embed=embed)

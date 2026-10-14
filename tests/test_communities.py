@@ -101,3 +101,23 @@ def test_daily_times_are_zoned_per_community():
 
 def _ctx(guild_id):
     return types.SimpleNamespace(guild=_guild(guild_id))
+
+
+def test_a_community_posts_only_in_its_own_server(communities):
+    other = communities.others[OTHER]
+    assert other.owns(types.SimpleNamespace(guild=_guild(OTHER)))
+    assert not other.owns(types.SimpleNamespace(guild=_guild(HOME)))  # misfiled channel: never post there
+
+
+def test_config_problems_name_what_to_fix(communities):
+    other = communities.others[OTHER]  # watches channel 9 via config
+    absent = types.SimpleNamespace(get_guild=lambda _id: None, get_channel=lambda _id: None)
+    assert "invite it" in other.config_problems(absent)[0]
+    elsewhere = types.SimpleNamespace(
+        get_guild=lambda _id: object(), get_channel=lambda _id: types.SimpleNamespace(guild=_guild(HOME))
+    )
+    assert other.config_problems(elsewhere) == [f"replay channel 9 is in another server ({HOME})"]
+    fine = types.SimpleNamespace(
+        get_guild=lambda _id: object(), get_channel=lambda _id: types.SimpleNamespace(guild=_guild(OTHER))
+    )
+    assert other.config_problems(fine) == []

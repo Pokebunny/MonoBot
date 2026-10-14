@@ -49,6 +49,31 @@ class Community:
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.config.admin_user_ids
 
+    def owns(self, channel) -> bool:
+        """Whether a channel is in this community's server. The bot posts a
+        community's announcements only there, so a channel id filed under the
+        wrong server in config can't leak one ladder into another. A legacy
+        home (no guild id) owns every channel."""
+        guild = getattr(channel, "guild", None)
+        return self.guild_id is None or (guild is not None and guild.id == self.guild_id)
+
+    def config_problems(self, client) -> list[str]:
+        """What's wrong with this community's config, as seen from Discord:
+        a server the bot isn't in, or a configured channel it can't see or
+        that belongs to another server."""
+        if self.guild_id is None:
+            return []
+        if client.get_guild(self.guild_id) is None:
+            return [f"the bot isn't in server {self.guild_id} — invite it"]
+        problems = []
+        for channel_id in sorted(self.watched_channels()):
+            channel = client.get_channel(channel_id)
+            if channel is None:
+                problems.append(f"can't see replay channel {channel_id}")
+            elif not self.owns(channel):
+                problems.append(f"replay channel {channel_id} is in another server ({channel.guild.id})")
+        return problems
+
 
 class Communities:
     """Every configured community, and which one a server belongs to."""

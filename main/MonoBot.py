@@ -58,6 +58,11 @@ bot = MonoBot(command_prefix="!", intents=intents, case_insensitive=True)
 @bot.event
 async def on_ready():
     logger.info("%s has connected to Discord!", bot.user)
+    # Config mistakes are silent otherwise: replays in an unseen channel
+    # just never arrive.
+    for community in bot.communities.all():
+        for problem in community.config_problems(bot):
+            logger.warning("Config for community %s: %s", community.guild_id, problem)
 
 
 @bot.event

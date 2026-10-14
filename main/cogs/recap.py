@@ -101,7 +101,11 @@ class Recap(CommunityCog):
         now = dt.datetime.now(dt.UTC)
         since = (now - DAILY_WINDOW).isoformat()
         session = self.store.all_matches(since=since)
-        channels = [c for c in (self.client.get_channel(cid) for cid in self._recap_channel_ids()) if c is not None]
+        channels = [
+            c
+            for c in (self.client.get_channel(cid) for cid in self._recap_channel_ids())
+            if c is not None and self.community.owns(c)
+        ]
         if not channels:
             logger.warning("Morning recap: no reachable channel to post in")
             return

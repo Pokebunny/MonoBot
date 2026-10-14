@@ -152,12 +152,14 @@ def leaderboard(
     season: str | None = None,
     final: bool = False,
     race: str | None = None,
+    pick: str | None = None,
 ) -> discord.Embed:
     """display_names maps handle -> shown name (the linked member's Discord
     name); unmapped handles fall back to the account's SC2 name. `season`
     names the window these ratings cover, shown so a reset ladder is never
     mistaken for lost history; `final` marks a season that has already ended.
-    `race` titles a race board, whose ratings count only games on that race."""
+    `race` titles a race board, whose ratings count only games on that race;
+    `pick` a unit board (rating.pick_ratings)."""
     display_names = display_names or {}
     pages = page_count(ratings)
     page = max(0, min(page, pages - 1))
@@ -168,16 +170,23 @@ def leaderboard(
         lines.append(
             f"`{i:>2}` **{shown}** — **{r.display_rating}** ({r.wins}-{r.losses}, {100 * r.wins / r.games:.0f}%)"
         )
-    title = f"{race} Leaderboard" if race else "Monobattle Leaderboard"
+    subject = pick or race
+    title = f"{subject} Leaderboard" if subject else "Monobattle Leaderboard"
     if season is not None:
         title += f" — {season}"
     embed = discord.Embed(title=title, color=ACCENT)
-    embed.description = "\n".join(lines) or "*No rated players yet — play a game to open the season.*"
+    empty = (
+        f"*Nobody has a rated game on {pick} yet.*"
+        if pick
+        else "*No rated players yet — play a game to open the season.*"
+    )
+    embed.description = "\n".join(lines) or empty
     note = f"min {min_games} games · " if min_games > 1 else ""
-    show_all = f"!leaderboard {race.lower()} 1" if race else "!leaderboard 1"
+    show_all = f"!leaderboard {subject.lower()} 1" if subject else "!leaderboard 1"
     more = f" · {hidden} more below the minimum ({show_all} shows all)" if hidden else ""
     closed = "Final standings · " if final else ""
-    embed.set_footer(text=f"{closed}{note}Page {page + 1}/{pages}{more}")
+    how = f"\nGames on {pick} only, against everyone else's overall rating" if pick else ""
+    embed.set_footer(text=f"{closed}{note}Page {page + 1}/{pages}{more}{how}")
     return embed
 
 

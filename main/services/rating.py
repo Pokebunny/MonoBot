@@ -386,6 +386,67 @@ def season_start(store, season, by_race: bool = False) -> RatingBook:
     return book
 
 
+def pick_ratings(book: RatingBook, matches, pick: str) -> list[PlayerRating]:
+    """Everyone's rating on one unit, best first: how each player does when
+    they field `pick`. `book` is the overall walk to replay `matches` on top
+    of (an empty book, or a season_start).
+
+    Unlike a race board, only the focal player's entry is on the unit: their
+    teammates and opponents enter at their overall rating going into the
+    game. Most players have a handful of games on any one unit, so rating
+    them against each other's unit entries — mostly fresh priors — would
+    leave little more than a raw win rate; the overall ratings are what the
+    game was actually played against. The overall walk is never changed by
+    it. One slot at a time, so two players on the same unit in one game each
+    get scored against the real lineup."""
+    entries: dict[str, PlayerRating] = {}
+    for match in sorted(matches, key=lambda m: m.played_at):
+        if book.is_rateable(match) and any(p.pick == pick for p in match.players):
+            _rate_pick(book, match, pick, entries)
+        book.rate_match(match)
+    return sorted(entries.values(), key=lambda r: r.ordinal, reverse=True)
+
+
+def _rate_pick(book: RatingBook, match: MonobattleMatch, pick: str, entries: dict[str, PlayerRating]) -> None:
+    """Score each player on `pick` in one match. Called before the match is
+    rated, so everyone else enters at their pre-match standing."""
+    team_numbers = sorted({p.team for p in match.players})
+    ranks = [0 if n == match.winning_team else 1 for n in team_numbers]
+    for focal in match.players:
+        if focal.pick != pick:
+            continue
+        handle = book.canonical(focal.toon_handle)
+        entry = entries.setdefault(
+            handle, PlayerRating(handle=handle, name=focal.name, mu=DEFAULT_MU, sigma=DEFAULT_SIGMA)
+        )
+        entry.name = focal.name
+        teams, slot = [], None
+        for n in team_numbers:
+            side = []
+            for p in match.team(n):
+                if p is focal:
+                    slot = (len(teams), len(side))
+                    side.append(_model.create_rating([entry.mu, entry.sigma]))
+                else:
+                    standing = book.standing_for(p.toon_handle)
+                    mu, sigma = (standing.mu, standing.sigma) if standing else (DEFAULT_MU, DEFAULT_SIGMA)
+                    side.append(_model.create_rating([mu, sigma]))
+            teams.append(side)
+        after = _model.rate(teams, ranks=ranks)[slot[0]][slot[1]]
+        entry.mu, entry.sigma = after.mu, after.sigma
+        if ranks[slot[0]] == 0:
+            entry.wins += 1
+        else:
+            entry.losses += 1
+
+
+def pick_board(store, season, pick: str) -> list[PlayerRating]:
+    """pick_ratings over a season (career, all history, when season is None),
+    starting from the same book season_book would."""
+    matches = store.all_matches() if season is None else store.season_matches(season)
+    return pick_ratings(season_start(store, season), (m for _, m in matches), pick)
+
+
 def season_book(store, season, by_race: bool = False) -> RatingBook:
     """A season's ratings (career, all history, when season is None). The one
     way to build a season board — every caller must start from season_start

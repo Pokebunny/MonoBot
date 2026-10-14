@@ -1240,6 +1240,11 @@ class MatchStore:
             games.setdefault(row["key"], []).append((row["pick"], bool(row["won"])))
         return games
 
+    def picks(self) -> set[str]:
+        """Every unit anyone has picked, in its stored spelling ("WidowMine")."""
+        rows = self._conn.execute("SELECT DISTINCT pick FROM match_players WHERE pick IS NOT NULL AND pick != ''")
+        return {row["pick"] for row in rows}
+
     def content_keys(self) -> set[str]:
         """Every stored game's content_key, decided or not."""
         return {row["content_key"] for row in self._conn.execute("SELECT content_key FROM matches")}

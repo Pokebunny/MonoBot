@@ -13,6 +13,7 @@ from services.rating import (
     MIN_WINNER_CONFIDENCE,
     SOFT_RESET_CARRYOVER,
     SOFT_RESET_SIGMA,
+    pick_board,
     season_book,
     unit_baseline,
 )
@@ -49,6 +50,46 @@ _RACES = {
     **dict.fromkeys(("terran", "t"), "Terran"),
     **dict.fromkeys(("zerg", "z"), "Zerg"),
 }
+
+# Short names people use for units, beyond the stored spelling (which is
+# matched case- and space-insensitively, plural or not: "widow mines").
+_PICK_ALIASES = {
+    "ling": "Zergling",
+    "bane": "Baneling",
+    "hydra": "Hydralisk",
+    "muta": "Mutalisk",
+    "ultra": "Ultralisk",
+    "brood": "BroodLord",
+    "bl": "BroodLord",
+    "swarm": "SwarmHost",
+    "ht": "HighTemplar",
+    "dt": "DarkTemplar",
+    "tank": "SiegeTank",
+    "mine": "WidowMine",
+    "lib": "Liberator",
+    "bc": "Battlecruiser",
+    "void": "VoidRay",
+}
+
+
+def _find_pick(query: str, picks: set[str]) -> tuple[str | None, str]:
+    """A unit named anywhere in a board query, and the query without it.
+    Two-word names ("widow mine") are tried before single words."""
+    known = {pick.lower(): pick for pick in picks}
+    known.update({alias: pick for alias, pick in _PICK_ALIASES.items() if pick in picks})
+
+    def lookup(word: str) -> str | None:
+        word = word.lower()
+        return known.get(word) or (known.get(word[:-1]) if word.endswith("s") else None)
+
+    tokens = query.split()
+    for width in (2, 1):
+        for i in range(len(tokens) - width + 1):
+            pick = lookup("".join(tokens[i : i + width]))
+            if pick:
+                return pick, " ".join(tokens[:i] + tokens[i + width :])
+    return None, query
+
 
 # Words that pick a !duos sort. Rating is the default, so its own words only
 # exist so nobody has to remember which way round it is.
@@ -231,9 +272,9 @@ def _text(content: str) -> dict:
 class Leaderboard(CommunityCog):
     @commands.hybrid_command(
         aliases=["ladder"],
-        description="show the rating leaderboard (a race, a season like s1, career, or units)",
-        help="show the rating leaderboard — add a race (!leaderboard zerg), a season (s1), 'career' for all-time, "
-        "or 'units' to rate unit picks",
+        description="show the rating leaderboard (a race, a unit, a season like s1, career, or units)",
+        help="show the rating leaderboard — add a race (!leaderboard zerg), a unit (!leaderboard marine), "
+        "a season (s1), 'career' for all-time, or 'units' to rate unit picks",
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def leaderboard(self, ctx, *, query: str = ""):
@@ -241,8 +282,13 @@ class Leaderboard(CommunityCog):
         if any(token.lower() in _UNIT_WORDS for token in query.split()):
             await self._unit_board(ctx, query)
             return
+        pick, query = _find_pick(query, self.store.picks())
         min_games, race, season_query = self._parse_board_query(query)
-        career = season_query.lower() in ("career", "all", "alltime", "all-time")
+        # A unit board defaults to all-time: few players field any one unit
+        # often enough in a single season to rate.
+        career = season_query.lower() in ("career", "all", "alltime", "all-time") or (
+            pick is not None and not season_query
+        )
         if career:
             season, label = None, "All-Time"
         elif season_query:
@@ -256,8 +302,12 @@ class Leaderboard(CommunityCog):
             season = self.store.current_season()
             label = season.name
 
-        book = self._book_for(season, career, by_race=race is not None)
-        everyone = book.leaderboard(min_games=1, race=race)
+        if pick:
+            race = None  # the unit already implies one
+            everyone = pick_board(self.store, season, pick)
+        else:
+            book = self._book_for(season, career, by_race=race is not None)
+            everyone = book.leaderboard(min_games=1, race=race)
         board = [r for r in everyone if r.games >= min_games]
         hidden = len(everyone) - len(board)
         names = {r.handle: self._shown_name(ctx, r.handle, r.name) for r in board}
@@ -265,7 +315,7 @@ class Leaderboard(CommunityCog):
         # ladder right after a reset reads as intentional, not as data loss.
         final = season is not None and season.ended_at is not None
         view = PagedBoardView(
-            lambda page: match_embeds.leaderboard(board, page, min_games, names, hidden, label, final, race),
+            lambda page: match_embeds.leaderboard(board, page, min_games, names, hidden, label, final, race, pick),
             match_embeds.page_count(board),
         )
         await self._send_board(ctx, view)
@@ -275,12 +325,13 @@ class Leaderboard(CommunityCog):
         """Split '!leaderboard [min_games] [race] [season]' into its parts. A
         bare number stays min_games — that predates seasons and is what the
         board's own footer tells people to type — so a season needs a name
-        ('s1'). A race word can go anywhere."""
+        ('s1'), and a number is part of it only straight after the word
+        'season' ('season 3'). A race word can go anywhere."""
         min_games, race, season_words = DEFAULT_MIN_GAMES, None, []
         for token in query.split():
             if token.lower() in _RACES:
                 race = _RACES[token.lower()]
-            elif token.isdigit() and not season_words:
+            elif token.isdigit() and not (season_words and season_words[-1].lower() == "season"):
                 min_games = int(token)
             else:
                 season_words.append(token)

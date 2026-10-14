@@ -249,6 +249,8 @@ def test_board_query_reads_a_race_word_anywhere():
     assert Leaderboard._parse_board_query("zerg") == (DEFAULT_MIN_GAMES, "Zerg", "")
     assert Leaderboard._parse_board_query("10 Toss s1") == (10, "Protoss", "s1")
     assert Leaderboard._parse_board_query("career t") == (DEFAULT_MIN_GAMES, "Terran", "career")
+    assert Leaderboard._parse_board_query("zerg s3 1") == (1, "Zerg", "s3")
+    assert Leaderboard._parse_board_query("season 3 2") == (2, None, "season 3")
 
 
 def test_race_board_title_and_footer_name_the_race():
@@ -287,3 +289,63 @@ def test_seeded_player_starts_from_the_seed():
     fresh = RatingBook.from_matches([_match(winning_team=2)])
     assert seeded.ratings["A1"].mu > fresh.ratings["A1"].mu
     assert seeded.ratings["A1"].games == 1
+
+
+def _picked(winning_team, pick_of, day=0):
+    """A _match with the given picks (handle -> pick; others Zergling)."""
+    match = _match(winning_team)
+    match.played_at += datetime.timedelta(days=day)
+    for p in match.players:
+        p.pick = pick_of.get(p.toon_handle, "Zergling")
+    return match
+
+
+def test_pick_board_rates_only_games_on_that_unit():
+    from services.rating import pick_ratings
+
+    matches = [_picked(1, {"A1": "Marine"}, 0), _picked(2, {"A1": "Roach"}, 1), _picked(2, {"B1": "Marine"}, 2)]
+    board = pick_ratings(RatingBook(), matches, "Marine")
+    assert {r.handle: (r.wins, r.losses) for r in board} == {"A1": (1, 0), "B1": (1, 0)}
+    assert all(r.race is None for r in board)
+
+
+def test_pick_board_scores_against_overall_ratings():
+    """Beating a lineup that has been winning everything counts for more than
+    beating fresh players: everyone else enters at their overall rating."""
+    from services.rating import pick_ratings
+
+    warmup = [_picked(1, {}, d) for d in range(5)]  # A-team piles up wins
+    upset = _picked(2, {"B1": "Marine"}, 10)
+    fair = _picked(1, {"A1": "Marine"}, 10)
+    beat_strong = pick_ratings(RatingBook(), warmup + [upset], "Marine")[0]
+    beat_fresh = pick_ratings(RatingBook(), [fair], "Marine")[0]
+    assert beat_strong.mu - 25 > beat_fresh.mu - 25 > 0
+
+
+def test_pick_board_leaves_the_overall_book_as_a_normal_walk():
+    from services.rating import pick_ratings
+
+    matches = [_picked(1, {"A1": "Marine"}, d) for d in range(3)]
+    book = RatingBook()
+    pick_ratings(book, matches, "Marine")
+    assert book.ratings["A1"].mu == RatingBook.from_matches(matches).ratings["A1"].mu
+
+
+def test_board_query_finds_a_unit_anywhere():
+    from cogs.leaderboard import _find_pick
+
+    picks = {"Marine", "WidowMine", "Zergling"}
+    assert _find_pick("marine", picks) == ("Marine", "")
+    assert _find_pick("10 widow mines s3", picks) == ("WidowMine", "10 s3")
+    assert _find_pick("lings", picks) == ("Zergling", "")
+    assert _find_pick("zerg s1", picks) == (None, "zerg s1")
+
+
+def test_unit_board_title_and_footer_name_the_unit():
+    from services.match_embeds import leaderboard
+    from services.rating import pick_ratings
+
+    board = pick_ratings(RatingBook(), [_picked(1, {"A1": "WidowMine"})], "WidowMine")
+    embed = leaderboard(board, min_games=5, hidden=1, season="All-Time", pick="WidowMine")
+    assert embed.title == "WidowMine Leaderboard — All-Time"
+    assert "!leaderboard widowmine 1" in embed.footer.text

@@ -82,7 +82,12 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   rating and are never changed by it, so the ladder is untouched. Shown as
   points over the games-weighted average pick. Career-wide, cached in
   `UnitCache`. Updating players and units jointly was tried and predicted
-  worse; keep players fixed.
+  worse; keep players fixed. Not to be confused with a **one-unit player
+  board** (`!leaderboard marine`, `rating.pick_ratings`): players rated on
+  their games with that unit, where only the focal player's slot is a
+  per-unit entry and the other seven enter at their overall rating — fully
+  per-unit lineups (the race-board way) would be too noisy at a handful of
+  games per player per unit. All-time unless a season is named.
 - **Achievements** are derived from history but *held* in the
   `achievement_unlocks` ledger, which is reconciled rather than append-only:
   `achievements.reconcile` grants and revokes, and the startup hook announces

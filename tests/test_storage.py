@@ -753,3 +753,18 @@ def test_kills_by_unit_column_is_added_to_an_older_db(tmp_path):
     assert reopened.match_count() == 1
     assert reopened.all_matches()[0][1].players[0].kills_by_unit == {}
     reopened.close()
+
+
+def test_cannon_rush_round_trips_and_backfills(tmp_path):
+
+    store = MatchStore(str(tmp_path / "c.db"))
+    match = _match()
+    match.players[0].cannon_rush = True
+    store.ingest(match, "h1")
+    ((_, stored),) = store.all_matches()
+    assert stored.players[0].cannon_rush is True and stored.players[1].cannon_rush is None
+    assert store.set_cannon_rush("h1", {p.toon_handle: False for p in stored.players})
+    ((_, stored),) = store.all_matches()
+    assert all(p.cannon_rush is False for p in stored.players)
+    assert not store.set_cannon_rush("nope", {})
+    store.close()

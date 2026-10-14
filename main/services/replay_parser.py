@@ -16,6 +16,7 @@ blind-validated against replays with recorded winners.
 """
 
 import logging
+import math
 import os
 import re
 import statistics
@@ -51,6 +52,15 @@ _STATIC_DEFENSE = {
     "Bunker",
     "PlanetaryFortress",
 }
+
+# A cannon started this soon after the pick phase, nearer an enemy's starting
+# base than the builder's own, makes the game a cannon rush. Measured over
+# the ladder's replays the rule barely has an edge to fall on: a forge-first
+# player's first cannon sits either at home (under ~30% of the way to the
+# enemy) or at an enemy base (over ~84%), and 90% of forward cannons from
+# forge-first openers go down by 3:44. Later forward cannons are mostly
+# defense at bases taken mid-game, so the window keeps those out.
+_CANNON_RUSH_WINDOW_SECONDS = 240
 
 # Units that never count toward a player's mono pick: workers, map objects,
 # spawned sub-units, and other free/incidental units.
@@ -235,6 +245,8 @@ class _PlayerTally:
         # Enemy value destroyed, split by which of this player's unit types
         # got the kill. See _tally_events for what does and doesn't land here.
         self.kills_by_unit = Counter()
+        self.home: tuple[float, float] | None = None  # where their starting town hall spawned
+        self.cannon_starts: list[tuple[int, float, float]] = []  # (second, x, y) per cannon begun
 
     def race(self, fallback: str) -> str:
         if self.worker_races:
@@ -267,6 +279,19 @@ def _detect_pick(tally: _PlayerTally, play_race: str) -> str | None:
         if pick in precursors and pool.get(morph, 0) >= 3:
             pick = morph
     return pick
+
+
+def _cannon_rushed(tally: _PlayerTally, enemy_homes: list[tuple[float, float]], game_start: int) -> bool | None:
+    """Whether the player cannon rushed (see _CANNON_RUSH_WINDOW_SECONDS).
+    None when either side's starting base is unknown, so there's nothing to
+    measure against."""
+    if tally.home is None or not enemy_homes:
+        return None
+    return any(
+        second - game_start <= _CANNON_RUSH_WINDOW_SECONDS
+        and min(math.dist(home, (x, y)) for home in enemy_homes) < math.dist(tally.home, (x, y))
+        for second, x, y in tally.cannon_starts
+    )
 
 
 def _find_game_start(replay) -> int:
@@ -373,6 +398,12 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
                     tally.lost_all_bases = True
             _credit_kill(tallies, event, game_start)
             continue
+        if event_name == "UnitInitEvent":
+            # A building begun — only cannons matter, and where they went.
+            owner = event.unit.owner
+            if owner is not None and event.unit.name == "PhotonCannon" and event.second >= game_start:
+                tallies[owner.name].cannon_starts.append((event.second, event.x, event.y))
+            continue
         # UnitBornEvent: instantly-created units. UnitDoneEvent: gradually
         # created ones (warp-ins, morph cocoons, archon merges, buildings).
         if event_name == "UnitBornEvent":
@@ -390,6 +421,8 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
             continue
         if raw in _TOWN_HALLS:
             tally.live_town_halls.add(event.unit.id)
+            if event_name == "UnitBornEvent" and tally.home is None:
+                tally.home = (event.x, event.y)  # the map-spawned starting base
         if raw in _BASE_STRUCTURES or (raw == "OrbitalCommand" and event_name == "UnitBornEvent"):
             tally.base_times.append(event.second)
         if raw == "OrbitalCommand":
@@ -554,6 +587,7 @@ def parse_replay(path: str) -> MonobattleMatch:
     tallies = _tally_events(replay, game_start)
 
     pick_mode = _classify_pick_mode(tallies, game_start)
+    homes = {(team.number, p.name): tallies[p.name].home for team in replay.teams for p in team.players}
     players = []
     for team in replay.teams:
         for p in team.players:
@@ -602,6 +636,11 @@ def parse_replay(path: str) -> MonobattleMatch:
                     bases_before_unit=sum(1 for s in tally.base_times if cutoff is None or s < cutoff),
                     orbitals=tally.orbitals,
                     lost_all_bases=tally.lost_all_bases,
+                    cannon_rush=_cannon_rushed(
+                        tally,
+                        [home for (t, _), home in homes.items() if t != team.number and home is not None],
+                        game_start,
+                    ),
                     unit_counts=dict(tally.units),
                 )
             )

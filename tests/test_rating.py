@@ -371,3 +371,23 @@ def test_kings_count_each_persons_number_ones():
     assert held["A1"] == ["Marine", "Roach"]
     assert kings[0][0] == "A1"
     assert held["B1"] == ["Thor"]  # the only Thor player is its #1, wins or not
+
+
+def test_a_cannon_rush_counts_on_its_own_board_and_the_pick():
+    """The rush is an extra board, never a replacement for the rolled unit."""
+    from services.rating import CANNON_RUSH, pick_ratings
+
+    match = _picked(1, {"A1": "Zealot"})
+    match.players[0].cannon_rush = True
+    boards = pick_ratings(RatingBook(), [match])
+    assert [r.handle for r in boards[CANNON_RUSH]] == ["A1"]
+    assert "A1" in {r.handle for r in boards["Zealot"]}
+
+
+def test_cannon_rush_is_typed_like_a_unit():
+    from cogs.leaderboard import _find_pick
+    from services.rating import CANNON_RUSH
+
+    picks = {"Zealot", CANNON_RUSH}
+    assert _find_pick("cannon rush s3", picks) == (CANNON_RUSH, "s3")
+    assert _find_pick("cannons", picks) == (CANNON_RUSH, "")

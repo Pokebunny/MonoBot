@@ -8,6 +8,7 @@ from community import CommunityCog
 from discord.ext import commands
 from services import achievements, identity, map_versions, match_embeds
 from services.rating import (
+    CANNON_RUSH,
     MIN_DURATION_SECONDS,
     MIN_RANKED_GAMES,
     MIN_WINNER_CONFIDENCE,
@@ -73,6 +74,8 @@ _PICK_ALIASES = {
     "lib": "Liberator",
     "bc": "Battlecruiser",
     "void": "VoidRay",
+    "cannon": CANNON_RUSH,
+    "rush": CANNON_RUSH,
 }
 
 
@@ -290,7 +293,7 @@ class Leaderboard(CommunityCog):
         if any(token.lower() in _UNIT_WORDS for token in query.split()):
             await self._unit_board(ctx, query)
             return
-        pick, query = _find_pick(query, self.store.picks())
+        pick, query = _find_pick(query, self.store.picks() | {CANNON_RUSH})
         min_games, race, season_query = self._parse_board_query(query)
         # A unit board defaults to all-time: few players field any one unit
         # often enough in a single season to rate.

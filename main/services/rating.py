@@ -386,9 +386,23 @@ def season_start(store, season, by_race: bool = False) -> RatingBook:
     return book
 
 
+# The board a cannon rush is rated on, beside the rusher's own pick (see
+# MatchPlayer.cannon_rush). Spelled like a pick so it's typed and shown like one.
+CANNON_RUSH = "CannonRush"
+
+
+def boards_of(player) -> list[str]:
+    """The unit boards one player's game counts on: their pick, plus
+    CannonRush if they rushed. The rush is extra, never a replacement."""
+    boards = [player.pick] if player.pick else []
+    if player.cannon_rush:
+        boards.append(CANNON_RUSH)
+    return boards
+
+
 def pick_ratings(book: RatingBook, matches, picks: set[str] | None = None) -> dict[str, list[PlayerRating]]:
     """Everyone's rating on each unit, best first: how each player does when
-    they field it. Keyed by pick; `picks` limits the walk to those units
+    they field it. Keyed by pick (and CANNON_RUSH, see boards_of); `picks` limits the walk to those units
     (None = every unit). `book` is the overall walk to replay `matches` on
     top of (an empty book, or a season_start).
 
@@ -412,15 +426,15 @@ def pick_ratings(book: RatingBook, matches, picks: set[str] | None = None) -> di
 def _rate_picks(
     book: RatingBook, match: MonobattleMatch, picks: set[str] | None, entries: dict[str, dict[str, PlayerRating]]
 ) -> None:
-    """Score each player on their pick in one match. Called before the match
+    """Score each player on each of their boards in one match. Called before the match
     is rated, so everyone else enters at their pre-match standing."""
     team_numbers = sorted({p.team for p in match.players})
     ranks = [0 if n == match.winning_team else 1 for n in team_numbers]
-    for focal in match.players:
-        if not focal.pick or (picks is not None and focal.pick not in picks):
+    for focal, board in ((p, b) for p in match.players for b in boards_of(p)):
+        if picks is not None and board not in picks:
             continue
         handle = book.canonical(focal.toon_handle)
-        entry = entries.setdefault(focal.pick, {}).setdefault(
+        entry = entries.setdefault(board, {}).setdefault(
             handle, PlayerRating(handle=handle, name=focal.name, mu=DEFAULT_MU, sigma=DEFAULT_SIGMA)
         )
         entry.name = focal.name

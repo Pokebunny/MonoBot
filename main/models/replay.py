@@ -109,6 +109,11 @@ class MatchPlayer(BaseModel):
     bases_before_unit: int | None = None  # town halls completed before first unit
     orbitals: int | None = None  # Orbital Commands owned (Terran)
     lost_all_bases: bool | None = None  # was ever wiped down to zero town halls
+    # Started a cannon nearer an enemy's starting base than their own, early
+    # (replay_parser._CANNON_RUSH_WINDOW_SECONDS). An extra the boards rate
+    # alongside the pick, never instead of it. None = not recorded (parsed
+    # before it existed) or no starting bases to measure from.
+    cannon_rush: bool | None = None
     unit_counts: dict[str, int]  # normalized army-unit production counts
     # Enemy value destroyed, keyed by which of this player's unit types killed
     # it (their pick, but also cannons, workers, and spawned children like

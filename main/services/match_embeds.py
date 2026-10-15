@@ -592,7 +592,17 @@ def h2h_summary(
     return embed
 
 
-def queue_status(players: list[QueuedPlayer], target: int, timeout_minutes: int | None = None) -> discord.Embed:
+def meeting_point(channel: str | None, region: str) -> str | None:
+    """Where players gather in SC2 to start the game, or None if the server
+    hasn't configured a chat channel."""
+    if not channel:
+        return None
+    return f"🎮 Meet in SC2 chat channel **{channel}** ({region} server)"
+
+
+def queue_status(
+    players: list[QueuedPlayer], target: int, timeout_minutes: int | None = None, meet: str | None = None
+) -> discord.Embed:
     embed = discord.Embed(title="Matchmaking Queue", color=ACCENT)
     if players:
         lines = []
@@ -602,6 +612,8 @@ def queue_status(players: list[QueuedPlayer], target: int, timeout_minutes: int 
         embed.description = "\n".join(lines)
     else:
         embed.description = "*Queue is empty. Click **Join** to get in.*"
+    if meet:
+        embed.description += f"\n\n{meet}"
     footer = f"{len(players)}/{target} — teams form automatically when full"
     if timeout_minutes:
         footer += f"\nPlayers are removed after {timeout_minutes} minutes — press Join again to restart your timer."
@@ -614,18 +626,24 @@ def _team_field(name: str, team: list[QueuedPlayer]) -> tuple[str, str]:
     return name, lines or "*empty*"
 
 
-def proposed_match(match: ProposedMatch, option_index: int = 0, option_count: int = 1) -> discord.Embed:
+def proposed_match(
+    match: ProposedMatch, option_index: int = 0, option_count: int = 1, meet: str | None = None
+) -> discord.Embed:
     fav = match.team1_win_probability
     description = f"Balance: **{match.fairness:.0%}** (Team 1 win chance ≈ {fav:.0%})"
     if option_count > 1:
         description += f"\nOption {option_index + 1} of {option_count} — 🔀 New teams for another split."
+    if meet:
+        description += f"\n{meet}"
     embed = discord.Embed(title="Match found!", description=description, color=ACCENT)
     n1, v1 = _team_field("Team 1", match.team1)
     n2, v2 = _team_field("Team 2", match.team2)
     embed.add_field(name=n1, value=v1, inline=True)
     embed.add_field(name=n2, value=v2, inline=True)
     if any(not p.rated for p in match.team1 + match.team2):
-        embed.set_footer(text="Unrated players were balanced at a default skill estimate.")
+        embed.set_footer(
+            text="Unrated players were balanced at the level they reported (!level), or a default estimate."
+        )
     return embed
 
 

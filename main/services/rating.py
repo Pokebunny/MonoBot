@@ -58,6 +58,20 @@ DEFAULT_DISPLAY = PlayerRating(handle="", name="", mu=DEFAULT_MU, sigma=DEFAULT_
 SOFT_RESET_CARRYOVER = 0.7
 SOFT_RESET_SIGMA = DEFAULT_SIGMA
 
+# Where a player's first game starts, by the SC2 level they reported before
+# it (MatchStore.skill_level) — beginner below Diamond, mid Diamond-Master,
+# top Grandmaster. Only mu moves: sigma stays at the prior, so a wrong pick
+# washes out within a few games and the board (mu - 3 sigma) still starts
+# everyone near the bottom. The prior already sits at the established
+# players' median, which is about where Diamond-Master lands; beginner and
+# top are roughly that crowd's 15th and 90th percentiles.
+SKILL_LEVEL_MU = {"beginner": 21.0, "mid": DEFAULT_MU, "top": 30.0}
+
+
+def level_mu(level: str | None) -> float:
+    """The starting mu for a reported level; the prior when there's none."""
+    return SKILL_LEVEL_MU.get(level, DEFAULT_MU)
+
 
 def match_rating_deltas(
     matches, match_id: int, merge_map: dict[str, str] | None = None, start: "RatingBook | None" = None
@@ -272,6 +286,10 @@ class RatingBook:
         # "has played in this book" — boards, profiles and season ranks list
         # only players who have, and a seed only matters once it's played on.
         self.seeds: dict[str, PlayerRating] = {}
+        # Canonical handle -> starting mu from a self-reported level
+        # (SKILL_LEVEL_MU), for players with no seed. Like a seed, it only
+        # matters once played on.
+        self.priors: dict[str, float] = {}
         self.rated_matches = 0
         self.skipped_matches = 0
 
@@ -310,11 +328,15 @@ class RatingBook:
 
     def standing_for(self, handle: str) -> PlayerRating | None:
         """Where an account stands going into its next game: its rating, else
-        its seed, else None (the model's prior). What matchmaking and
-        before/after deltas want; boards and ranks want rating_for. Overall
-        books only — a by-race book's keys carry the race."""
+        its seed, else its reported level's starting point, else None (the
+        model's prior). What matchmaking and before/after deltas want; boards
+        and ranks want rating_for. Overall books only — a by-race book's keys
+        carry the race."""
         key = self.canonical(handle)
-        return self.ratings.get(key) or self.seeds.get(key)
+        standing = self.ratings.get(key) or self.seeds.get(key)
+        if standing is None and key in self.priors:
+            standing = PlayerRating(handle=key, name="", mu=self.priors[key], sigma=DEFAULT_SIGMA)
+        return standing
 
     def _get(self, player) -> PlayerRating:
         """Rating for a match participant's (canonical) account — on the race
@@ -325,7 +347,7 @@ class RatingBook:
         key = f"{handle}/{race}" if race else handle
         if key not in self.ratings:
             seed = self.seeds.get(key)
-            mu, sigma = (seed.mu, seed.sigma) if seed else (DEFAULT_MU, DEFAULT_SIGMA)
+            mu, sigma = (seed.mu, seed.sigma) if seed else (self.priors.get(handle, DEFAULT_MU), DEFAULT_SIGMA)
             self.ratings[key] = PlayerRating(handle=handle, name=player.name, race=race, mu=mu, sigma=sigma)
         else:
             self.ratings[key].name = player.name
@@ -376,14 +398,28 @@ def season_start(store, season, by_race: bool = False) -> RatingBook:
     for the career walk, season=None), seeded from career ratings at the
     season's start after a soft one. Derived, like everything else here: the
     season row holds only the reset's parameters, so a late-uploaded replay
-    from before the boundary moves the seeds too."""
+    from before the boundary moves the seeds too. Self-reported levels
+    (SKILL_LEVEL_MU) set where a player's first game starts, in both the
+    career walk and the season's, so a soft reset carries them over too."""
     merge_map = store.merge_map()
+    priors = level_priors(store, merge_map)
     book = RatingBook(merge_map, by_race)
+    book.priors = priors
     if season is not None and season.carryover is not None:
         before = store.all_matches(until=season.started_at)
-        career = RatingBook.from_matches((m for _, m in before), merge_map, by_race)
+        career = RatingBook(merge_map, by_race)
+        career.priors = priors
+        career.replay(m for _, m in before)
         book.seed(career, season.carryover, season.seed_sigma)
     return book
+
+
+def level_priors(store, merge_map: dict[str, str]) -> dict[str, float]:
+    """Starting mu by canonical handle, from each owner's reported level.
+    Stores without levels (test fakes) give none."""
+    if not hasattr(store, "skill_levels_by_handle"):
+        return {}
+    return {merge_map.get(h, h): level_mu(level) for h, level in store.skill_levels_by_handle().items()}
 
 
 # The boards rushes are rated on, beside the rusher's own pick (see

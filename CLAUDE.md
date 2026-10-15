@@ -53,6 +53,11 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   played; matchmaking and before/after deltas read `standing_for`. Build a
   season's ratings only through `season_book`/`season_start`, or a soft reset
   shows on some screens and not others.
+  A player's **reported level** (`skill_levels` table, asked on their first
+  Join or via `!level`, locked once they've played) moves only where their
+  first game starts (`rating.SKILL_LEVEL_MU`, as `RatingBook.priors`, set
+  in `season_start` for both the career and season walks); before any game
+  is uploaded, matchmaking reads it directly.
   Only ratings are season-scoped; match history, profile stats and the
   achievement ledger are career-wide.
 - **Typed player names** resolve through `views.person_or_pick` and nothing

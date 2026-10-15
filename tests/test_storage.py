@@ -770,3 +770,28 @@ def test_rush_flags_round_trip_and_backfill(tmp_path):
     assert [p.spine_rush for p in stored.players[:2]] == [True, False]
     assert not store.set_rushes("nope", {})
     store.close()
+
+
+def test_reported_level_sets_where_the_first_game_starts(store):
+    from services.rating import DEFAULT_MU, SKILL_LEVEL_MU, season_book
+
+    store.link_player("42", "A0")
+    store.set_skill_level("42", "top")
+    assert store.skill_level("42") == "top"
+    # No game yet, so no account handle to hang it on (matchmaking reads the
+    # level directly until then).
+    assert season_book(store, None).standing_for("h-A0") is None
+
+    store.ingest(_match(winning_team=2), hash_replay(b"lost"))
+    book = season_book(store, None)
+    # Both lost the same game; the one who started higher is still higher.
+    assert book.rating_for("h-A0").mu > book.rating_for("h-A1").mu
+    assert book.rating_for("h-A1").mu < DEFAULT_MU
+    assert book.rating_for("h-A0").mu < SKILL_LEVEL_MU["top"]
+
+
+def test_skill_level_can_be_changed(store):
+    store.set_skill_level("42", "beginner")
+    store.set_skill_level("42", "mid")
+    assert store.skill_level("42") == "mid"
+    assert store.skill_level("7") is None

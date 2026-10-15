@@ -67,7 +67,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -141,6 +141,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_player_links_handle
 -- but users won't reproduce it, and "Rain"/"rain" must not be two claims.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_player_links_name_nocase
     ON player_links(sc2_name COLLATE NOCASE);
+
+-- The SC2 level a player reports before their first game here (beginner /
+-- mid / top, see rating.SKILL_LEVEL_MU). Written by users like player_links,
+-- so it survives everything a reparse touches. Only the walk's starting point
+-- reads it: the player's first rated game starts from it instead of the prior.
+CREATE TABLE IF NOT EXISTS skill_levels (
+    discord_id TEXT PRIMARY KEY,
+    level TEXT NOT NULL,
+    set_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
 -- Channels watched for replay uploads, managed at runtime by !watchreplays.
 -- Unioned with the config-file channel list; empty overall = watch everywhere.
@@ -420,6 +430,17 @@ def _migration_15_spine_rush(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE match_players ADD COLUMN spine_rush INTEGER")
 
 
+def _migration_16_skill_levels(conn: sqlite3.Connection) -> None:
+    """Self-reported SC2 levels, seeding a new player's first game."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS skill_levels (
+               discord_id TEXT PRIMARY KEY,
+               level TEXT NOT NULL,
+               set_at TEXT NOT NULL DEFAULT (datetime('now'))
+           )"""
+    )
+
+
 _MIGRATIONS = {
     1: _migration_1_content_key,
     2: _migration_2_replay_channels,
@@ -436,6 +457,7 @@ _MIGRATIONS = {
     13: _migration_13_soft_season_reset,
     14: _migration_14_cannon_rush,
     15: _migration_15_spine_rush,
+    16: _migration_16_skill_levels,
 }
 
 
@@ -985,6 +1007,27 @@ class MatchStore:
             "SELECT sc2_name FROM player_links WHERE discord_id = ? ORDER BY sc2_name", (discord_id,)
         ).fetchall()
         return [r["sc2_name"] for r in rows]
+
+    def skill_level(self, discord_id: str) -> str | None:
+        row = self._conn.execute("SELECT level FROM skill_levels WHERE discord_id = ?", (discord_id,)).fetchone()
+        return row["level"] if row else None
+
+    def set_skill_level(self, discord_id: str, level: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO skill_levels (discord_id, level) VALUES (?, ?) "
+                "ON CONFLICT(discord_id) DO UPDATE SET level = excluded.level, set_at = datetime('now')",
+                (discord_id, level),
+            )
+        self.change_count += 1
+
+    def skill_levels_by_handle(self) -> dict[str, str]:
+        """Each linked account's owner's reported level, by toon_handle."""
+        rows = self._conn.execute(
+            "SELECT l.toon_handle, s.level FROM player_links l JOIN skill_levels s ON s.discord_id = l.discord_id "
+            "WHERE l.toon_handle IS NOT NULL"
+        )
+        return {r["toon_handle"]: r["level"] for r in rows}
 
     def handles_for(self, discord_id: str) -> list[str]:
         """The SC2 account handles bound to this user (names they've played

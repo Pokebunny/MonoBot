@@ -18,7 +18,7 @@ from discord.ext import commands, tasks
 from models.matchmaking import ProposedMatch, QueuedPlayer
 from services import match_embeds
 from services.matchmaking import expired, next_roster, ranked_matches
-from services.rating import DEFAULT_MU, DEFAULT_SIGMA
+from services.rating import DEFAULT_SIGMA, level_mu
 from views import person_or_pick
 
 logger = logging.getLogger(__name__)
@@ -86,6 +86,47 @@ class QueueView(discord.ui.View):
             await lobby.handle_leave(interaction)
 
 
+# The levels a new player picks from (rating.SKILL_LEVEL_MU): key, button
+# label, what it means in SC2 ladder terms.
+SKILL_LEVELS = [
+    ("beginner", "Beginner", "below Diamond"),
+    ("mid", "Mid", "Diamond to Master"),
+    ("top", "Top", "Grandmaster"),
+]
+LEVEL_PROMPT = (
+    "Welcome! You haven't played a monobattle here yet — what's your usual SC2 ladder level? "
+    "Your first game's rating starts from it, so the teams come out fairer."
+)
+
+
+def _level_label(level: str) -> str:
+    return next(f"**{label}** ({meaning})" for key, label, meaning in SKILL_LEVELS if key == level)
+
+
+class SkillLevelView(discord.ui.View):
+    """The level buttons, for one player: shown privately on their first
+    Join, or by !level. Not persistent — !level brings them back."""
+
+    def __init__(self, lobby_for, owner_id: int):
+        super().__init__(timeout=600)
+        self.lobby_for = lobby_for
+        self.owner_id = owner_id
+        for key, label, meaning in SKILL_LEVELS:
+            button = discord.ui.Button(label=f"{label} — {meaning}", style=discord.ButtonStyle.primary)
+            button.callback = self._picker(key)
+            self.add_item(button)
+
+    def _picker(self, level: str):
+        async def pick(interaction: discord.Interaction):
+            if interaction.user.id != self.owner_id:
+                await interaction.response.send_message("Run `!level` to set your own.", ephemeral=True)
+                return
+            if lobby := await _lobby_or_reply(self.lobby_for, interaction):
+                await interaction.response.edit_message(content=lobby.set_level(interaction.user, level), view=None)
+
+        return pick
+
+
 class ProposedMatchView(discord.ui.View):
     """The teams announced when the queue fills.
 
@@ -145,7 +186,9 @@ class ProposedMatchView(discord.ui.View):
         return set(lobby.stored_roster_ids())
 
     def embed(self, lobby: "Lobby") -> discord.Embed:
-        return lobby.lineup_embed(match_embeds.proposed_match(self.options[self.index], self.index, len(self.options)))
+        return lobby.lineup_embed(
+            match_embeds.proposed_match(self.options[self.index], self.index, len(self.options), lobby.meeting_point())
+        )
 
     async def _players_only(self, interaction: discord.Interaction, lobby: "Lobby", action: str) -> bool:
         if str(interaction.user.id) in self.player_ids(lobby):
@@ -383,14 +426,15 @@ class Lobby:
         """Build a QueuedPlayer, rated by the user's bound SC2 account with the
         most games. A season's seed counts until they've played in it, so a
         soft reset balances on carried-over skill from the first game. Users
-        who are linked but haven't played yet get the new-player default."""
+        who haven't played yet start from the level they reported (!level),
+        or the new-player default."""
         book = self.ratings.book()
         best = None
         for handle in self.store.handles_for(str(user.id)):
             rating = book.standing_for(handle)  # follows account merges
             if rating is not None and (best is None or rating.games > best.games):
                 best = rating
-        if best is not None:
+        if best is not None and best.name:
             return QueuedPlayer(
                 discord_id=str(user.id),
                 display_name=user.display_name,
@@ -402,7 +446,7 @@ class Lobby:
             discord_id=str(user.id),
             display_name=user.display_name,
             sc2_name=None,
-            mu=DEFAULT_MU,
+            mu=level_mu(self.store.skill_level(str(user.id))),
             sigma=DEFAULT_SIGMA,
         )
 
@@ -410,7 +454,12 @@ class Lobby:
         return [self._queued_player(u) for u in self.queue.values()]
 
     def _status_embed(self) -> discord.Embed:
-        return match_embeds.queue_status(self._players(), QUEUE_TARGET, self.config.queue_timeout_minutes)
+        return match_embeds.queue_status(
+            self._players(), QUEUE_TARGET, self.config.queue_timeout_minutes, self.meeting_point()
+        )
+
+    def meeting_point(self) -> str | None:
+        return match_embeds.meeting_point(self.config.sc2_chat_channel, self.config.sc2_region)
 
     async def _refresh_message(self):
         """Update the tracked queue message after a command changes the queue."""
@@ -617,8 +666,42 @@ class Lobby:
         roster = self._take_queue() if len(self.queue) >= QUEUE_TARGET else None
         # Reset the queue message either way, then announce any formed match.
         await interaction.response.edit_message(embed=self._status_embed(), view=QueueView(self.lobby_for))
+        if self.needs_level(uid):
+            view = SkillLevelView(self.lobby_for, interaction.user.id)
+            await interaction.followup.send(LEVEL_PROMPT, view=view, ephemeral=True)
         if roster:
             await self.post_match(interaction.channel, roster, announce=True)
+
+    # -- self-reported level ---------------------------------------------
+
+    def has_played(self, uid: str) -> bool:
+        """Whether a game of theirs is stored here: a link binds its account
+        handle the first time the name shows up in an upload."""
+        return bool(self.store.handles_for(uid))
+
+    def needs_level(self, uid: str) -> bool:
+        return not self.has_played(uid) and self.store.skill_level(uid) is None
+
+    def set_level(self, user: discord.abc.User, level: str) -> str:
+        """Record a level, and say what happened. Refused once they've played:
+        their rating then comes from their games, and changing the start
+        would rewrite every rating since."""
+        uid = str(user.id)
+        if self.has_played(uid):
+            return "You've played here already, so your rating comes from your games now."
+        self.store.set_skill_level(uid, level)
+        return (
+            f"Got it — you'll start as {_level_label(level)}. Change it with `!level` any time before your first game."
+        )
+
+    async def level_prompt(self, ctx):
+        uid = str(ctx.author.id)
+        if self.has_played(uid):
+            await ctx.send("You've played here already, so your rating comes from your games now.", ephemeral=True)
+            return
+        current = self.store.skill_level(uid)
+        content = LEVEL_PROMPT if current is None else f"You're down as {_level_label(current)}. Change it?"
+        await ctx.send(content, view=SkillLevelView(self.lobby_for, ctx.author.id), ephemeral=True)
 
     async def handle_leave(self, interaction: discord.Interaction):
         await self._adopt_message(interaction)
@@ -925,6 +1008,10 @@ class Matchmaking(commands.Cog):
     @commands.hybrid_command(help="put a player into the queue")
     async def add(self, ctx, *, player: str):
         await self.lobby_for(ctx.guild).add(ctx, player)
+
+    @commands.hybrid_command(help="set your SC2 level, which seeds your rating before your first game")
+    async def level(self, ctx):
+        await self.lobby_for(ctx.guild).level_prompt(ctx)
 
     @commands.hybrid_command(help="clear the matchmaking queue")
     async def clearqueue(self, ctx):

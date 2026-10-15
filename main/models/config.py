@@ -39,6 +39,12 @@ class GuildConfig(BaseModel):
     # the timeout.
     queue_timeout_minutes: int | None = 60
 
+    # The in-game chat channel players meet in to start a game, and the
+    # Battle.net region it's on. Shown on the queue and on every proposed
+    # match; None leaves the hint off.
+    sc2_chat_channel: str | None = None
+    sc2_region: str = "Americas"
+
     # Discord user IDs allowed to run bot-admin commands (merges, linking other
     # members, clearing the queue) regardless of server permissions. The
     # top-level list is admin everywhere; a guild's own list only there.

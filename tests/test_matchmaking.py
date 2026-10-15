@@ -3,11 +3,12 @@ import datetime as dt
 import types
 
 import pytest
-from cogs.matchmaking import Lobby, NextGameView, ProposedMatchView
+from cogs.matchmaking import Lobby, NextGameView, ProposedMatchView, SkillLevelView
 from models.config import GuildConfig
 from models.matchmaking import QueuedPlayer
+from services import match_embeds
 from services.matchmaking import balance_teams, expired, next_roster, ranked_matches
-from services.rating import DEFAULT_MU, DEFAULT_SIGMA, predict_win_probability
+from services.rating import DEFAULT_MU, DEFAULT_SIGMA, SKILL_LEVEL_MU, predict_win_probability
 
 
 def _p(name, mu=DEFAULT_MU, sigma=DEFAULT_SIGMA):
@@ -123,6 +124,15 @@ class _Interaction:
         self.channel = object()
         self.guild = _Guild()
         self.message = _Message()
+        self.followup = _Followup()
+
+
+class _Followup:
+    def __init__(self):
+        self.sent = []
+
+    async def send(self, content, view=None, ephemeral=False):
+        self.sent.append((content, view, ephemeral))
 
 
 class _Guild:
@@ -164,6 +174,7 @@ class _Cog:
     # The real lineup logic, run against this fake's state.
     lineup_for_next = Lobby.lineup_for_next
     lineup_embed = Lobby.lineup_embed
+    meeting_point = Lobby.meeting_point
     toggle_lineup = Lobby.toggle_lineup
     re_team = Lobby.re_team
     _redraw_lineup = Lobby._redraw_lineup
@@ -225,6 +236,24 @@ class TestNewTeamsButton:
         asyncio.run(view.new_teams.callback(interaction))
         assert "Only a player in this match" in interaction.response.message
         assert view.index == 0
+
+
+class TestMeetingPoint:
+    """The server's SC2 chat channel shows on the queue and the teams."""
+
+    def test_proposal_names_the_channel_and_region(self):
+        view, _ = _view(_Store(count=5))
+        lobby = view.lobby_for(None)
+        lobby.config = GuildConfig(sc2_chat_channel="bgh1")
+        assert "**bgh1** (Americas server)" in view.embed(lobby).description
+
+    def test_queue_names_the_channel(self):
+        meet = match_embeds.meeting_point("mono", "Americas")
+        assert meet in match_embeds.queue_status([], 8, meet=meet).description
+
+    def test_left_off_when_unconfigured(self):
+        view, _ = _view(_Store(count=5))
+        assert "chat channel" not in view.embed(view.lobby_for(None)).description
 
 
 class TestRestoredAfterRestart:
@@ -455,6 +484,18 @@ class _MetaStore(_Store):
     def set_meta(self, key, value):
         self.meta[key] = value
 
+    handles = ()
+    level = None
+
+    def handles_for(self, uid):
+        return list(self.handles)
+
+    def skill_level(self, uid):
+        return self.level
+
+    def set_skill_level(self, uid, level):
+        self.level = level
+
 
 class TestJoinButton:
     """The Join button end to end, so a helper it leans on can't go missing
@@ -473,3 +514,52 @@ class TestJoinButton:
         assert "1" in cog.queue and "1" in cog.joined_at
         assert cog.queue_message is interaction.message
         assert cog.store.meta["queue_message"] == "9:42"
+
+
+def _join(store):
+    cog = object.__new__(Lobby)
+    cog.store, cog.queue, cog.joined_at = store, {}, {}
+    cog.config, cog.lobby_for = GuildConfig(), lambda _guild: cog
+    cog.queue_message = None
+    cog._players = lambda: []
+    interaction = _Interaction(user_id=1)
+    interaction.message.channel = types.SimpleNamespace(id=9)
+    asyncio.run(cog.handle_join(interaction))
+    return cog, interaction
+
+
+class TestSkillLevel:
+    """A player who hasn't played here is asked their SC2 level on Join."""
+
+    def test_first_join_asks_privately(self):
+        _, interaction = _join(_MetaStore())
+        [(content, view, ephemeral)] = interaction.followup.sent
+        assert ephemeral and isinstance(view, SkillLevelView)
+
+    def test_not_asked_once_set(self):
+        store = _MetaStore()
+        store.level = "mid"
+        _, interaction = _join(store)
+        assert interaction.followup.sent == []
+
+    def test_not_asked_once_played(self):
+        store = _MetaStore()
+        store.handles = ["1-S2-1-1"]
+        _, interaction = _join(store)
+        assert interaction.followup.sent == []
+
+    def test_locked_after_first_game(self):
+        store = _MetaStore()
+        store.handles = ["1-S2-1-1"]
+        cog, _ = _join(store)
+        assert "comes from your games" in cog.set_level(types.SimpleNamespace(id=1), "top")
+        assert store.level is None
+
+    def test_unplayed_player_balances_at_their_level(self):
+        store = _MetaStore()
+        store.level = "top"
+        cog = object.__new__(Lobby)
+        cog.store = store
+        cog.ratings = types.SimpleNamespace(book=lambda: None)
+        player = cog._queued_player(types.SimpleNamespace(id=1, display_name="new"))
+        assert player.mu == SKILL_LEVEL_MU["top"] and not player.rated

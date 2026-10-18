@@ -3,7 +3,14 @@ import datetime
 import pytest
 from models.replay import MatchPlayer, MonobattleMatch
 from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, RatingBook
-from services.storage import MatchStore, combined_game_count, combined_unit_records, content_key, hash_replay
+from services.storage import (
+    MatchStore,
+    combined_game_count,
+    combined_unit_records,
+    content_key,
+    hash_replay,
+    rejection_reason,
+)
 
 BASE = datetime.datetime(2026, 7, 17, 12, 0, tzinfo=datetime.timezone.utc)
 
@@ -795,3 +802,44 @@ def test_skill_level_can_be_changed(store):
     store.set_skill_level("42", "mid")
     assert store.skill_level("42") == "mid"
     assert store.skill_level("7") is None
+
+
+# -- what gets stored ------------------------------------------------------
+
+
+def test_a_3v3_is_not_stored(store):
+    three_v_three = _match(roster=["A0", "A1", "A2", "B0", "B1", "B2"])
+    three_v_three.players[3].team = 2  # names are split 4/2 by _match; make it 3/3
+    result = store.ingest(three_v_three, hash_replay(b"3v3"))
+    assert result.status == "rejected"
+    assert "not a 4v4" in result.reason
+    assert store.match_count() == 0
+
+
+def test_an_uneven_lobby_is_not_stored(store):
+    uneven = _match(roster=["A0", "A1", "A2", "A3", "B0", "B1", "B2"])
+    assert store.ingest(uneven, hash_replay(b"4v3")).status == "rejected"
+
+
+def test_a_remake_is_not_stored_even_with_a_winner(store):
+    # 63s of picks + 100s of play: someone left during the draft.
+    remake = _match(duration=163)
+    result = store.ingest(remake, hash_replay(b"remake"))
+    assert result.status == "rejected"
+    assert "remake" in result.reason
+
+
+def test_a_long_undecided_game_is_kept_for_confirmation(store):
+    undecided = _match(winning_team=None, confidence=0.0, method="unknown", duration=900)
+    assert rejection_reason(undecided) is None
+    assert store.ingest(undecided, hash_replay(b"undecided")).status == "inserted"
+
+
+def test_delete_matches_takes_the_players_too(store):
+    keep = store.ingest(_match(played_at=_at(0)), hash_replay(b"keep")).match_id
+    drop = store.ingest(_match(played_at=_at(30)), hash_replay(b"drop")).match_id
+    assert store.delete_matches([drop]) == 1
+    assert [mid for mid, _ in store.all_matches()] == [keep]
+    assert store.get_match(drop) is None
+    orphans = store._conn.execute("SELECT COUNT(*) FROM match_players WHERE match_id = ?", (drop,)).fetchone()[0]
+    assert orphans == 0

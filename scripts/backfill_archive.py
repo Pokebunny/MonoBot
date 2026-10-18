@@ -34,7 +34,7 @@ def main() -> None:
     print(f"{len(paths)} replays to ingest")
 
     store = MatchStore()
-    counts = {"inserted": 0, "updated": 0, "duplicate": 0}
+    counts = {"inserted": 0, "updated": 0, "duplicate": 0, "rejected": 0}
     failed = 0
     for i, path in enumerate(paths):
         try:
@@ -54,7 +54,7 @@ def main() -> None:
 
     print(
         f"done: {counts['inserted']} new, {counts['updated']} refined, "
-        f"{counts['duplicate']} already stored, {failed} failed"
+        f"{counts['duplicate']} already stored, {counts['rejected']} rejected (not 4v4 / remake), {failed} failed"
     )
     print(f"database now holds {store.match_count()} matches")
 

@@ -227,6 +227,10 @@ class Replays(CommunityCog):
             await channel.send(embed=match_embeds.parse_failure(attachment.filename, str(e)))
             return
 
+        reason = storage.rejection_reason(match)
+        if reason is not None:
+            await channel.send(embed=match_embeds.rejected_notice(attachment.filename, reason))
+            return
         archive_replay(data, file_hash)
         result = self.store.ingest(match, file_hash, uploaded_by=uploader)
         if result.status == "duplicate":
@@ -331,6 +335,9 @@ class Replays(CommunityCog):
                 except Exception:
                     logger.exception("Backfill: failed to parse %s", attachment.filename)
                     stats["parse failed"] += 1
+                    continue
+                if storage.rejection_reason(match) is not None:
+                    stats["rejected"] += 1
                     continue
                 archive_replay(data, file_hash)
                 if self.store.refresh_parse(match, file_hash):

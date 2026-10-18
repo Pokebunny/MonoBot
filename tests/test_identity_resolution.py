@@ -23,11 +23,18 @@ def store(tmp_path):
 
 def _match(roster, at, winning_team=1):
     """roster: list of (display name, handle) for team 1 then team 2."""
+    # Each side is topped up to four with bystanders, since only 4v4s are stored.
+    half = len(roster) // 2
+    sides = (roster[:half], roster[half:])
+    roster = [
+        *sides[0], *((f"Pad1{j}", f"h-pad1{j}") for j in range(4 - len(sides[0]))),
+        *sides[1], *((f"Pad2{j}", f"h-pad2{j}") for j in range(4 - len(sides[1]))),
+    ]  # fmt: skip
     players = [
         MatchPlayer(
             name=name,
             toon_handle=handle,
-            team=(1 if i < len(roster) // 2 else 2),
+            team=1 if i < 4 else 2,
             race="Zerg",
             pick="Zergling",
             unit_counts={"Zergling": 10},
@@ -39,7 +46,7 @@ def _match(roster, at, winning_team=1):
         map_name="Monobattle LotV - Map Rotation",
         played_at=at,
         duration_seconds=900,
-        game_type="3v3",
+        game_type="4v4",
         pick_mode="blind_random",
         pick_phase_seconds=60,
         players=players,

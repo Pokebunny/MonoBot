@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import sqlite3
+from collections import Counter
 from typing import NamedTuple
 
 from models.replay import MapVersion, MatchPlayer, MonobattleMatch
@@ -30,9 +31,31 @@ logger = logging.getLogger(__name__)
 
 class IngestResult(NamedTuple):
     # "inserted" = new game; "updated" = same game, a more complete recording
-    # replaced the stored one; "duplicate" = same-or-worse recording, ignored.
+    # replaced the stored one; "duplicate" = same-or-worse recording, ignored;
+    # "rejected" = not a game worth keeping (see rejection_reason).
     status: str
     match_id: int | None
+    reason: str | None = None
+
+
+# What a stored game must be. Monobattles here are 4v4s: a 3v3 or an uneven
+# lobby is a different game, never rated. And a game with under two minutes of
+# play after the picks is a remake: every one on record (16 by Oct 2026) says
+# "remake", "wrong team" or someone's AFK in its chat, while the shortest real
+# game ran 3.5 minutes. An undecided game that DID run long is kept: it goes to
+# winner confirmation instead.
+TEAM_SIZE = 4
+MIN_BATTLE_SECONDS = 120
+
+
+def rejection_reason(match: MonobattleMatch) -> str | None:
+    """Why this game shouldn't be stored, or None when it should."""
+    sizes = Counter(p.team for p in match.players)
+    if len(sizes) != 2 or any(n != TEAM_SIZE for n in sizes.values()):
+        return f"it's a {match.game_type}, not a 4v4"
+    if match.battle_seconds < MIN_BATTLE_SECONDS:
+        return "it's a remake (under 2 minutes of play)"
+    return None
 
 
 class LinkResult(NamedTuple):
@@ -504,7 +527,11 @@ class MatchStore:
         stored, keep whichever recording is more complete — a higher winner
         confidence, or a longer duration at equal confidence — so a teammate
         who stayed to the end can supply a winner the early-leaver's replay
-        lacked. Manually confirmed results are never overwritten."""
+        lacked. Manually confirmed results are never overwritten. Games
+        that fail rejection_reason are never stored."""
+        reason = rejection_reason(match)
+        if reason is not None:
+            return IngestResult("rejected", None, reason)
         key = content_key(match)
         existing = self._conn.execute(
             "SELECT id, file_hash, duration_seconds, winner_confidence, winner_method FROM matches WHERE content_key = ?",
@@ -621,6 +648,16 @@ class MatchStore:
         self._conn.execute("DELETE FROM match_players WHERE match_id = ?", (match_id,))
         self._insert_players(match_id, match)
         self._conn.commit()
+
+    def delete_matches(self, match_ids: list[int]) -> int:
+        """Remove matches outright (their players go with them, by cascade).
+        Everything else is derived from matches, so nothing else needs
+        touching; achievements a deletion takes away are revoked, and
+        announced, by the next reconcile."""
+        cur = self._conn.executemany("DELETE FROM matches WHERE id = ?", [(i,) for i in match_ids])
+        self._conn.commit()
+        self.change_count += 1
+        return cur.rowcount
 
     def file_hashes(self) -> set[str]:
         """Every stored replay's file hash, so a backfill can skip parsing

@@ -124,6 +124,14 @@ def duplicate_notice(file_name: str) -> discord.Embed:
     )
 
 
+def rejected_notice(file_name: str, reason: str) -> discord.Embed:
+    return discord.Embed(
+        title="Not recorded",
+        description=f"`{file_name}` wasn't added to the match database: {reason}.",
+        color=WARNING,
+    )
+
+
 def parse_failure(file_name: str, error: str) -> discord.Embed:
     embed = discord.Embed(
         title="Couldn't parse replay",

@@ -3,7 +3,14 @@ import datetime as dt
 import types
 
 import pytest
-from cogs.matchmaking import Lobby, NextGameView, ProposedMatchView, SkillLevelView
+from cogs.matchmaking import (
+    ACTIVE_GAME_MINUTES,
+    MATCH_POSTED_AT_META_KEY,
+    Lobby,
+    NextGameView,
+    ProposedMatchView,
+    SkillLevelView,
+)
 from models.config import GuildConfig
 from models.matchmaking import QueuedPlayer
 from services import match_embeds
@@ -145,6 +152,13 @@ class _Guild:
 class _Store:
     def __init__(self, count=0):
         self.count = count
+        self.meta = {}
+
+    def get_meta(self, key):
+        return self.meta.get(key)
+
+    def set_meta(self, key, value):
+        self.meta[key] = value
 
     def match_count(self):
         return self.count
@@ -563,3 +577,60 @@ class TestSkillLevel:
         cog.ratings = types.SimpleNamespace(book=lambda: None)
         player = cog._queued_player(types.SimpleNamespace(id=1, display_name="new"))
         assert player.mu == SKILL_LEVEL_MU["top"] and not player.rated
+
+
+class TestAddWhileAGameIsOn:
+    """!add puts a late arrival on the waitlist while a game is on and nobody
+    is queuing for another; !waitlist <name> does it outright."""
+
+    def _cog(self, posted_minutes_ago=10):
+        cog = _Cog(_Store(), stored_ids=[str(i) for i in range(8)])
+        cog.queue, cog.joined_at = {}, {}
+        for name in ("_add", "_add_or_wait", "waitlist_member", "game_active", "renew"):
+            setattr(cog, name, types.MethodType(getattr(Lobby, name), cog))
+        if posted_minutes_ago is not None:
+            posted = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=posted_minutes_ago)
+            cog.store.set_meta(MATCH_POSTED_AT_META_KEY, posted.isoformat())
+        return cog
+
+    def _member(self, uid=101):
+        return types.SimpleNamespace(id=uid, display_name=f"p{uid}")
+
+    def test_goes_on_the_waitlist_while_a_game_is_on(self):
+        cog = self._cog()
+        message, roster = asyncio.run(cog._add_or_wait(self._member()))
+        assert "waitlist" in message and roster is None
+        assert cog.waitlist == ["101"] and cog.queue == {}
+
+    def test_joins_a_queue_that_is_already_forming(self):
+        cog = self._cog()
+        cog.queue["200"] = self._member(200)
+        message, _ = asyncio.run(cog._add_or_wait(self._member()))
+        assert "to the queue" in message
+        assert "101" in cog.queue and cog.waitlist == []
+
+    def test_queues_once_the_teams_are_stale(self):
+        cog = self._cog(posted_minutes_ago=ACTIVE_GAME_MINUTES + 1)
+        asyncio.run(cog._add_or_wait(self._member()))
+        assert "101" in cog.queue and cog.waitlist == []
+
+    def test_queues_when_teams_never_went_up(self):
+        cog = self._cog(posted_minutes_ago=None)
+        asyncio.run(cog._add_or_wait(self._member()))
+        assert "101" in cog.queue
+
+    def test_someone_in_the_match_is_queued_not_waitlisted(self):
+        cog = self._cog()
+        asyncio.run(cog._add_or_wait(self._member(3)))
+        assert "3" in cog.queue and cog.waitlist == []
+
+    def test_waitlisting_twice_says_where_they_are(self):
+        cog = self._cog()
+        asyncio.run(cog.waitlist_member(self._member(), "p101"))
+        reply = asyncio.run(cog.waitlist_member(self._member(), "p101"))
+        assert "already #1" in reply and cog.waitlist == ["101"]
+
+    def test_cannot_waitlist_a_player_in_the_match(self):
+        cog = self._cog()
+        reply = asyncio.run(cog.waitlist_member(self._member(3), "p3"))
+        assert "!bump" in reply and cog.waitlist == []

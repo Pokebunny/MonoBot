@@ -43,6 +43,16 @@ MATCH_ROSTER_META_KEY = "match_roster"
 SITTING_OUT_META_KEY = "match_sitting_out"
 WAITLIST_META_KEY = "match_waitlist"
 
+# meta key holding when the live proposal went up (ISO, UTC). Teams are
+# re-posted for every game (New teams / !teams), so a recent post means a group
+# is mid-session — the stored roster alone can't say, since it outlives the
+# session it belonged to.
+MATCH_POSTED_AT_META_KEY = "match_posted_at"
+
+# How recently teams must have gone up for !add to treat a game as on: a long
+# game plus the gap before someone re-teams.
+ACTIVE_GAME_MINUTES = 90
+
 # How often queue timeouts are checked; the slack on the timeout itself.
 TIMEOUT_SWEEP_SECONDS = 60
 
@@ -605,7 +615,7 @@ class Lobby:
                     content=f"**{person.sc2_name}** isn't in this server.", view=None
                 )
                 return
-            message, roster = self._add(member)
+            message, roster = await self._add_or_wait(member)
             await interaction.response.edit_message(content=message, view=None)
             await self._refresh_message()
             if roster:
@@ -614,11 +624,21 @@ class Lobby:
         member = await self._member_for(ctx, player, picked)
         if member is None:
             return
-        message, roster = self._add(member)
+        message, roster = await self._add_or_wait(member)
         await self._refresh_message()
         await ctx.send(message)
         if roster:
             await self.post_match(ctx.channel, roster, announce=True)
+
+    async def _add_or_wait(self, member) -> tuple[str, list | None]:
+        """!add's routing. With a game on and nobody queuing for another, a
+        late arrival wants the next open spot, not a queue of one — so they go
+        on the waitlist. Anyone already queuing means a second group is
+        forming, and the add joins it."""
+        if not self.queue and self.game_active() and str(member.id) not in self.stored_roster_ids():
+            why = "A game's on, so "
+            return await self.waitlist_member(member, member.display_name, why), None
+        return self._add(member)
 
     def _add(self, member) -> tuple[str, list | None]:
         """Queue a member; returns what to say and a roster if that filled it."""
@@ -743,6 +763,7 @@ class Lobby:
         options = ranked_matches(players, limit=SHUFFLE_OPTIONS)
         self.last_roster = list(users)
         self.store.set_meta(MATCH_ROSTER_META_KEY, ",".join(str(u.id) for u in users))
+        self.store.set_meta(MATCH_POSTED_AT_META_KEY, discord.utils.utcnow().isoformat())
         roster_ids = {str(u.id) for u in users}
         waiting = len(self.waitlist)
         lineup_changed = bool(self.sitting_out)
@@ -844,6 +865,52 @@ class Lobby:
         except discord.HTTPException, IndexError:
             pass
         await self._redraw_lineup(skip=interaction.message)
+
+    async def add_to_waitlist(self, ctx, player: str):
+        """!waitlist <name>: put someone on the waitlist for them, as if
+        they'd pressed Waitlist."""
+
+        async def picked(interaction, person):
+            member = await self._member_of(ctx, person)
+            if member is None:
+                await interaction.response.edit_message(
+                    content=f"**{person.sc2_name}** isn't in this server.", view=None
+                )
+                return
+            await interaction.response.edit_message(
+                content=await self.waitlist_member(member, person.sc2_name), view=None
+            )
+
+        member = await self._member_for(ctx, player, picked)
+        if member is not None:
+            await ctx.send(await self.waitlist_member(member, member.display_name))
+
+    async def waitlist_member(self, member, label: str, why: str = "") -> str:
+        """Append a member to the waitlist and redraw it; says what happened.
+        `why` prefixes the success message."""
+        uid = str(member.id)
+        if uid in self.stored_roster_ids():
+            return f"**{label}** is already in the match — `!bump` sits them out of the next game."
+        if uid in self.waitlist:
+            return f"**{label}** is already #{self.waitlist.index(uid) + 1} on the waitlist."
+        if not self.store.sc2_names_for(uid):
+            return (
+                f"**{label}** hasn't linked an SC2 name yet — "
+                "they need to run `!link <their SC2 name>` before they can play."
+            )
+        self.waitlist.append(uid)
+        self.save_lineup()
+        await self._redraw_lineup()
+        return f"{why}**{label}** is #{len(self.waitlist)} on the waitlist — they'll take the next open spot."
+
+    def game_active(self) -> bool:
+        """Whether a group is mid-session: teams went up within the last
+        ACTIVE_GAME_MINUTES."""
+        posted = self.store.get_meta(MATCH_POSTED_AT_META_KEY)
+        if not posted or not self.stored_roster_ids():
+            return False
+        age = discord.utils.utcnow() - dt.datetime.fromisoformat(posted)
+        return age < dt.timedelta(minutes=ACTIVE_GAME_MINUTES)
 
     async def re_team(self, interaction: discord.Interaction, users: list[discord.abc.User]) -> bool:
         """Swap sit-outs for waitlisters and post fresh teams; answers the
@@ -999,13 +1066,21 @@ class Matchmaking(commands.Cog):
         await self.lobby_for(ctx.guild).teams(ctx)
 
     @commands.hybrid_command(
-        name="waitlist", aliases=["lineup"], help="show the current teams and waitlist at the bottom of chat"
+        name="waitlist",
+        aliases=["lineup"],
+        help="show the current teams and waitlist at the bottom of chat, or put a player on the waitlist",
     )
     @commands.cooldown(1, 10, commands.BucketType.channel)
-    async def show_lineup(self, ctx):
+    async def show_lineup(self, ctx, *, player: str | None = None):
+        if player:
+            # The cooldown is there to stop the lineup being re-posted over and
+            # over; adding a few people in a row is fine.
+            ctx.command.reset_cooldown(ctx)
+            await self.lobby_for(ctx.guild).add_to_waitlist(ctx, player)
+            return
         await self.lobby_for(ctx.guild).show_lineup(ctx)
 
-    @commands.hybrid_command(help="put a player into the queue")
+    @commands.hybrid_command(help="put a player into the queue (or on the waitlist while a game's on)")
     async def add(self, ctx, *, player: str):
         await self.lobby_for(ctx.guild).add(ctx, player)
 

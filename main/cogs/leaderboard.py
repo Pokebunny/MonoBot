@@ -7,7 +7,7 @@ import discord
 from checks import is_bot_admin
 from community import CommunityCog
 from discord.ext import commands
-from services import achievements, identity, map_versions, match_embeds
+from services import achievements, identity, map_versions, match_embeds, records
 from services.rating import (
     CANNON_RUSH,
     MIN_DURATION_SECONDS,
@@ -635,6 +635,28 @@ class Leaderboard(CommunityCog):
         if len(matches) == 1:
             await ctx.send(embed=view.embed())
             return
+        view.message = await ctx.send(embed=view.embed(), view=view)
+
+    @commands.hybrid_command(
+        aliases=["record"],
+        description="all-time records: comebacks, longest/fastest games, lead changes, kills, trades",
+        help="all-time records, one page each: biggest comebacks, longest games, fastest wins, most lead "
+        "changes, most kills in a game and best trades. Name one to open on it (!records longest)",
+    )
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def records(self, ctx, *, category: str = ""):
+        self = self.at(ctx)
+        start = 0
+        if category:
+            start = records.board_index(category)
+            if start is None:
+                names = ", ".join(records.RECORD_ALIASES)
+                await ctx.send(f"No records called **{category}**. Try one of: {names}.")
+                return
+        boards = records.record_boards(self.store.all_matches())
+        view = PagedBoardView(
+            lambda page: match_embeds.record_board(boards[page], page, len(boards)), len(boards), start
+        )
         view.message = await ctx.send(embed=view.embed(), view=view)
 
     @commands.hybrid_command(help="head-to-head between two players — !h2h <name> means you vs them")

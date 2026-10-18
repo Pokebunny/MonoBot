@@ -169,7 +169,7 @@ class MonobattleMatch(BaseModel):
     winner_confidence: float  # 1.0 recorded, <1.0 inferred, 0.0 unknown
     winner_method: str  # "recorded" | "inferred:<signals>" | "unknown"
     comeback_deficit: int | None = None  # winner's worst deficit in value on the map
-    lead_changes: int | None = None  # meaningful kill-lead flips over the game
+    lead_changes: int | None = None  # meaningful flips of the lead in value on the map
 
     @property
     def battle_seconds(self) -> int:

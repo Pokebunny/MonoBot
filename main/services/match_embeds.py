@@ -897,3 +897,16 @@ def _recap_highlights(players: list, names: dict[str, str]) -> list[str]:
     if best.wins >= 3 and best.wins > best.losses:
         out.append(f"🔥 Best record: {name(best)} {best.wins}-{best.losses}")
     return out
+
+
+def record_board(board, page: int, pages: int) -> discord.Embed:
+    """One `records.RecordBoard` as a page of !records."""
+    lines = [
+        f"`{i:>2}` **{row.value}** · {row.who} · {row.played_at:%b} {row.played_at.day}, {row.played_at.year} "
+        f"· #{row.match_id}"
+        for i, row in enumerate(board.rows, 1)
+    ]
+    embed = discord.Embed(title=f"{board.emoji} Records — {board.title}", color=ACCENT)
+    embed.description = "\n".join(lines) or "*No games yet.*"
+    embed.set_footer(text=f"!last <#> opens a game · !records {board.key} · Page {page + 1}/{pages}")
+    return embed

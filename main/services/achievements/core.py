@@ -163,7 +163,7 @@ class Tally:
     outkilled_enemy_team: int = 0
     fewest_kills_wins: int = 0  # won a long game with the lobby's lowest kills
     mirror_wins: int = 0
-    comeback_wins: int = 0
+    best_comeback: int = 0  # biggest deficit in value on the map overcome in a win
     repick_regrets: int = 0  # lost after repicking while a foe won with the original roll
     finders_keepers: int = 0  # won with a unit an opponent repicked away from
     twin_wins: int = 0  # won with 2+ of the same unit on the team
@@ -259,8 +259,8 @@ class Tally:
                 days=30
             ):
                 self.return_wins += 1
-            if match.comeback_deficit is not None and match.comeback_deficit >= 8000:
-                self.comeback_wins += 1
+            if match.comeback_deficit is not None:
+                self.best_comeback = max(self.best_comeback, match.comeback_deficit)
         else:
             self.streak = 0
             self.loss_streak += 1

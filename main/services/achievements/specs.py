@@ -449,13 +449,42 @@ SPECS: list[AchievementSpec] = [
         "Win a game where an opponent had your unit",
         _live("mirror_wins", 1),
     ),
+    # -- moment: comebacks (live only) ---------------------------------------
+    # The deficit is in value on the map (replay_parser._game_swings). Over the
+    # community's history 8k is ~7% of games, 12k ~2.3%, 18k ~0.6%, 25k two
+    # games ever — comebacks are the games people remember, so the ladder runs
+    # all the way up.
     _spec(
         "never_doubted",
         "Never Doubted",
         "🔄",
         "Uncommon",
-        "Win a comeback game (8,000+ behind)",
-        _live("comeback_wins", 1),
+        "Win after falling 8,000+ behind in value on the map",
+        _live("best_comeback", 8000),
+    ),
+    _spec(
+        "back_from_the_brink",
+        "Back from the Brink",
+        "🧗",
+        "Rare",
+        "Win after falling 12,000+ behind in value on the map",
+        _live("best_comeback", 12000),
+    ),
+    _spec(
+        "against_all_odds",
+        "Against All Odds",
+        "🌅",
+        "Epic",
+        "Win after falling 18,000+ behind in value on the map",
+        _live("best_comeback", 18000),
+    ),
+    _spec(
+        "lazarus",
+        "Lazarus",
+        "🪦",
+        "Legendary",
+        "Win after falling 25,000+ behind in value on the map",
+        _live("best_comeback", 25000),
     ),
     _spec(
         "along_for_the_ride",

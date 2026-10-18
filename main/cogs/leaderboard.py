@@ -1,6 +1,7 @@
 """Ratings and stats commands, derived from the stored match history."""
 
 import logging
+import re
 
 import discord
 from checks import is_bot_admin
@@ -24,6 +25,10 @@ from services.rating import (
 from views import ExpiringView, PagedBoardView, person_or_pick
 
 logger = logging.getLogger(__name__)
+
+# !last's argument read as a match number rather than a name: "1706" or
+# "#1706". Discord ids are 17+ digits, so a member typed by id never lands here.
+_MATCH_NUMBER = re.compile(r"#?(\d{1,7})")
 
 # Default minimum games to appear on the board: trims one-off historical
 # accounts now that the ladder is in real use. !leaderboard 1 shows everyone.
@@ -166,17 +171,22 @@ class MatchBrowserView(ExpiringView):
     """⏮ ◀ ▶ ⏭ browsing over a snapshot of match history (oldest→newest);
     opens on the newest game, ◀ steps back in time."""
 
-    def __init__(self, matches, map_names: dict[str, str] | None = None):
+    def __init__(self, matches, map_names: dict[str, str] | None = None, start: int | None = None):
         super().__init__()
         self.matches = matches
         self.map_names = map_names or {}
-        self.index = len(matches) - 1
+        self.index = len(matches) - 1 if start is None else start
         self._sync()
 
     def embed(self) -> discord.Embed:
         match_id, match = self.matches[self.index]
         embed = match_embeds.match_summary(match, match_id, map_label=map_versions.label(match, self.map_names))
-        embed.set_footer(text=f"Match #{match_id} · {self.index + 1}/{len(self.matches)}")
+        # One number per game — the match number every summary shows, and the
+        # one !last takes. Its place in the list is said in words, so it's
+        # never mistaken for a second game number.
+        newer = len(self.matches) - 1 - self.index
+        where = "newest" if newer == 0 else f"{newer} newer"
+        embed.set_footer(text=f"Match #{match_id} · {where}")
         return embed
 
     def _sync(self):
@@ -575,11 +585,25 @@ class Leaderboard(CommunityCog):
         view = CatalogView(earned_keys, discovered, holders, private)
         view.message = await ctx.send(embed=view.embed(), view=view, ephemeral=private)
 
-    @commands.hybrid_command(help="browse recent matches (◀ steps back in time) — optionally a player's")
+    @commands.hybrid_command(
+        description="browse recent matches — a player's, or from a match number (!last 1706)",
+        help="browse recent matches (◀ steps back in time) — optionally a player's, "
+        "or open at a match number (!last 1706, shown in every summary's footer)",
+    )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def last(self, ctx, *, player: str | None = None):
         self = self.at(ctx)
         matches = self.store.all_matches()  # oldest first
+        number = _MATCH_NUMBER.fullmatch(player.strip()) if player else None
+        if number:
+            match_id = int(number.group(1))
+            index = next((i for i, (mid, _) in enumerate(matches) if mid == match_id), None)
+            if index is None:
+                await ctx.send(f"There's no match #{match_id}.")
+                return
+            view = MatchBrowserView(matches, self.store.map_version_names(), start=index)
+            view.message = await ctx.send(embed=view.embed(), view=view)
+            return
         if player:
 
             async def picked(interaction, person):

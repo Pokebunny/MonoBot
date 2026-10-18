@@ -622,6 +622,11 @@ class MatchStore:
         self._insert_players(match_id, match)
         self._conn.commit()
 
+    def file_hashes(self) -> set[str]:
+        """Every stored replay's file hash, so a backfill can skip parsing
+        files this database doesn't hold."""
+        return {row[0] for row in self._conn.execute("SELECT file_hash FROM matches")}
+
     def refresh_parse(self, match: MonobattleMatch, file_hash: str) -> bool:
         """Overwrite a stored game with a fresh parse of the SAME replay file
         (after parser improvements), keeping a manually confirmed winner and

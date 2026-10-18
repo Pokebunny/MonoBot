@@ -32,9 +32,15 @@ def main() -> None:
 
     store = MatchStore(os.environ["MONOBOT_DB"]) if os.environ.get("MONOBOT_DB") else MatchStore()
     refreshed = not_stored = failed = 0
+    # Every community archives into the same folder, so most files belong to
+    # some other database: skip them before paying for a parse.
+    stored = store.file_hashes()
     for i, path in enumerate(paths):
         with open(path, "rb") as f:
             file_hash = storage.hash_replay(f.read())
+        if file_hash not in stored:
+            not_stored += 1
+            continue
         try:
             match = replay_parser.parse_replay(path)
         except Exception as e:

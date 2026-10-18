@@ -238,3 +238,37 @@ def test_link_with_only_brackets_shows_the_usage(store):
     ctx = _Ctx()
     _run(cog.link.callback(cog, ctx, sc2_name="<>"))
     assert "Usage" in ctx.sent[0].content
+
+
+# -- !last -------------------------------------------------------------------
+
+
+def _three_games(store):
+    for day in range(3):
+        _play(store, _filler(6, tag=f"d{day}"), day)
+    return [match_id for match_id, _ in store.all_matches()]
+
+
+def test_last_opens_at_a_match_number(store):
+    ids = _three_games(store)
+    cog = _leaderboard_cog(store)
+    for typed in (str(ids[0]), f"#{ids[0]}"):
+        ctx = _Ctx()
+        _run(cog.last.callback(cog, ctx, player=typed))
+        assert ctx.sent[-1].embed.footer.text == f"Match #{ids[0]} · 2 newer"
+
+
+def test_last_says_when_a_match_number_does_not_exist(store):
+    ids = _three_games(store)
+    cog = _leaderboard_cog(store)
+    ctx = _Ctx()
+    _run(cog.last.callback(cog, ctx, player=str(max(ids) + 100)))
+    assert ctx.sent[-1].content == f"There's no match #{max(ids) + 100}."
+
+
+def test_last_opens_on_the_newest_game(store):
+    ids = _three_games(store)
+    cog = _leaderboard_cog(store)
+    ctx = _Ctx()
+    _run(cog.last.callback(cog, ctx))
+    assert ctx.sent[-1].embed.footer.text == f"Match #{ids[-1]} · newest"

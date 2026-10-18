@@ -225,6 +225,7 @@ SPECS: list[AchievementSpec] = [
     _spec("on_fire", "On Fire", "🔥", "Uncommon", "Win 5 games in a row", _live("best_streak", 5)),
     _spec("unstoppable", "Unstoppable", "🌋", "Epic", "Win 8 games in a row", _live("best_streak", 8)),
     _spec("the_run", "The Run", "☄️", "Legendary", "Win 10 games in a row", _live("best_streak", 10)),
+    _spec("godlike", "Godlike", "👑", "Legendary", "Win 15 games in a row", _live("best_streak", 15)),
     _spec(
         "bounce_back",
         "Bounce Back",

@@ -99,8 +99,8 @@ class Award(NamedTuple):
     z: float
 
 
-# Game-level awards (no single player): winner's worst kill-value deficit
-# for a Comeback, and lead flips for a Back-and-forth game.
+# Game-level awards (no single player): winner's worst deficit in value on the
+# map for a Comeback, and lead flips for a Back-and-forth game.
 COMEBACK_MIN_DEFICIT = 8000
 LEAD_CHANGES_MIN = 5
 

@@ -495,17 +495,28 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
     return tallies
 
 
-# A kill-value lead smaller than this is treated as "even" when counting
-# lead changes, so trading noise doesn't register as momentum swings.
-_LEAD_NOISE = 1000
+# A lead in value on the map smaller than this is treated as "even" when
+# counting lead changes, so production cycles and small trades don't register
+# as momentum swings. 1,500 keeps 5+ lead changes (the Back-and-forth award)
+# about as rare as it was when this measured kill value (~2.5% of games); at
+# 1,000 it fires on 9%.
+_LEAD_NOISE = 1500
 
 
-def _game_swings(replay, winning_team: int | None) -> tuple[int | None, int]:
-    """Momentum over the game, from each team's cumulative kill value:
-    (how far behind the winning team was at its worst — None if no winner,
-    number of meaningful lead changes)."""
+def _game_swings(replay, winning_team: int | None, game_start: int) -> tuple[int | None, int]:
+    """Momentum over the game, from each team's value on the map — everything
+    alive plus everything being built: (how far behind the winning team was at
+    its worst — None if no winner, number of meaningful lead changes).
+
+    Not kill value: a team can win every trade and still be losing on a dead
+    economy, and the biggest kill-value "comeback" on record (70k) was a team
+    with eleven times the other side's value on the map. Not the bank either: a
+    beaten team's unspendable money piles up after its army dies, so with the
+    bank a quarter of big "comebacks" were stomps measured in their last minute
+    (measured over 1,259 community games)."""
     team_of = {p.name: t.number for t in replay.teams for p in t.players}
-    latest: dict[str, tuple[int, int]] = {}  # player -> (team, resources_killed)
+    first_team = min(t.number for t in replay.teams)
+    latest: dict[str, tuple[int, int]] = {}  # player -> (team, value on the map)
     diffs = []
     for event in replay.events:
         if type(event).__name__ != "PlayerStatsEvent" or getattr(event, "player", None) is None:
@@ -513,10 +524,12 @@ def _game_swings(replay, winning_team: int | None) -> tuple[int | None, int]:
         name = event.player.name
         if name not in team_of:
             continue
-        latest[name] = (team_of[name], event.resources_killed)
-        first_team = min(t.number for t in replay.teams)
-        lead = sum(k for tm, k in latest.values() if tm == first_team) - sum(
-            k for tm, k in latest.values() if tm != first_team
+        on_map = event.resources_used_current + event.minerals_used_in_progress + event.vespene_used_in_progress
+        latest[name] = (team_of[name], on_map)
+        if event.second < game_start:
+            continue  # the pick phase: starting bases only, nothing to lead in
+        lead = sum(v for tm, v in latest.values() if tm == first_team) - sum(
+            v for tm, v in latest.values() if tm != first_team
         )
         diffs.append(lead)
 
@@ -529,7 +542,6 @@ def _game_swings(replay, winning_team: int | None) -> tuple[int | None, int]:
             state = sign
     max_deficit = None
     if winning_team is not None and diffs:
-        first_team = min(t.number for t in replay.teams)
         winner_view = diffs if winning_team == first_team else [-d for d in diffs]
         max_deficit = max(0, -min(winner_view))
     return max_deficit, changes
@@ -684,7 +696,7 @@ def parse_replay(path: str) -> MonobattleMatch:
             )
 
     winning_team, confidence, method = _infer_winner(replay)
-    comeback_deficit, lead_changes = _game_swings(replay, winning_team)
+    comeback_deficit, lead_changes = _game_swings(replay, winning_team, game_start)
     return MonobattleMatch(
         file_name=os.path.basename(path),
         map_name=replay.map_name,

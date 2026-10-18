@@ -1,6 +1,7 @@
 import glob
 import os
 import statistics
+import types
 
 import pytest
 from models.replay import STATIC_DEFENSE_KILLERS, WORKER_KILLERS
@@ -188,3 +189,64 @@ def test_own_kills_excludes_static_defense_and_workers(matches):
                 assert p.own_kills <= sum(p.kills_by_unit.values()) - extra
                 checked += 1
     assert checked, "no player in the sample got a kill with a cannon or a worker"
+
+
+def _stats(second, name, on_map, building=0, killed=0, bank=0):
+    """A PlayerStatsEvent with just the fields _game_swings reads."""
+    event = type("PlayerStatsEvent", (), {})()
+    event.second, event.player = second, types.SimpleNamespace(name=name)
+    event.resources_used_current = on_map
+    event.minerals_used_in_progress, event.vespene_used_in_progress = building, 0
+    event.resources_killed, event.minerals_current = killed, bank
+    return event
+
+
+def _swing_replay(events):
+    teams = [
+        types.SimpleNamespace(number=1, players=[types.SimpleNamespace(name="a")]),
+        types.SimpleNamespace(number=2, players=[types.SimpleNamespace(name="b")]),
+    ]
+    return types.SimpleNamespace(teams=teams, events=events)
+
+
+class TestGameSwings:
+    """Comebacks and lead changes are measured in value on the map (alive plus
+    being built), never kill value or bank."""
+
+    def test_deficit_is_value_on_the_map_not_kills(self):
+        # Team 1 out-trades team 2 on kills all game but falls 6,000 behind on
+        # the map before winning: the comeback is 6,000.
+        replay = _swing_replay(
+            [
+                _stats(100, "a", 5000, killed=9000),
+                _stats(100, "b", 11000, killed=1000),
+                _stats(200, "a", 9000, killed=20000),
+                _stats(200, "b", 4000, killed=2000),
+            ]
+        )
+        deficit, _ = replay_parser._game_swings(replay, 1, game_start=0)
+        assert deficit == 6000
+
+    def test_units_being_built_count_as_on_the_map(self):
+        # Spending moves value from the bank into production; it must not read
+        # as a dip.
+        replay = _swing_replay([_stats(100, "a", 4000, building=3000), _stats(100, "b", 7000)])
+        assert replay_parser._game_swings(replay, 1, game_start=0) == (0, 0)
+
+    def test_bank_does_not_count(self):
+        replay = _swing_replay([_stats(100, "a", 5000), _stats(100, "b", 5000, bank=30000)])
+        assert replay_parser._game_swings(replay, 1, game_start=0) == (0, 0)
+
+    def test_pick_phase_is_ignored(self):
+        replay = _swing_replay([_stats(10, "a", 1000), _stats(10, "b", 9000), _stats(100, "b", 1000)])
+        assert replay_parser._game_swings(replay, 1, game_start=50) == (0, 0)
+
+    def test_small_leads_are_not_lead_changes(self):
+        replay = _swing_replay(
+            [
+                _stats(s, n, v)
+                for s, (va, vb) in enumerate([(5000, 4000), (4000, 5000)] * 3)
+                for n, v in (("a", va), ("b", vb))
+            ]
+        )
+        assert replay_parser._game_swings(replay, 1, game_start=0)[1] == 0

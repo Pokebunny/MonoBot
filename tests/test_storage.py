@@ -835,6 +835,34 @@ def test_a_long_undecided_game_is_kept_for_confirmation(store):
     assert store.ingest(undecided, hash_replay(b"undecided")).status == "inserted"
 
 
+def test_an_approved_remake_is_stored_and_stays_approved(store):
+    # A real game that ended in under two minutes, recorded anyway.
+    short = _match(duration=163).model_copy(update={"approved": True})
+    result = store.ingest(short, hash_replay(b"short"))
+    assert result.status == "inserted"
+    stored = store.get_match(result.match_id)
+    assert stored.approved
+    assert rejection_reason(stored) is None  # so a prune leaves it be
+    assert store.is_approved(hash_replay(b"short"))
+    # A fresh parse of the same file knows nothing of the approval.
+    assert store.refresh_parse(_match(duration=163), hash_replay(b"short"))
+    assert store.get_match(result.match_id).approved
+
+
+def test_approval_column_is_added_to_an_older_db(tmp_path):
+    path = str(tmp_path / "old.db")
+    old = MatchStore(path)
+    old.ingest(_match(), hash_replay(b"old"))
+    old._conn.execute("ALTER TABLE matches DROP COLUMN approved")
+    old._conn.execute("PRAGMA user_version = 16")
+    old._conn.commit()
+    old.close()
+    migrated = MatchStore(path)
+    [(_, match)] = migrated.all_matches()
+    assert not match.approved
+    migrated.close()
+
+
 def test_delete_matches_takes_the_players_too(store):
     keep = store.ingest(_match(played_at=_at(0)), hash_replay(b"keep")).match_id
     drop = store.ingest(_match(played_at=_at(30)), hash_replay(b"drop")).match_id

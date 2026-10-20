@@ -170,6 +170,9 @@ class MonobattleMatch(BaseModel):
     winner_method: str  # "recorded" | "inferred:<signals>" | "unknown"
     comeback_deficit: int | None = None  # winner's worst deficit in value on the map
     lead_changes: int | None = None  # meaningful flips of the lead in value on the map
+    # Kept although it breaks storage.rejection_reason's rules, because
+    # someone vouched for it (a real game that happened to end early).
+    approved: bool = False
 
     @property
     def battle_seconds(self) -> int:

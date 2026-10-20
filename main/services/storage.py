@@ -49,7 +49,10 @@ MIN_BATTLE_SECONDS = 120
 
 
 def rejection_reason(match: MonobattleMatch) -> str | None:
-    """Why this game shouldn't be stored, or None when it should."""
+    """Why this game shouldn't be stored, or None when it should. A game
+    someone approved after it was turned away (match.approved) is kept."""
+    if match.approved:
+        return None
     sizes = Counter(p.team for p in match.players)
     if len(sizes) != 2 or any(n != TEAM_SIZE for n in sizes.values()):
         return f"it's a {match.game_type}, not a 4v4"
@@ -90,7 +93,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -110,6 +113,7 @@ CREATE TABLE IF NOT EXISTS matches (
     winner_method TEXT NOT NULL,
     comeback_deficit INTEGER,
     lead_changes INTEGER,
+    approved INTEGER NOT NULL DEFAULT 0,
     uploaded_by TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -464,6 +468,14 @@ def _migration_16_skill_levels(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_17_approved(conn: sqlite3.Connection) -> None:
+    """Games kept although they break rejection_reason's rules, because a
+    player or admin approved them on upload — so a prune leaves them be."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(matches)")}
+    if "approved" not in cols:
+        conn.execute("ALTER TABLE matches ADD COLUMN approved INTEGER NOT NULL DEFAULT 0")
+
+
 _MIGRATIONS = {
     1: _migration_1_content_key,
     2: _migration_2_replay_channels,
@@ -481,6 +493,7 @@ _MIGRATIONS = {
     14: _migration_14_cannon_rush,
     15: _migration_15_spine_rush,
     16: _migration_16_skill_levels,
+    17: _migration_17_approved,
 }
 
 
@@ -554,8 +567,8 @@ class MatchStore:
                 """INSERT INTO matches
                    (file_hash, content_key, file_name, map_name, map_hash, played_at, duration_seconds,
                     game_type, pick_mode, pick_phase_seconds, winning_team,
-                    winner_confidence, winner_method, comeback_deficit, lead_changes, uploaded_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    winner_confidence, winner_method, comeback_deficit, lead_changes, approved, uploaded_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (file_hash, key, *self._match_columns(match), uploaded_by),
             )
         except sqlite3.IntegrityError:
@@ -594,6 +607,7 @@ class MatchStore:
             match.winner_method,
             match.comeback_deficit,
             match.lead_changes,
+            int(match.approved),
         )
 
     def _insert_players(self, match_id: int, match: MonobattleMatch) -> None:
@@ -641,7 +655,7 @@ class MatchStore:
                  file_hash = ?, content_key = ?, file_name = ?, map_name = ?, map_hash = ?, played_at = ?,
                  duration_seconds = ?, game_type = ?, pick_mode = ?, pick_phase_seconds = ?,
                  winning_team = ?, winner_confidence = ?, winner_method = ?,
-                 comeback_deficit = ?, lead_changes = ?, uploaded_by = ?
+                 comeback_deficit = ?, lead_changes = ?, approved = ?, uploaded_by = ?
                WHERE id = ?""",
             (file_hash, key, *self._match_columns(match), uploaded_by, match_id),
         )
@@ -667,9 +681,10 @@ class MatchStore:
     def refresh_parse(self, match: MonobattleMatch, file_hash: str) -> bool:
         """Overwrite a stored game with a fresh parse of the SAME replay file
         (after parser improvements), keeping a manually confirmed winner and
-        the original uploader. False if this exact file isn't stored."""
+        the original uploader, and an approval. False if this exact file isn't
+        stored."""
         row = self._conn.execute(
-            "SELECT id, content_key, winning_team, winner_method, uploaded_by FROM matches WHERE file_hash = ?",
+            "SELECT id, content_key, winning_team, winner_method, approved, uploaded_by FROM matches WHERE file_hash = ?",
             (file_hash,),
         ).fetchone()
         if row is None:
@@ -678,6 +693,8 @@ class MatchStore:
             match = match.model_copy(
                 update={"winning_team": row["winning_team"], "winner_confidence": 1.0, "winner_method": "confirmed"}
             )
+        if row["approved"]:
+            match = match.model_copy(update={"approved": True})
         self._replace_match(row["id"], match, file_hash, row["content_key"], row["uploaded_by"])
         self.change_count += 1
         return True
@@ -1071,6 +1088,11 @@ class MatchStore:
         )
         return {r["toon_handle"]: r["level"] for r in rows}
 
+    def is_approved(self, file_hash: str) -> bool:
+        """Whether this replay file is stored as an approved rule-breaker."""
+        row = self._conn.execute("SELECT approved FROM matches WHERE file_hash = ?", (file_hash,)).fetchone()
+        return bool(row and row["approved"])
+
     def handles_for(self, discord_id: str) -> list[str]:
         """The SC2 account handles bound to this user (names they've played
         under at least once). Empty if linked-but-never-played."""
@@ -1425,4 +1447,5 @@ class MatchStore:
             winner_method=row["winner_method"],
             comeback_deficit=row["comeback_deficit"],
             lead_changes=row["lead_changes"],
+            approved=bool(row["approved"]),
         )

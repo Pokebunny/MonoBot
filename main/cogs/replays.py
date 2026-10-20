@@ -8,7 +8,7 @@ import tempfile
 from collections import Counter
 
 import discord
-from checks import is_bot_admin
+from checks import is_admin, is_bot_admin
 from community import CommunityCog
 from discord.ext import commands
 from services import achievements, map_versions, match_embeds, replay_parser, storage
@@ -126,6 +126,45 @@ class ConfirmWinnerView(ExpiringView):
         await self._confirm(interaction, 2)
 
 
+class ApproveGameView(ExpiringView):
+    """One button under a "Not recorded" notice, for the real game the rules
+    mistook for a remake (or an off-format game the group wants kept): a
+    player who was in it, or an admin, records it anyway. The approval is
+    stored on the match, so a later prune leaves it be. Approving only stores
+    it — the rating gate still applies, so a game that isn't a 4v4 is kept in
+    history but never rated. Holds the replay in memory until it expires."""
+
+    def __init__(self, cog: "Replays", match, data: bytes, file_hash: str, uploader: discord.abc.User):
+        super().__init__()
+        self.cog = cog  # bound to the uploading server's community
+        self.match = match
+        self.data = data
+        self.file_hash = file_hash
+        self.uploader = uploader
+
+    def _may_approve(self, interaction: discord.Interaction) -> bool:
+        if is_admin(interaction.client, interaction.guild, interaction.user):
+            return True
+        handles = set(self.cog.store.handles_for(str(interaction.user.id)))
+        return any(p.toon_handle in handles for p in self.match.players)
+
+    @discord.ui.button(label="Record anyway", style=discord.ButtonStyle.secondary)
+    async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self._may_approve(interaction):
+            await interaction.response.send_message(
+                "Only a player who was in this game (with a linked SC2 name) or an admin can record it.",
+                ephemeral=True,
+            )
+            return
+        self.stop()
+        button.disabled = True
+        embed = interaction.message.embeds[0]
+        embed.set_footer(text=f"Recorded anyway · approved by {interaction.user.display_name}")
+        await interaction.response.edit_message(embed=embed, view=self)
+        match = self.match.model_copy(update={"approved": True})
+        await self.cog._record(interaction.channel, match, self.data, self.file_hash, self.uploader)
+
+
 class Replays(CommunityCog):
     def __init__(self, client):
         super().__init__(client)
@@ -207,8 +246,6 @@ class Replays(CommunityCog):
         await ctx.send(f"{verb} {target.mention} for replay uploads. Currently watching: {mentions}")
 
     async def _process_attachment(self, channel, attachment: discord.Attachment, author: discord.abc.User):
-        # uploaded_by keys on the Discord id so Chronicler can credit it.
-        uploader = str(author.id)
         data = await attachment.read()
         file_hash = storage.hash_replay(data)
         if self.store.has_replay(file_hash):
@@ -229,14 +266,23 @@ class Replays(CommunityCog):
 
         reason = storage.rejection_reason(match)
         if reason is not None:
-            await channel.send(embed=match_embeds.rejected_notice(attachment.filename, reason))
+            view = ApproveGameView(self, match, data, file_hash, author)
+            view.message = await channel.send(
+                embed=match_embeds.rejected_notice(attachment.filename, reason), view=view
+            )
             return
+        await self._record(channel, match, data, file_hash, author)
+
+    async def _record(self, channel, match, data: bytes, file_hash: str, author: discord.abc.User):
+        """Store a parsed upload and post its summary, unlocks and buttons."""
+        # uploaded_by keys on the Discord id so Chronicler can credit it.
+        uploader = str(author.id)
         archive_replay(data, file_hash)
         result = self.store.ingest(match, file_hash, uploaded_by=uploader)
         if result.status == "duplicate":
             # Same game already stored (this file, or a recording at least as
             # complete from another player).
-            await channel.send(embed=match_embeds.duplicate_notice(attachment.filename))
+            await channel.send(embed=match_embeds.duplicate_notice(match.file_name))
             return
 
         # Fresh-upload rating changes: the game just entered history, so replay
@@ -254,7 +300,7 @@ class Replays(CommunityCog):
         try:
             await map_versions.resolve_pending_async(self.store)
         except Exception:
-            logger.exception("Could not resolve the map for %s", attachment.filename)
+            logger.exception("Could not resolve the map for %s", match.file_name)
         embed = match_embeds.match_summary(
             match,
             result.match_id,
@@ -336,7 +382,7 @@ class Replays(CommunityCog):
                     logger.exception("Backfill: failed to parse %s", attachment.filename)
                     stats["parse failed"] += 1
                     continue
-                if storage.rejection_reason(match) is not None:
+                if storage.rejection_reason(match) is not None and not self.store.is_approved(file_hash):
                     stats["rejected"] += 1
                     continue
                 archive_replay(data, file_hash)

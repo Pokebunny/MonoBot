@@ -1,6 +1,6 @@
 """Delete stored games that ingest would now turn away: anything that isn't a
-4v4, and remakes (see storage.rejection_reason). Lists them, and deletes only
-with --apply.
+4v4, and remakes (see storage.rejection_reason), except games someone approved
+on upload. Lists them, and deletes only with --apply.
 
 Usage (from repo root):
     uv run python scripts/prune_matches.py [db ...]                   # dry run

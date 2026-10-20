@@ -849,6 +849,22 @@ def test_an_approved_remake_is_stored_and_stays_approved(store):
     assert store.get_match(result.match_id).approved
 
 
+def test_an_approved_short_game_counts_everywhere_but_speed_records(store):
+    from services import records
+    from services.achievements.core import is_countable
+
+    # The replay ended inside the pick phase: 50s long, 0s of fighting.
+    short = _match(duration=50).model_copy(update={"approved": True})
+    match_id = store.ingest(short, hash_replay(b"short")).match_id
+    stored = store.get_match(match_id)
+    assert RatingBook.from_matches([stored]).rated_matches == 1
+    assert is_countable(stored)
+    picks = store.player_records_by(["h-A0"], "pick", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
+    assert sum(sum(v) for v in picks.values()) == 1
+    fastest = next(b for b in records.record_boards(store.all_matches()) if b.key == "fastest")
+    assert fastest.rows == []
+
+
 def test_approval_column_is_added_to_an_older_db(tmp_path):
     path = str(tmp_path / "old.db")
     old = MatchStore(path)

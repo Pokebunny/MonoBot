@@ -11,7 +11,8 @@ from typing import Callable, NamedTuple
 
 from models.replay import PICKABLE_UNITS, UNIT_RACE, MatchPlayer, MonobattleMatch
 from services.awards import trade_efficiency
-from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE
+from services.rating import MIN_WINNER_CONFIDENCE, long_enough
+from services.storage import MIN_BATTLE_SECONDS
 
 RARITIES = ["Common", "Uncommon", "Rare", "Epic", "Legendary"]
 RACES = ("Terran", "Zerg", "Protoss")
@@ -88,11 +89,7 @@ def _naive(dt: datetime.datetime) -> datetime.datetime:
 
 def is_countable(match: MonobattleMatch) -> bool:
     """Same gate as rating: only decided, real games feed achievements."""
-    return (
-        match.winning_team is not None
-        and match.winner_confidence >= MIN_WINNER_CONFIDENCE
-        and match.duration_seconds >= MIN_DURATION_SECONDS
-    )
+    return match.winning_team is not None and match.winner_confidence >= MIN_WINNER_CONFIDENCE and long_enough(match)
 
 
 @dataclass
@@ -252,7 +249,11 @@ class Tally:
             self.loss_streak = 0
             self.streak += 1
             self.best_streak = max(self.best_streak, self.streak)
-            if self.fastest_win is None or match.battle_seconds < self.fastest_win:
+            # An approved short game (see MonobattleMatch.approved) counts, but
+            # isn't a speed record: its clock can read 0:00.
+            if match.battle_seconds >= MIN_BATTLE_SECONDS and (
+                self.fastest_win is None or match.battle_seconds < self.fastest_win
+            ):
                 self.fastest_win = match.battle_seconds
             self.max_win_duration = max(self.max_win_duration, match.battle_seconds)
             if self._last_played is not None and _naive(match.played_at) - self._last_played >= datetime.timedelta(

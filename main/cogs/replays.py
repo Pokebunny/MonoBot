@@ -13,7 +13,7 @@ from community import CommunityCog
 from discord.ext import commands
 from services import achievements, map_versions, match_embeds, replay_parser, storage
 from services.achievements import AchievementCache
-from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, match_rating_deltas, season_start
+from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, long_enough, match_rating_deltas, season_start
 from services.storage import MatchStore
 from views import ExpiringView
 
@@ -315,7 +315,7 @@ class Replays(CommunityCog):
         unlocks = achievements.grant_new_unlocks(self.store, self.achievements, match)
         unlocks += self._chronicler_unlock(author, match)
 
-        needs_confirmation = match.duration_seconds >= MIN_DURATION_SECONDS and (
+        needs_confirmation = long_enough(match) and (
             match.winning_team is None or match.winner_confidence < MIN_WINNER_CONFIDENCE
         )
         # The current group's game gets Sit out / Waitlist / New teams, since

@@ -12,6 +12,7 @@ from typing import Callable, NamedTuple
 from models.replay import MatchPlayer, MonobattleMatch
 from services.awards import trade_efficiency
 from services.recap import is_decided
+from services.storage import MIN_BATTLE_SECONDS
 
 RECORDS_SHOWN = 10
 
@@ -94,7 +95,8 @@ def record_boards(matches: list[tuple[int, MonobattleMatch]]) -> list[RecordBoar
             "⚡",
             "Fastest Wins",
             matches,
-            lambda m: m.battle_seconds,
+            # An approved short game counts but sets no speed record.
+            lambda m: m.battle_seconds if m.battle_seconds >= MIN_BATTLE_SECONDS else None,
             lambda m: _duration(m.battle_seconds),
             lowest=True,
         ),

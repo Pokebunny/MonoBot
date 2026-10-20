@@ -1254,7 +1254,7 @@ class MatchStore:
         rows = self._conn.execute(
             """SELECT * FROM matches
                WHERE (winning_team IS NULL OR winner_confidence < ?)
-                 AND duration_seconds >= ?
+                 AND (duration_seconds >= ? OR approved = 1)
                ORDER BY played_at""",
             (confidence_gate, min_duration),
         ).fetchall()
@@ -1272,7 +1272,7 @@ class MatchStore:
             if (
                 match.winning_team is None
                 or match.winner_confidence < confidence_gate
-                or match.duration_seconds < min_duration
+                or (match.duration_seconds < min_duration and not match.approved)
             ):
                 continue
             p1 = next((p for p in match.players if p.toon_handle in g1), None)
@@ -1291,7 +1291,9 @@ class MatchStore:
         group = set(handles)
         count = 0
         for _match_id, match in self.all_matches():
-            if match.winner_confidence < confidence_gate or match.duration_seconds < min_duration:
+            if match.winner_confidence < confidence_gate or (
+                match.duration_seconds < min_duration and not match.approved
+            ):
                 continue
             mvp = match.mvp()
             if mvp is not None and mvp.toon_handle in group:
@@ -1308,7 +1310,9 @@ class MatchStore:
         merge = merge_map or {}
         counts: dict[str, int] = {}
         for _match_id, match in self.all_matches():
-            if match.winner_confidence < confidence_gate or match.duration_seconds < min_duration:
+            if match.winner_confidence < confidence_gate or (
+                match.duration_seconds < min_duration and not match.approved
+            ):
                 continue
             mvp = match.mvp()
             if mvp is None:  # no kill stats (a handful of pre-archive parses)
@@ -1325,7 +1329,9 @@ class MatchStore:
         group = set(handles)
         counts: dict[str, int] = {}
         for _match_id, match in self.all_matches():
-            if match.winner_confidence < confidence_gate or match.duration_seconds < min_duration:
+            if match.winner_confidence < confidence_gate or (
+                match.duration_seconds < min_duration and not match.approved
+            ):
                 continue
             for award in match_awards(match):
                 if award.player.toon_handle in group:
@@ -1351,7 +1357,7 @@ class MatchStore:
                WHERE mp.toon_handle IN ({placeholders})
                  AND m.winning_team IS NOT NULL
                  AND m.winner_confidence >= ?
-                 AND m.duration_seconds >= ?
+                 AND (m.duration_seconds >= ? OR m.approved = 1)
                  AND mp.{column} IS NOT NULL
                GROUP BY mp.{column}, won""",
             (*handles, confidence_gate, min_duration),
@@ -1382,7 +1388,7 @@ class MatchStore:
                FROM match_players mp JOIN matches m ON m.id = mp.match_id
                WHERE m.winning_team IS NOT NULL
                  AND m.winner_confidence >= ?
-                 AND m.duration_seconds >= ?
+                 AND (m.duration_seconds >= ? OR m.approved = 1)
                  AND mp.pick IS NOT NULL""",
             (confidence_gate, min_duration),
         ).fetchall()

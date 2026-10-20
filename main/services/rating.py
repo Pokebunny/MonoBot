@@ -35,6 +35,13 @@ DEFAULT_MU = _default.mu
 DEFAULT_SIGMA = _default.sigma
 
 
+def long_enough(match: MonobattleMatch) -> bool:
+    """Long enough to count: past MIN_DURATION_SECONDS, or approved on upload
+    (a real game that ended early — see MonobattleMatch.approved). Every
+    duration gate goes through this, or the SQL twins in MatchStore."""
+    return match.duration_seconds >= MIN_DURATION_SECONDS or match.approved
+
+
 def predict_win_probability(team1: list[tuple[float, float]], team2: list[tuple[float, float]]) -> float:
     """Predicted probability that team1 beats team2, from (mu, sigma) pairs.
     0.5 means an evenly matched game. Keeps openskill calls in this module."""
@@ -357,7 +364,7 @@ class RatingBook:
         return (
             match.winning_team is not None
             and match.winner_confidence >= MIN_WINNER_CONFIDENCE
-            and match.duration_seconds >= MIN_DURATION_SECONDS
+            and long_enough(match)
             and len({p.team for p in match.players}) == 2
             and all(len(match.team(t)) == TEAM_SIZE for t in {p.team for p in match.players})
         )

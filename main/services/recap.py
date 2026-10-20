@@ -12,7 +12,7 @@ import datetime
 from models.recap import PlayerRecap, SessionRecap
 from models.replay import MonobattleMatch
 from services.achievements import RARITIES, SPECS_BY_KEY
-from services.rating import DEFAULT_DISPLAY, MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, RatingBook
+from services.rating import DEFAULT_DISPLAY, MIN_WINNER_CONFIDENCE, RatingBook, long_enough
 
 SESSION_GAP = datetime.timedelta(hours=3)
 
@@ -38,11 +38,7 @@ def latest_session(matches: list[tuple[int, MonobattleMatch]]) -> list[tuple[int
 
 def is_decided(match: MonobattleMatch) -> bool:
     """Counts toward a recap's W/L and MVPs: the same gate profile records use."""
-    return (
-        match.winning_team is not None
-        and match.winner_confidence >= MIN_WINNER_CONFIDENCE
-        and match.duration_seconds >= MIN_DURATION_SECONDS
-    )
+    return match.winning_team is not None and match.winner_confidence >= MIN_WINNER_CONFIDENCE and long_enough(match)
 
 
 def build_recap(

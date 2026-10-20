@@ -52,7 +52,7 @@ def is_rateable(match) -> bool:
     return (
         match.winning_team is not None
         and match.winner_confidence >= MIN_WINNER_CONFIDENCE
-        and match.duration_seconds >= MIN_DURATION_SECONDS
+        and (match.duration_seconds >= MIN_DURATION_SECONDS or match.approved)
         and len({p.team for p in match.players}) == 2
     )
 

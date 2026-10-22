@@ -133,6 +133,9 @@ class _Interaction:
         self.message = _Message()
         self.followup = _Followup()
 
+    async def edit_original_response(self, **kwargs):
+        self.response.edited = True
+
 
 class _Followup:
     def __init__(self):
@@ -528,6 +531,57 @@ class TestJoinButton:
         assert "1" in cog.queue and "1" in cog.joined_at
         assert cog.queue_message is interaction.message
         assert cog.store.meta["queue_message"] == "9:42"
+
+
+class TestFullQueue:
+    """The 8th join: answered before the slow work, and a failed post never
+    loses the roster."""
+
+    def _eighth_join(self, monkeypatch, post_match):
+        import cogs.matchmaking as mm
+
+        monkeypatch.setattr(mm, "POST_RETRY_DELAYS", (0, 0))
+        cog = object.__new__(Lobby)
+        cog.store, cog.joined_at = _MetaStore(), {}
+        cog.queue = {str(i): types.SimpleNamespace(id=i, display_name=f"p{i}") for i in range(2, 9)}
+        cog.config, cog.lobby_for = GuildConfig(), lambda _guild: cog
+        cog.queue_message, cog.last_roster = None, []
+        cog._players = lambda: []
+        cog.post_match = post_match
+        interaction = _Interaction(user_id=1)
+        interaction.user.display_name = "p1"
+        interaction.message.channel = types.SimpleNamespace(id=9)
+        sent = []
+
+        async def send(content):
+            sent.append(content)
+
+        interaction.channel = types.SimpleNamespace(send=send)
+        asyncio.run(cog.handle_join(interaction))
+        return cog, interaction, sent
+
+    def test_the_press_is_answered_and_the_match_posted(self, monkeypatch):
+        posted = []
+
+        async def post_match(channel, users, announce=False):
+            posted.append(len(users))
+
+        cog, interaction, sent = self._eighth_join(monkeypatch, post_match)
+        assert interaction.response.deferred and posted == [8] and sent == []
+        assert cog.queue == {} and len(cog.last_roster) == 8
+
+    def test_a_failed_post_is_retried_then_points_to_teams(self, monkeypatch):
+        calls = []
+
+        async def post_match(channel, users, announce=False):
+            calls.append(1)
+            raise RuntimeError("Discord 503")
+
+        cog, _, sent = self._eighth_join(monkeypatch, post_match)
+        assert len(calls) == 3
+        assert len(sent) == 1 and "!teams" in sent[0]
+        assert len(cog.last_roster) == 8  # so !teams has the roster to split
+        assert cog.store.meta["match_roster"].count(",") == 7
 
 
 def _join(store):

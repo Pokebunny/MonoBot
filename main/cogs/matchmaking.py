@@ -24,6 +24,8 @@ from views import person_or_pick
 logger = logging.getLogger(__name__)
 
 QUEUE_TARGET = 8  # 4v4
+# Waits before each retry of a formed match that failed to post (Discord 5xx).
+POST_RETRY_DELAYS = (2, 5)
 
 # How many of the most-balanced splits players can shuffle through. A full 4v4
 # has 35; the top few are all near-even, past that they get lopsided.
@@ -619,7 +621,7 @@ class Lobby:
             await interaction.response.edit_message(content=message, view=None)
             await self._refresh_message()
             if roster:
-                await self.post_match(ctx.channel, roster, announce=True)
+                await self.post_formed_match(ctx.channel, roster)
 
         member = await self._member_for(ctx, player, picked)
         if member is None:
@@ -628,7 +630,7 @@ class Lobby:
         await self._refresh_message()
         await ctx.send(message)
         if roster:
-            await self.post_match(ctx.channel, roster, announce=True)
+            await self.post_formed_match(ctx.channel, roster)
 
     async def _add_or_wait(self, member) -> tuple[str, list | None]:
         """!add's routing. With a game on and nobody queuing for another, a
@@ -665,13 +667,18 @@ class Lobby:
         await ctx.send("Queue cleared.")
 
     async def handle_join(self, interaction: discord.Interaction):
-        await self._adopt_message(interaction)
+        # Discord drops a press that isn't answered within 3 seconds, so
+        # answer before anything slow: deleting an old queue message is a
+        # round-trip, and the status embed can rebuild every rating. Run
+        # first, those once lost the 8th join's press after the queue was
+        # already emptied — no teams, and no queue to retry from.
         uid = str(interaction.user.id)
         if not self.store.sc2_names_for(uid):
             await interaction.response.send_message(
                 "You need to link your SC2 name before you can queue. Run `!link <your SC2 name>` first.",
                 ephemeral=True,
             )
+            await self._adopt_message(interaction)
             return
         if uid in self.queue:
             self.renew(uid)
@@ -680,17 +687,20 @@ class Lobby:
                 f"{self.config.queue_timeout_minutes} minutes.",
                 ephemeral=True,
             )
+            await self._adopt_message(interaction)
             return
+        await interaction.response.defer()
         self.queue[uid] = interaction.user
         self.renew(uid)
         roster = self._take_queue() if len(self.queue) >= QUEUE_TARGET else None
+        await self._adopt_message(interaction)
         # Reset the queue message either way, then announce any formed match.
-        await interaction.response.edit_message(embed=self._status_embed(), view=QueueView(self.lobby_for))
+        await interaction.edit_original_response(embed=self._status_embed(), view=QueueView(self.lobby_for))
         if self.needs_level(uid):
             view = SkillLevelView(self.lobby_for, interaction.user.id)
             await interaction.followup.send(LEVEL_PROMPT, view=view, ephemeral=True)
         if roster:
-            await self.post_match(interaction.channel, roster, announce=True)
+            await self.post_formed_match(interaction.channel, roster)
 
     # -- self-reported level ---------------------------------------------
 
@@ -724,12 +734,15 @@ class Lobby:
         await ctx.send(content, view=SkillLevelView(self.lobby_for, ctx.author.id), ephemeral=True)
 
     async def handle_leave(self, interaction: discord.Interaction):
-        await self._adopt_message(interaction)
+        # Answered first, like handle_join, so the press can't time out.
         uid = str(interaction.user.id)
         if self.queue.pop(uid, None) is None:
             await interaction.response.send_message("You're not in the queue.", ephemeral=True)
+            await self._adopt_message(interaction)
             return
-        await interaction.response.edit_message(embed=self._status_embed(), view=QueueView(self.lobby_for))
+        await interaction.response.defer()
+        await self._adopt_message(interaction)
+        await interaction.edit_original_response(embed=self._status_embed(), view=QueueView(self.lobby_for))
 
     def _take_queue(self) -> list[discord.abc.User]:
         """Empty the queue and hand back the roster for a match. Callers refresh
@@ -738,6 +751,23 @@ class Lobby:
         users = list(self.queue.values())[:QUEUE_TARGET]
         self.queue.clear()
         return users
+
+    async def post_formed_match(self, channel: discord.abc.Messageable, users: list[discord.abc.User]):
+        """Announce the match a full queue just formed. The queue is already
+        emptied, so a failure here would otherwise drop the eight players on
+        the floor: the roster is kept first, and if posting fails anyway the
+        channel is told to run !teams, which re-splits it."""
+        self.last_roster = list(users)
+        self.store.set_meta(MATCH_ROSTER_META_KEY, ",".join(str(u.id) for u in users))
+        for delay in (0, *POST_RETRY_DELAYS):
+            await asyncio.sleep(delay)
+            try:
+                await self.post_match(channel, users, announce=True)
+                return
+            except Exception:
+                logger.exception("Posting the formed match failed")
+        names = ", ".join(u.display_name for u in users)
+        await channel.send(f"The queue filled ({names}) but the teams didn't post — run `!teams` to split them.")
 
     async def post_match(
         self,

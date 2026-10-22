@@ -3,7 +3,7 @@
 Interactive components fall into two camps here: the queue's Join/Leave view
 is persistent (fixed custom_ids, registered with client.add_view, survives
 restarts), and everything else expires. ExpiringView is the base for the
-latter: buttons stay clickable for 24 hours, then grey out so stale messages
+latter: buttons stay clickable for 12 hours, then grey out so stale messages
 don't show clickable-but-dead components.
 """
 
@@ -17,7 +17,7 @@ from services.identity import Person
 
 logger = logging.getLogger(__name__)
 
-VIEW_TIMEOUT_SECONDS = 24 * 60 * 60
+VIEW_TIMEOUT_SECONDS = 12 * 60 * 60  # each live view pins its data in memory until then
 
 
 class ExpiringView(discord.ui.View):

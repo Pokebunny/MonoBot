@@ -57,7 +57,7 @@ class ConfirmWinnerView(ExpiringView):
     """Two buttons to settle a match whose winner couldn't be inferred
     confidently. Only a player who was in the match may confirm it — checked
     via their linked SC2 name(s). Manual confirmation sets confidence to 1.0.
-    Expires after 24h (a restart kills it anyway); !pending re-posts buttons."""
+    Expires after 12h (a restart kills it anyway); !pending re-posts buttons."""
 
     def __init__(
         self,

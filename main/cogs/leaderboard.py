@@ -63,6 +63,26 @@ _RACES = {
     **dict.fromkeys(("zerg", "z"), "Zerg"),
 }
 
+# Words that narrow !leaderboard to one pick mode's games, as spelled in
+# matches.pick_mode. Two-word names ("blind random") are joined before lookup.
+_MODES = {
+    **dict.fromkeys(("br", "blindrandom", "blind_random", "random"), "blind_random"),
+    **dict.fromkeys(("sd", "singledraft", "single_draft"), "single_draft"),
+    **dict.fromkeys(("td", "tierdraft", "tier_draft"), "tier_draft"),
+}
+
+
+def _find_mode(query: str) -> tuple[str | None, str]:
+    """A pick mode named anywhere in a board query, and the query without it."""
+    tokens = query.split()
+    for width in (2, 1):
+        for i in range(len(tokens) - width + 1):
+            mode = _MODES.get("".join(tokens[i : i + width]).lower())
+            if mode:
+                return mode, " ".join(tokens[:i] + tokens[i + width :])
+    return None, query
+
+
 # Short names people use for units, beyond the stored spelling (which is
 # matched case- and space-insensitively, plural or not: "widow mines").
 _PICK_ALIASES = {
@@ -223,7 +243,7 @@ class MatchBrowserView(ExpiringView):
 class ProfileView(ExpiringView):
     """One button on a profile that flips the message between the profile
     and the player's full unit list (the profile shows only the ten
-    most-played). Edits in place, so anyone looking can flip it without
+    highest rated). Edits in place, so anyone looking can flip it without
     adding to the channel."""
 
     def __init__(self, profile: discord.Embed, units: discord.Embed):
@@ -292,8 +312,9 @@ def _text(content: str) -> dict:
 class Leaderboard(CommunityCog):
     @commands.hybrid_command(
         aliases=["ladder"],
-        description="show the rating leaderboard (a race, a unit, a season like s1, career, or units)",
+        description="show the rating leaderboard (a race, a unit, a mode like br/sd, a season like s1, career, or units)",
         help="show the rating leaderboard — add a race (!leaderboard zerg), a unit (!leaderboard marine), "
+        "a pick mode (br / blind random, sd / single draft), "
         "'kings' for who tops the most unit boards, "
         "a season (s1), 'career' for all-time, or 'units' to rate unit picks",
     )
@@ -306,6 +327,7 @@ class Leaderboard(CommunityCog):
         if any(token.lower() in _UNIT_WORDS for token in query.split()):
             await self._unit_board(ctx, query)
             return
+        mode, query = _find_mode(query)
         pick, query = _find_pick(query, self.store.picks() | set(RUSH_BOARDS))
         min_games, race, season_query = self._parse_board_query(query)
         # A unit board defaults to all-time: few players field any one unit
@@ -328,9 +350,12 @@ class Leaderboard(CommunityCog):
 
         if pick:
             race = None  # the unit already implies one
-            everyone = self.pick_boards.boards().get(pick, []) if career else pick_board(self.store, season, pick)
+            if career and mode is None:
+                everyone = self.pick_boards.boards().get(pick, [])
+            else:
+                everyone = pick_board(self.store, season, pick, mode)
         else:
-            book = self._book_for(season, career, by_race=race is not None)
+            book = self._book_for(season, career, by_race=race is not None, mode=mode)
             everyone = book.leaderboard(min_games=1, race=race)
         board = [r for r in everyone if r.games >= min_games]
         hidden = len(everyone) - len(board)
@@ -339,7 +364,9 @@ class Leaderboard(CommunityCog):
         # ladder right after a reset reads as intentional, not as data loss.
         final = season is not None and season.ended_at is not None
         view = PagedBoardView(
-            lambda page: match_embeds.leaderboard(board, page, min_games, names, hidden, label, final, race, pick),
+            lambda page: match_embeds.leaderboard(
+                board, page, min_games, names, hidden, label, final, race, pick, mode
+            ),
             match_embeds.page_count(board),
         )
         await self._send_board(ctx, view)
@@ -361,14 +388,14 @@ class Leaderboard(CommunityCog):
                 season_words.append(token)
         return min_games, race, " ".join(season_words)
 
-    def _book_for(self, season, career: bool, by_race: bool = False):
+    def _book_for(self, season, career: bool, by_race: bool = False, mode: str | None = None):
         """The rating book for a season. The open season comes from the shared
-        cache; past seasons, the career board and race boards are built on
-        demand — they're rare reads, and at this history size a full replay is
-        ~50ms."""
-        if not career and not by_race and season is not None and season.ended_at is None:
+        cache; past seasons, the career board, race and mode boards are built
+        on demand — they're rare reads, and at this history size a full replay
+        is ~50ms."""
+        if not career and not by_race and mode is None and season is not None and season.ended_at is None:
             return self.ratings.book()
-        return season_book(self.store, None if career else season, by_race)
+        return season_book(self.store, None if career else season, by_race, mode)
 
     def _shown_name(self, ctx, handles, fallback: str) -> str:
         """The Discord display name of whoever these accounts are linked to —
@@ -437,14 +464,24 @@ class Leaderboard(CommunityCog):
         rating, season_rating, rank, total, _n = resolved
         group = self.store.merged_handles(rating.handle)  # all merged accounts, e.g. Jay+Luigi
         shown = self._shown_name(ctx, group, rating.name)
-        unit_records = self.store.player_records_by(group, "pick", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)
+        # Career entries on the race and one-unit boards, like the rest of the
+        # profile. rating.handle is canonical, as both boards' entries are.
+        race_book = season_book(self.store, None, by_race=True)
+        race_ratings = {r.race: r for r in race_book.ratings.values() if r.handle == rating.handle}
+        unit_ratings = {
+            pick: r
+            for pick, board in self.pick_boards.boards().items()
+            if pick not in RUSH_BOARDS
+            for r in board
+            if r.handle == rating.handle
+        }
         profile = match_embeds.player_profile(
             rating,
             rank,
             total,
             self.store.aliases_for_handles(group),
-            self.store.player_records_by(group, "race", MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS),
-            unit_records,
+            race_ratings,
+            unit_ratings,
             self.store.mvp_count(group, MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS),
             self.store.award_counts(group, MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS),
             display_name=shown,
@@ -452,7 +489,7 @@ class Leaderboard(CommunityCog):
             season_rating=season_rating,
             season_name=self.store.current_season().name,
         )
-        return ProfileView(profile, match_embeds.player_units(shown, unit_records))
+        return ProfileView(profile, match_embeds.player_units(shown, unit_ratings))
 
     @commands.hybrid_command(aliases=["rank"], help="show a player's full profile (yourself if no name given)")
     @commands.cooldown(1, 5, commands.BucketType.user)

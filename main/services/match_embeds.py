@@ -23,6 +23,9 @@ _PICK_MODE_LABELS = {
     "tier_draft": "Tier Draft",
 }
 
+# What to type to get each mode's board back (cogs.leaderboard._MODES).
+_MODE_WORDS = {"blind_random": "br", "single_draft": "sd", "tier_draft": "td"}
+
 
 def _duration(seconds: int) -> str:
     return f"{seconds // 60}:{seconds % 60:02d}"
@@ -165,13 +168,15 @@ def leaderboard(
     final: bool = False,
     race: str | None = None,
     pick: str | None = None,
+    mode: str | None = None,
 ) -> discord.Embed:
     """display_names maps handle -> shown name (the linked member's Discord
     name); unmapped handles fall back to the account's SC2 name. `season`
     names the window these ratings cover, shown so a reset ladder is never
     mistaken for lost history; `final` marks a season that has already ended.
     `race` titles a race board, whose ratings count only games on that race;
-    `pick` a unit board (rating.pick_ratings)."""
+    `pick` a unit board (rating.pick_ratings); `mode` a board rated on one
+    pick mode's games only."""
     display_names = display_names or {}
     pages = page_count(ratings)
     page = max(0, min(page, pages - 1))
@@ -184,21 +189,29 @@ def leaderboard(
         )
     subject = pick or race
     title = f"{subject} Leaderboard" if subject else "Monobattle Leaderboard"
+    mode_label = _PICK_MODE_LABELS.get(mode, mode) if mode else None
+    if mode_label:
+        title += f" ({mode_label})"
     if season is not None:
         title += f" — {season}"
     embed = discord.Embed(title=title, color=ACCENT)
     empty = (
         f"*Nobody has a rated game on {pick} yet.*"
         if pick
+        else f"*No rated {mode_label} games yet.*"
+        if mode_label
         else "*No rated players yet — play a game to open the season.*"
     )
     embed.description = "\n".join(lines) or empty
     note = f"min {min_games} games · " if min_games > 1 else ""
-    show_all = f"!leaderboard {subject.lower()} 1" if subject else "!leaderboard 1"
+    words = [w for w in (subject and subject.lower(), _MODE_WORDS.get(mode)) if w]
+    show_all = " ".join(["!leaderboard", *words, "1"])
     more = f" · {hidden} more below the minimum ({show_all} shows all)" if hidden else ""
     closed = "Final standings · " if final else ""
     games = RUSH_GAMES.get(pick, f"Games on {pick} only")
     how = f"\n{games}, against everyone else's overall rating" if pick else ""
+    if mode_label:
+        how += f"\n{mode_label} games only"
     embed.set_footer(text=f"{closed}{note}Page {page + 1}/{pages}{more}{how}")
     return embed
 
@@ -253,13 +266,11 @@ def _rating_footer(rating: PlayerRating) -> str:
     return "Rating rises with wins; how much depends on the opponents' strength."
 
 
-def _record_lines(records: dict[str, list[int]], limit: int | None) -> str:
-    rows = [(k, w, losses) for k, (w, losses) in records.items()]
-    rows.sort(key=lambda r: r[1] + r[2], reverse=True)  # by games played
-    lines = []
-    for name, w, losses in rows[:limit]:
-        total = w + losses
-        lines.append(f"**{name}** — {w}-{losses} ({100 * w / total:.0f}%)")
+def _rated_lines(ratings: dict[str, PlayerRating], limit: int | None) -> str:
+    """One line per race or unit, highest rated first, with the record the
+    rating was fit on."""
+    rows = sorted(ratings.items(), key=lambda kv: kv[1].ordinal, reverse=True)
+    lines = [f"**{name}** — **{r.display_rating}** · {_record_value(r)}" for name, r in rows[:limit]]
     return "\n".join(lines) or "*none*"
 
 
@@ -268,8 +279,8 @@ def player_profile(
     rank: int | None,
     total_ranked: int,
     aliases: list[str],
-    race_records: dict[str, list[int]],
-    unit_records: dict[str, list[int]],
+    race_ratings: dict[str, PlayerRating],
+    unit_ratings: dict[str, PlayerRating],
     mvp_count: int = 0,
     award_counts: dict[str, int] | None = None,
     display_name: str | None = None,
@@ -280,7 +291,9 @@ def player_profile(
     """`rating` is the player's career rating — always present, so a profile
     exists for anyone who has ever played. `season_rating` is their standing in
     the open season and is None until they play in it; the Rating/Rank fields
-    show the season so this agrees with the leaderboard, with career alongside."""
+    show the season so this agrees with the leaderboard, with career alongside.
+    `race_ratings` and `unit_ratings` are the player's career entries on each
+    race board and one-unit board (rating.pick_ratings), keyed by race/pick."""
     shown = display_name or rating.name
     embed = discord.Embed(title=f"{shown} — profile", color=ACCENT)
     current = season_rating or rating
@@ -309,8 +322,8 @@ def player_profile(
             value=f"{showcase}\n*!achievements for the full list*",
             inline=False,
         )
-    embed.add_field(name="Races", value=_record_lines(race_records, 3), inline=True)
-    embed.add_field(name="Most-played units", value=_record_lines(unit_records, 10), inline=True)
+    embed.add_field(name="Races · career", value=_rated_lines(race_ratings, 3), inline=True)
+    embed.add_field(name="Top-rated units · career", value=_rated_lines(unit_ratings, 10), inline=True)
     others = [a for a in aliases if a.lower() != shown.lower()]
     if others:
         embed.add_field(name="Plays as", value=", ".join(others[:12]), inline=False)
@@ -318,14 +331,14 @@ def player_profile(
     return embed
 
 
-def player_units(shown_name: str, unit_records: dict[str, list[int]]) -> discord.Embed:
-    """Every unit a player has picked, most-played first — the profile only
-    has room for the top ten. Career-wide, like the profile's own list. Fits
-    one description: there are only ~45 picks, at ~35 characters a line."""
+def player_units(shown_name: str, unit_ratings: dict[str, PlayerRating]) -> discord.Embed:
+    """Every unit a player has a career rating on, highest rated first — the
+    profile only has room for the top ten. Fits one description: there are
+    only ~45 picks, at ~45 characters a line."""
     embed = discord.Embed(title=f"{shown_name} — units", color=ACCENT)
-    embed.description = _record_lines(unit_records, None)
-    games = sum(w + losses for w, losses in unit_records.values())
-    embed.set_footer(text=f"{len(unit_records)} units · {games} games")
+    embed.description = _rated_lines(unit_ratings, None)
+    games = sum(r.games for r in unit_ratings.values())
+    embed.set_footer(text=f"{len(unit_ratings)} units · {games} games · career rating on each unit")
     return embed
 
 

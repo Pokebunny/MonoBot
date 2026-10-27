@@ -400,14 +400,22 @@ class RatingBook:
         return sorted(eligible, key=lambda r: r.ordinal, reverse=True)
 
 
-def season_start(store, season, by_race: bool = False) -> RatingBook:
+def _in_mode(matches, mode: str | None):
+    """(id, match) rows narrowed to one pick mode ("blind_random",
+    "single_draft", ...); None keeps every game."""
+    return (m for _, m in matches if mode is None or m.pick_mode == mode)
+
+
+def season_start(store, season, by_race: bool = False, mode: str | None = None) -> RatingBook:
     """The book a season's walk starts from: empty after a hard reset (and
     for the career walk, season=None), seeded from career ratings at the
     season's start after a soft one. Derived, like everything else here: the
     season row holds only the reset's parameters, so a late-uploaded replay
     from before the boundary moves the seeds too. Self-reported levels
     (SKILL_LEVEL_MU) set where a player's first game starts, in both the
-    career walk and the season's, so a soft reset carries them over too."""
+    career walk and the season's, so a soft reset carries them over too.
+    `mode` keeps only that pick mode's games, seeds included, so a mode
+    board is that mode's ladder alone, as a race board is that race's."""
     merge_map = store.merge_map()
     priors = level_priors(store, merge_map)
     book = RatingBook(merge_map, by_race)
@@ -416,7 +424,7 @@ def season_start(store, season, by_race: bool = False) -> RatingBook:
         before = store.all_matches(until=season.started_at)
         career = RatingBook(merge_map, by_race)
         career.priors = priors
-        career.replay(m for _, m in before)
+        career.replay(_in_mode(before, mode))
         book.seed(career, season.carryover, season.seed_sigma)
     return book
 
@@ -506,12 +514,12 @@ def _rate_picks(
             entry.losses += 1
 
 
-def pick_board(store, season, pick: str) -> list[PlayerRating]:
+def pick_board(store, season, pick: str, mode: str | None = None) -> list[PlayerRating]:
     """One unit's player board over a season (career, all history, when
     season is None), starting from the same book season_book would. The
     career boards of every unit are cached in PickCache."""
     matches = store.all_matches() if season is None else store.season_matches(season)
-    return pick_ratings(season_start(store, season), (m for _, m in matches), {pick}).get(pick, [])
+    return pick_ratings(season_start(store, season, mode=mode), _in_mode(matches, mode), {pick}).get(pick, [])
 
 
 def unit_kings(
@@ -530,12 +538,13 @@ def unit_kings(
     return sorted(held.items(), key=lambda kv: (len(kv[1]), kv[1][0][1].ordinal), reverse=True)
 
 
-def season_book(store, season, by_race: bool = False) -> RatingBook:
-    """A season's ratings (career, all history, when season is None). The one
-    way to build a season board — every caller must start from season_start
-    or a soft reset shows up on some screens and not others."""
+def season_book(store, season, by_race: bool = False, mode: str | None = None) -> RatingBook:
+    """A season's ratings (career, all history, when season is None), over
+    one pick mode's games when `mode` is set. The one way to build a season
+    board — every caller must start from season_start or a soft reset shows
+    up on some screens and not others."""
     matches = store.all_matches() if season is None else store.season_matches(season)
-    return season_start(store, season, by_race).replay(m for _, m in matches)
+    return season_start(store, season, by_race, mode).replay(_in_mode(matches, mode))
 
 
 class RatingCache:

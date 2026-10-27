@@ -160,6 +160,10 @@ class MonobattleMatch(BaseModel):
     map_name: str  # the arcade map's own name, identical for every game
     map_hash: str = ""  # published-version hash; resolves to the real terrain
     played_at: datetime.datetime  # UTC
+    # The game's random seed, shared by every player's recording of it and
+    # fresh for each game -- unlike played_at, which comes from the
+    # recorder's own clock. None on games parsed before it was read.
+    game_seed: int | None = None
     duration_seconds: int
     game_type: str  # e.g. "4v4", from real_type
     pick_mode: str  # "blind_random" | "single_draft" | "tier_draft"

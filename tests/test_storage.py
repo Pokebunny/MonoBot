@@ -53,8 +53,9 @@ def _match(
 
 
 def _at(minutes):
-    """A distinct game start time (distinct games have distinct times)."""
-    return BASE + datetime.timedelta(minutes=minutes)
+    """A distinct game start time: n games' worth of 20 minutes from BASE, so
+    no two (900s) fixture games overlap like recordings of one game do."""
+    return BASE + datetime.timedelta(minutes=20 * minutes)
 
 
 @pytest.fixture
@@ -162,6 +163,100 @@ def test_distinct_games_not_merged(store):
     store.ingest(_match(played_at=_at(0)), hash_replay(b"g1"))
     store.ingest(_match(played_at=_at(20)), hash_replay(b"g2"))
     assert store.match_count() == 2
+
+
+def _repicked(match):
+    """The same lineup with every player on another unit."""
+    return match.model_copy(update={"players": [p.model_copy(update={"pick": "Roach"}) for p in match.players]})
+
+
+def test_recordings_straddling_a_minute_dedup(store):
+    """played_at is each recorder's own clock: two recordings of one game can
+    start 20s apart, across a minute boundary (matches 1125/1205)."""
+    first = _match(confidence=0.9, method="inferred:army", played_at=BASE - datetime.timedelta(seconds=5))
+    second = _match(played_at=BASE + datetime.timedelta(seconds=18), file_name="other.SC2Replay")
+    assert content_key(first) != content_key(second)
+    r1 = store.ingest(first, hash_replay(b"first"))
+    r2 = store.ingest(second, hash_replay(b"second"))
+    assert (r2.status, r2.match_id) == ("updated", r1.match_id)
+    assert store.match_count() == 1
+    # The stored key is kept, so other stores holding this game still match it.
+    key = store._conn.execute("SELECT content_key FROM matches").fetchone()[0]
+    assert key == content_key(first)
+
+
+def test_minutes_apart_clock_still_dedups(store):
+    """One uploader's clock ran ~4 minutes fast: within the game's length."""
+    store.ingest(_match(duration=470), hash_replay(b"a"))
+    late = _match(duration=460, played_at=BASE + datetime.timedelta(seconds=223))
+    assert store.ingest(late, hash_replay(b"b")).status == "duplicate"
+
+
+def test_remake_with_new_picks_is_another_game(store):
+    """Same eight players straight after a short remake, under a skewed clock:
+    the picks tell them apart (matches 1982/1983)."""
+    remake = _match(duration=184, played_at=BASE - datetime.timedelta(seconds=1))
+    remake = remake.model_copy(update={"approved": True})
+    store.ingest(remake, hash_replay(b"remake"))
+    real = _repicked(_match(duration=991, played_at=BASE + datetime.timedelta(seconds=1)))
+    assert store.ingest(real, hash_replay(b"real")).status == "inserted"
+
+
+def test_seeds_decide_when_both_known(store):
+    seeded = _match().model_copy(update={"game_seed": 111})
+    store.ingest(seeded, hash_replay(b"a"))
+    # Same everything, but another seed: another game.
+    other = _match(played_at=BASE + datetime.timedelta(seconds=30)).model_copy(update={"game_seed": 222})
+    assert store.ingest(other, hash_replay(b"b")).status == "inserted"
+    # Same seed, even with a parse that read different picks: the same game.
+    same = _repicked(_match(duration=1000)).model_copy(update={"game_seed": 111})
+    assert store.ingest(same, hash_replay(b"c")).status == "updated"
+    assert store.match_count() == 2
+
+
+def test_migration_merges_duplicate_recordings(tmp_path):
+    """Migration 18: games stored twice under minute-based keys merge into the
+    recording ingest would keep, carrying an approval over."""
+    import sqlite3
+
+    path = str(tmp_path / "v17.db")
+    s = MatchStore(path)
+    s.ingest(_match(played_at=BASE - datetime.timedelta(seconds=10)), hash_replay(b"a"))
+    s.ingest(_match(played_at=_at(30)), hash_replay(b"unrelated"))
+    s.close()
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE matches SET approved = 1 WHERE id = 1")
+    conn.execute(
+        """INSERT INTO matches (id, file_hash, content_key, file_name, map_name, played_at, duration_seconds,
+             game_type, pick_mode, pick_phase_seconds, winning_team, winner_confidence, winner_method)
+           SELECT 3, 'b', 'other-key', file_name, map_name, ?, 870, game_type, pick_mode,
+             pick_phase_seconds, 2, 1.0, 'confirmed' FROM matches WHERE id = 1""",
+        ((BASE + datetime.timedelta(seconds=15)).isoformat(),),
+    )
+    conn.execute(
+        """INSERT INTO match_players (match_id, name, toon_handle, team, race, pick, unit_counts)
+           SELECT 3, name, toon_handle, team, race, pick, unit_counts FROM match_players WHERE match_id = 1"""
+    )
+    conn.execute("PRAGMA user_version = 17")
+    conn.commit()
+    conn.close()
+
+    s = MatchStore(path)
+    assert sorted(mid for mid, _ in s.all_matches()) == [2, 3]  # the confirmed recording stays
+    kept = s.get_match(3)
+    assert (kept.winning_team, kept.approved) == (2, True)
+    assert s._conn.execute("SELECT COUNT(*) FROM match_players WHERE match_id = 1").fetchone()[0] == 0
+    s.close()
+
+
+def test_combined_counts_a_game_held_under_different_keys_once(store, tmp_path):
+    """Two stores that each kept a different recording of one game."""
+    pubs = MatchStore(str(tmp_path / "pubs.db"))
+    store.ingest(_match(played_at=BASE - datetime.timedelta(seconds=5)), hash_replay(b"x"))
+    pubs.ingest(_match(played_at=BASE + datetime.timedelta(seconds=18)), hash_replay(b"y"))
+    assert combined_game_count([store, pubs]) == 1
+    assert combined_unit_records([store, pubs], MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS)["Zergling"] == [4, 0]
+    pubs.close()
 
 
 # --- winner confirmation & queries ---

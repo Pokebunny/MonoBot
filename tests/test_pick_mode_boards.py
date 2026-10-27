@@ -28,7 +28,7 @@ def _match(index, pick_mode, winning_team=1):
     return MonobattleMatch(
         file_name=f"g{index}.SC2Replay",
         map_name="Monobattle LotV - Map Rotation",
-        played_at=BASE + datetime.timedelta(minutes=index),
+        played_at=BASE + datetime.timedelta(minutes=20 * index),
         duration_seconds=900,
         game_type="4v4",
         pick_mode=pick_mode,

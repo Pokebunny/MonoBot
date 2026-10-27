@@ -93,7 +93,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS matches (
     map_name TEXT NOT NULL,
     map_hash TEXT NOT NULL DEFAULT '',
     played_at TEXT NOT NULL,
+    game_seed INTEGER,
     duration_seconds INTEGER NOT NULL,
     game_type TEXT NOT NULL,
     pick_mode TEXT NOT NULL,
@@ -260,35 +261,88 @@ def hash_replay(data: bytes) -> str:
 def content_key(match: MonobattleMatch) -> str:
     """Identity of the actual game, invariant across who recorded it. Two
     players' recordings of the same game differ in bytes and length (they may
-    leave at different times) but share the start time and full roster.
-    Minute precision absorbs sub-second clock differences between clients."""
-    return content_key_for(match.played_at, [p.name for p in match.players])
+    leave at different times) but share the game's random seed and full
+    roster. Games parsed before the seed was read fall back to the start
+    minute, which misses recordings whose clocks straddle a minute boundary
+    -- ingest's same-game check catches those (see _same_game)."""
+    names = [p.name for p in match.players]
+    if match.game_seed is not None:
+        return hashlib.sha256(f"seed:{match.game_seed}|{'|'.join(sorted(names))}".encode()).hexdigest()
+    return content_key_for(match.played_at, names)
 
 
 def content_key_for(played_at: datetime.datetime, names: list[str]) -> str:
+    """The pre-seed content key: start minute + roster."""
     minute = played_at.replace(second=0, microsecond=0)
     return hashlib.sha256(f"{minute.isoformat()}|{'|'.join(sorted(names))}".encode()).hexdigest()
 
 
+class _Recording(NamedTuple):
+    """What _same_game compares: one stored or incoming recording."""
+
+    seed: int | None
+    lineup: frozenset[tuple[str, int, str | None]]  # (toon_handle, team, pick)
+    played_at: datetime.datetime
+    duration_seconds: int
+
+
+def _same_game(a: _Recording, b: _Recording) -> bool:
+    """Whether two recordings are of one game. With both seeds known that's
+    settled outright. Without, it takes the same lineup -- same accounts, same
+    teams, same picks -- starting less than either recording's length apart.
+    played_at is the recorder's own clock, which runs anywhere from seconds
+    to minutes off another's, so the start times can't be required to agree;
+    but a real rematch can't start before the game it follows has ended, and
+    seldom repeats all eight picks besides (the picks are what tell a remake
+    from the game that replaced it when a clock is minutes out)."""
+    if {h for h, _, _ in a.lineup} != {h for h, _, _ in b.lineup}:
+        return False
+    if a.seed is not None and b.seed is not None:
+        return a.seed == b.seed
+    gap = abs((a.played_at - b.played_at).total_seconds())
+    return a.lineup == b.lineup and gap < min(a.duration_seconds, b.duration_seconds)
+
+
 def combined_unit_records(stores, confidence_gate: float, min_duration: int) -> dict[str, list[int]]:
     """pick -> [wins, losses] across several stores' decided matches, each
-    game counted once however many stores hold it (keyed by content_key).
+    game counted once however many stores hold it (see _distinct_games).
     The first store holding a game supplies it, so list the most up-to-date
     first."""
-    games: dict[str, list[tuple[str, bool]]] = {}
-    for store in stores:
-        for key, picks in store.picks_by_game(confidence_gate, min_duration).items():
-            games.setdefault(key, picks)
     records: dict[str, list[int]] = {}
-    for picks in games.values():
-        for pick, won in picks:
+    for picks in _distinct_games(stores, confidence_gate, min_duration):
+        for pick, won in picks or ():
             records.setdefault(pick, [0, 0])[0 if won else 1] += 1
     return records
 
 
 def combined_game_count(stores) -> int:
-    """Distinct games across several stores, by content_key."""
-    return len(set().union(*(store.content_keys() for store in stores)))
+    """Distinct games across several stores, decided or not."""
+    return len(_distinct_games(stores, 1.0, 0, decided_only=False))
+
+
+def _distinct_games(
+    stores, confidence_gate: float, min_duration: int, decided_only: bool = True
+) -> list[list[tuple[str, bool]] | None]:
+    """games_for_pooling's picks for each distinct game across the stores,
+    from the first store that holds it (decided, unless not decided_only --
+    a store's undecided copy doesn't hide another's decided one). A game is the same one by
+    content_key or _same_game: each store merges its own duplicates, but two
+    stores may have kept different recordings of a game, under different
+    keys."""
+    seen_keys: set[str] = set()
+    seen: dict[frozenset, list[_Recording]] = {}
+    games = []
+    for store in stores:
+        for key, recording, picks in store.games_for_pooling(confidence_gate, min_duration):
+            if decided_only and picks is None:
+                continue
+            same_accounts = seen.setdefault(frozenset(h for h, _, _ in recording.lineup), [])
+            if key in seen_keys or any(_same_game(recording, other) for other in same_accounts):
+                continue
+            seen_keys.add(key)
+            same_accounts.append(recording)
+            games.append(picks)
+    return games
 
 
 def _migration_1_content_key(conn: sqlite3.Connection) -> None:
@@ -476,6 +530,53 @@ def _migration_17_approved(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE matches ADD COLUMN approved INTEGER NOT NULL DEFAULT 0")
 
 
+def _migration_18_merge_duplicate_recordings(conn: sqlite3.Connection) -> None:
+    """Add game_seed, and merge the games stored twice because two players'
+    recordings started on either side of a minute boundary by their own
+    clocks, so the minute-based content_key told them apart. Of each set the
+    recording ingest would have kept stays (a confirmed winner, else the
+    higher winner confidence, else the longer); an approval carries over to
+    it. Stored rows have no seed yet, so this uses _same_game's lineup test."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(matches)")}
+    if "game_seed" not in cols:
+        conn.execute("ALTER TABLE matches ADD COLUMN game_seed INTEGER")
+    lineups: dict[int, set] = {}
+    for r in conn.execute("SELECT match_id, toon_handle, team, pick FROM match_players"):
+        lineups.setdefault(r["match_id"], set()).add((r["toon_handle"], r["team"], r["pick"]))
+    by_accounts: dict[frozenset, list] = {}
+    for r in conn.execute("SELECT * FROM matches ORDER BY played_at, id"):
+        lineup = frozenset(lineups.get(r["id"], ()))
+        by_accounts.setdefault(frozenset(h for h, _, _ in lineup), []).append(
+            (
+                _Recording(
+                    r["game_seed"], lineup, datetime.datetime.fromisoformat(r["played_at"]), r["duration_seconds"]
+                ),
+                r,
+            )
+        )
+    for games in by_accounts.values():
+        clusters: list[list] = []
+        for game in games:
+            if clusters and _same_game(clusters[-1][0][0], game[0]):
+                clusters[-1].append(game)
+            else:
+                clusters.append([game])
+        for cluster in clusters:
+            if len(cluster) < 2:
+                continue
+            rows = [row for _, row in cluster]
+            keep = max(
+                rows,
+                key=lambda r: (r["winner_method"] == "confirmed", r["winner_confidence"], r["duration_seconds"]),
+            )
+            drop = [r["id"] for r in rows if r["id"] != keep["id"]]
+            if any(r["approved"] for r in rows):
+                conn.execute("UPDATE matches SET approved = 1 WHERE id = ?", (keep["id"],))
+            conn.executemany("DELETE FROM match_players WHERE match_id = ?", [(i,) for i in drop])
+            conn.executemany("DELETE FROM matches WHERE id = ?", [(i,) for i in drop])
+            logger.info("Merged duplicate recordings of match %d: dropped %s", keep["id"], drop)
+
+
 _MIGRATIONS = {
     1: _migration_1_content_key,
     2: _migration_2_replay_channels,
@@ -494,6 +595,7 @@ _MIGRATIONS = {
     15: _migration_15_spine_rush,
     16: _migration_16_skill_levels,
     17: _migration_17_approved,
+    18: _migration_18_merge_duplicate_recordings,
 }
 
 
@@ -536,8 +638,8 @@ class MatchStore:
     # -- writes ----------------------------------------------------------
 
     def ingest(self, match: MonobattleMatch, file_hash: str, uploaded_by: str | None = None) -> IngestResult:
-        """Store a parsed match. If the same game (by content_key) is already
-        stored, keep whichever recording is more complete — a higher winner
+        """Store a parsed match. If the same game (by content_key, or else
+        _same_game) is already stored, keep whichever recording is more complete — a higher winner
         confidence, or a longer duration at equal confidence — so a teammate
         who stayed to the end can supply a winner the early-leaver's replay
         lacked. Manually confirmed results are never overwritten. Games
@@ -547,9 +649,12 @@ class MatchStore:
             return IngestResult("rejected", None, reason)
         key = content_key(match)
         existing = self._conn.execute(
-            "SELECT id, file_hash, duration_seconds, winner_confidence, winner_method FROM matches WHERE content_key = ?",
+            """SELECT id, file_hash, content_key, duration_seconds, winner_confidence, winner_method
+               FROM matches WHERE content_key = ?""",
             (key,),
         ).fetchone()
+        if existing is None:
+            existing = self._find_same_game(match)
 
         if existing is not None:
             if existing["file_hash"] == file_hash:
@@ -557,7 +662,7 @@ class MatchStore:
             if not self._is_more_complete(match, existing):
                 logger.info("Same game already stored, keeping better recording: %s", match.file_name)
                 return IngestResult("duplicate", existing["id"])
-            self._replace_match(existing["id"], match, file_hash, key, uploaded_by)
+            self._replace_match(existing["id"], match, file_hash, existing["content_key"], uploaded_by)
             self.bind_handles_from_match(match)
             self.change_count += 1
             return IngestResult("updated", existing["id"])
@@ -565,10 +670,10 @@ class MatchStore:
         try:
             cur = self._conn.execute(
                 """INSERT INTO matches
-                   (file_hash, content_key, file_name, map_name, map_hash, played_at, duration_seconds,
+                   (file_hash, content_key, file_name, map_name, map_hash, played_at, game_seed, duration_seconds,
                     game_type, pick_mode, pick_phase_seconds, winning_team,
                     winner_confidence, winner_method, comeback_deficit, lead_changes, approved, uploaded_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (file_hash, key, *self._match_columns(match), uploaded_by),
             )
         except sqlite3.IntegrityError:
@@ -581,6 +686,37 @@ class MatchStore:
         self.bind_handles_from_match(match)
         self.change_count += 1
         return IngestResult("inserted", match_id)
+
+    def _find_same_game(self, match: MonobattleMatch) -> sqlite3.Row | None:
+        """A stored recording of this game that content_key didn't find: one
+        stored before seeds were read, or one whose start minute differs."""
+        mine = _Recording(
+            match.game_seed,
+            frozenset((p.toon_handle, p.team, p.pick) for p in match.players),
+            match.played_at,
+            match.duration_seconds,
+        )
+        # Only a game starting within this one's length can qualify.
+        window = datetime.timedelta(seconds=match.duration_seconds + 1)
+        candidates = self._conn.execute(
+            """SELECT id, file_hash, content_key, played_at, game_seed, duration_seconds, winner_confidence,
+                      winner_method
+               FROM matches WHERE played_at BETWEEN ? AND ?""",
+            ((match.played_at - window).isoformat(), (match.played_at + window).isoformat()),
+        ).fetchall()
+        for row in candidates:
+            lineup = frozenset(
+                (r["toon_handle"], r["team"], r["pick"])
+                for r in self._conn.execute(
+                    "SELECT toon_handle, team, pick FROM match_players WHERE match_id = ?", (row["id"],)
+                )
+            )
+            theirs = _Recording(
+                row["game_seed"], lineup, datetime.datetime.fromisoformat(row["played_at"]), row["duration_seconds"]
+            )
+            if _same_game(mine, theirs):
+                return row
+        return None
 
     @staticmethod
     def _is_more_complete(match: MonobattleMatch, existing: sqlite3.Row) -> bool:
@@ -598,6 +734,7 @@ class MatchStore:
             match.map_name,
             match.map_hash,
             match.played_at.isoformat(),
+            match.game_seed,
             match.duration_seconds,
             match.game_type,
             match.pick_mode,
@@ -653,7 +790,7 @@ class MatchStore:
         self._conn.execute(
             """UPDATE matches SET
                  file_hash = ?, content_key = ?, file_name = ?, map_name = ?, map_hash = ?, played_at = ?,
-                 duration_seconds = ?, game_type = ?, pick_mode = ?, pick_phase_seconds = ?,
+                 game_seed = ?, duration_seconds = ?, game_type = ?, pick_mode = ?, pick_phase_seconds = ?,
                  winning_team = ?, winner_confidence = ?, winner_method = ?,
                  comeback_deficit = ?, lead_changes = ?, approved = ?, uploaded_by = ?
                WHERE id = ?""",
@@ -1379,32 +1516,39 @@ class MatchStore:
         """pick -> [wins, losses] across decided matches."""
         return combined_unit_records([self], confidence_gate, min_duration)
 
-    def picks_by_game(self, confidence_gate: float, min_duration: int) -> dict[str, list[tuple[str, bool]]]:
-        """content_key -> [(pick, won)] for every pick in each decided match:
-        unit records before they're summed, so several stores can be combined
-        without counting a game that more than one of them holds twice."""
-        rows = self._conn.execute(
-            """SELECT m.content_key AS key, mp.pick AS pick, (mp.team = m.winning_team) AS won
-               FROM match_players mp JOIN matches m ON m.id = mp.match_id
-               WHERE m.winning_team IS NOT NULL
-                 AND m.winner_confidence >= ?
-                 AND (m.duration_seconds >= ? OR m.approved = 1)
-                 AND mp.pick IS NOT NULL""",
-            (confidence_gate, min_duration),
-        ).fetchall()
-        games: dict[str, list[tuple[str, bool]]] = {}
-        for row in rows:
-            games.setdefault(row["key"], []).append((row["pick"], bool(row["won"])))
+    def games_for_pooling(
+        self, confidence_gate: float, min_duration: int
+    ) -> list[tuple[str, _Recording, list[tuple[str, bool]] | None]]:
+        """(content_key, recording, picks) for every stored game, where picks
+        is [(pick, won)] for a match decided past the gates and None
+        otherwise: unit records before they're summed, so several stores can
+        be combined without counting a game that more than one of them holds
+        twice (see _distinct_games)."""
+        lineups: dict[int, set] = {}
+        for r in self._conn.execute("SELECT match_id, toon_handle, team, pick FROM match_players"):
+            lineups.setdefault(r["match_id"], set()).add((r["toon_handle"], r["team"], r["pick"]))
+        games = []
+        for m in self._conn.execute("SELECT * FROM matches"):
+            lineup = lineups.get(m["id"], set())
+            decided = (
+                m["winning_team"] is not None
+                and m["winner_confidence"] >= confidence_gate
+                and (m["duration_seconds"] >= min_duration or m["approved"])
+            )
+            picks = [(pick, team == m["winning_team"]) for _, team, pick in lineup if pick is not None]
+            recording = _Recording(
+                m["game_seed"],
+                frozenset(lineup),
+                datetime.datetime.fromisoformat(m["played_at"]),
+                m["duration_seconds"],
+            )
+            games.append((m["content_key"], recording, picks if decided else None))
         return games
 
     def picks(self) -> set[str]:
         """Every unit anyone has picked, in its stored spelling ("WidowMine")."""
         rows = self._conn.execute("SELECT DISTINCT pick FROM match_players WHERE pick IS NOT NULL AND pick != ''")
         return {row["pick"] for row in rows}
-
-    def content_keys(self) -> set[str]:
-        """Every stored game's content_key, decided or not."""
-        return {row["content_key"] for row in self._conn.execute("SELECT content_key FROM matches")}
 
     # -- internals -------------------------------------------------------
 

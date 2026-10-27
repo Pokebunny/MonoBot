@@ -702,6 +702,7 @@ def parse_replay(path: str) -> MonobattleMatch:
         map_name=replay.map_name,
         map_hash=replay.map_hash,
         played_at=replay.start_time,
+        game_seed=replay.raw_data["replay.initData"]["game_description"].get("random_value"),
         duration_seconds=replay.game_length.seconds,
         game_type=replay.real_type,
         pick_mode=pick_mode,

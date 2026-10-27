@@ -25,7 +25,7 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
 - **Communities**: one ladder per Discord server (`community.py`). Each has
   its own match DB, caches (`RatingCache`/`AchievementCache`/`DuoCache`/
   `UnitCache`/`PickCache`) and config slice; nothing is shared except the pub stats (`cogs/pubs.py`),
-  which pool `pubs.db` with every community's DB, deduped by `content_key`. The home
+  which pool `pubs.db` with every community's DB, deduped like ingest (below). The home
   community is `config.json`'s top-level fields + `resources/monobot.db`;
   each server under `guilds` gets `resources/guilds/<id>/monobot.db`.
   Unconfigured servers get none (`home_guild_id: null`, the legacy default,
@@ -127,6 +127,13 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   the medians agree but a 5% tail under-attributes, concentrated in air picks.
   Read `docs/kill-attribution.md` before setting any threshold on it, and treat
   an empty dict as "not recorded" (pre-schema-12 parse), never as zero kills.
+- **One game, many recordings**: every player's replay of a game is a
+  different file, so ingest matches games, not files — by the game's random
+  seed (`game_seed`, identical in every recording) when both sides have one,
+  else by `storage._same_game`: same accounts, teams and picks, starting less
+  than a game-length apart. Never by start time alone: `played_at` is the
+  recorder's own clock, seconds to minutes off another player's, and the old
+  start-minute key let 29 games in twice (merged by migration 18).
 - `scripts/` (repo root) — one-shot utilities, e.g. `backfill_archive.py` to
   seed the database from a folder of replays (idempotent, dedupes by hash).
   `reparse_stored.py` re-applies parser improvements to stored games

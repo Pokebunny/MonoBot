@@ -36,6 +36,10 @@ class IngestResult(NamedTuple):
     status: str
     match_id: int | None
     reason: str | None = None
+    # The recording this ingest left out of the store, when it's the weaker
+    # of two of one game: the incoming file ("duplicate") or the one it
+    # replaced ("updated"). Its archived copy can go (cogs.replays).
+    dropped_hash: str | None = None
 
 
 # What a stored game must be. Monobattles here are 4v4s: a 3v3 or an uneven
@@ -661,11 +665,11 @@ class MatchStore:
                 return IngestResult("duplicate", existing["id"])
             if not self._is_more_complete(match, existing):
                 logger.info("Same game already stored, keeping better recording: %s", match.file_name)
-                return IngestResult("duplicate", existing["id"])
+                return IngestResult("duplicate", existing["id"], dropped_hash=file_hash)
             self._replace_match(existing["id"], match, file_hash, existing["content_key"], uploaded_by)
             self.bind_handles_from_match(match)
             self.change_count += 1
-            return IngestResult("updated", existing["id"])
+            return IngestResult("updated", existing["id"], dropped_hash=existing["file_hash"])
 
         try:
             cur = self._conn.execute(

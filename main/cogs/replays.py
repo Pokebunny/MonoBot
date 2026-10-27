@@ -20,7 +20,9 @@ from views import ExpiringView
 logger = logging.getLogger(__name__)
 
 # Raw uploads are archived here (gitignored) so future parser improvements
-# can re-process history instead of only applying to new games.
+# can re-process history instead of only applying to new games. Only stored
+# recordings are kept: of two recordings of one game, the weaker is deleted
+# (see keep_archive). The folder is shared by every community.
 REPLAY_ARCHIVE_DIR = os.path.join(os.path.dirname(__file__), "..", "resources", "replays")
 
 
@@ -30,6 +32,21 @@ def archive_replay(data: bytes, file_hash: str) -> None:
     if not os.path.exists(path):
         with open(path, "wb") as f:
             f.write(data)
+
+
+def keep_archive(client, result: storage.IngestResult, data: bytes, file_hash: str) -> None:
+    """Archive an upload only if ingest stored it, and delete the recording
+    it dropped as the weaker of two of one game -- unless another community
+    stores that same file."""
+    if result.status in ("inserted", "updated"):
+        archive_replay(data, file_hash)
+    dropped = result.dropped_hash
+    if dropped is None or any(c.store.has_replay(dropped) for c in client.communities.all()):
+        return
+    path = os.path.join(REPLAY_ARCHIVE_DIR, f"{dropped}.SC2Replay")
+    if os.path.exists(path):
+        os.remove(path)
+        logger.info("Deleted weaker recording %s from the archive", dropped)
 
 
 # Discord's API occasionally 5xxs for a few seconds; wait this long before each retry.
@@ -277,8 +294,8 @@ class Replays(CommunityCog):
         """Store a parsed upload and post its summary, unlocks and buttons."""
         # uploaded_by keys on the Discord id so Chronicler can credit it.
         uploader = str(author.id)
-        archive_replay(data, file_hash)
         result = self.store.ingest(match, file_hash, uploaded_by=uploader)
+        keep_archive(self.client, result, data, file_hash)
         if result.status == "duplicate":
             # Same game already stored (this file, or a recording at least as
             # complete from another player).
@@ -356,7 +373,7 @@ class Replays(CommunityCog):
     @is_bot_admin()
     async def backfillchannel(self, ctx, channel: discord.TextChannel | None = None, limit: int = 2000):
         """Downloads every .SC2Replay ever posted in the channel, archives the
-        raw files, re-parses already-stored games in place (so new parser
+        raw files of stored games, re-parses already-stored games in place (so new parser
         fields apply retroactively), and ingests any games we missed."""
         self = self.at(ctx)
         target = channel or ctx.channel
@@ -385,11 +402,12 @@ class Replays(CommunityCog):
                 if storage.rejection_reason(match) is not None and not self.store.is_approved(file_hash):
                     stats["rejected"] += 1
                     continue
-                archive_replay(data, file_hash)
                 if self.store.refresh_parse(match, file_hash):
+                    archive_replay(data, file_hash)
                     stats["refreshed"] += 1
                 else:
                     result = self.store.ingest(match, file_hash, uploaded_by=str(message.author.id))
+                    keep_archive(self.client, result, data, file_hash)
                     stats[result.status] += 1
         # Re-parsing recorded a map version for every game scanned, most of
         # them for the first time (games stored before versions existed have

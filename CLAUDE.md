@@ -133,7 +133,10 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   else by `storage._same_game`: same accounts, teams and picks, starting less
   than a game-length apart. Never by start time alone: `played_at` is the
   recorder's own clock, seconds to minutes off another player's, and the old
-  start-minute key let 29 games in twice (merged by migration 18).
+  start-minute key let 29 games in twice (merged by migration 18). The
+  archive (`resources/replays`, shared by all communities) keeps only stored
+  recordings: the weaker file is deleted unless some database still stores
+  it (`cogs.replays.keep_archive`; `prune_matches.py --files` for old ones).
 - `scripts/` (repo root) — one-shot utilities, e.g. `backfill_archive.py` to
   seed the database from a folder of replays (idempotent, dedupes by hash).
   `reparse_stored.py` re-applies parser improvements to stored games

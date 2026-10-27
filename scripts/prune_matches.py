@@ -6,27 +6,28 @@ Usage (from repo root):
     uv run python scripts/prune_matches.py [db ...]                   # dry run
     uv run python scripts/prune_matches.py [db ...] --apply [--files]
 
-The databases default to the home one (or MONOBOT_DB). Pass every community's
-database together when using --files: it also deletes raw replays from the
-archive (main/resources/replays) that fail the rule. A file still held by any
-of the given databases is kept without parsing; the rest are parsed, since an
-archived file is often a second recording of a game stored under another
-player's file, and its hash says nothing about which game it is.
+The databases default to the home one (or MONOBOT_DB). --files also deletes
+every raw replay in the archive (main/resources/replays) that no database
+stores: a game turned away, or the weaker of two recordings of one game. The
+archive is shared, so this checks every database under main/resources (each
+community's and pubs.db, not backups) as well as the ones given.
 
 The bot announces any achievement a deletion takes away at its next restart
 (the startup reconcile), so restart it once after pruning rather than leaving
 it to a later deploy.
 """
 
+import glob
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "main"))
 
-from services import replay_parser, storage  # noqa: E402
+from services import storage  # noqa: E402
 from services.storage import MatchStore  # noqa: E402
 
-ARCHIVE_DIR = os.path.join(os.path.dirname(__file__), "..", "main", "resources", "replays")
+RESOURCES_DIR = os.path.join(os.path.dirname(__file__), "..", "main", "resources")
+ARCHIVE_DIR = os.path.join(RESOURCES_DIR, "replays")
 
 
 def prune_db(store: MatchStore, apply: bool) -> None:
@@ -43,21 +44,24 @@ def prune_db(store: MatchStore, apply: bool) -> None:
     print(f"deleted {deleted} games; database now holds {store.match_count()} matches")
 
 
-def prune_archive(stores: list[MatchStore], apply: bool) -> None:
-    kept = set().union(*(store.file_hashes() for store in stores))
+def every_database(given: list[str]) -> list[str]:
+    """The given databases plus every live one under main/resources: the
+    home ladder, each community's (guilds/<id>/), and pubs.db. Not backups
+    (monobot-*.db): a snapshot doesn't keep a file the bot no longer stores."""
+    found = [os.path.join(RESOURCES_DIR, name) for name in ("monobot.db", "pubs.db")]
+    found += glob.glob(os.path.join(RESOURCES_DIR, "guilds", "*", "monobot.db"))
+    return sorted({os.path.abspath(p) for p in given + found if os.path.exists(p)})
+
+
+def prune_archive(paths: list[str], apply: bool) -> None:
+    kept = set()
+    for path in every_database(paths):
+        store = MatchStore(path)
+        kept |= store.file_hashes()
+        store.close()
+        print(f"  keeping files stored in {path}")
     names = sorted(n for n in os.listdir(ARCHIVE_DIR) if n.lower().endswith(".sc2replay"))
-    doomed = []
-    for name in names:
-        if name.removesuffix(".SC2Replay") in kept:
-            continue
-        path = os.path.join(ARCHIVE_DIR, name)
-        try:
-            reason = storage.rejection_reason(replay_parser.parse_replay(path))
-        except Exception as e:
-            print(f"  could not parse {name}, keeping it: {type(e).__name__}")
-            continue
-        if reason is not None:
-            doomed.append(path)
+    doomed = [os.path.join(ARCHIVE_DIR, n) for n in names if n.removesuffix(".SC2Replay") not in kept]
     verb = "deleted" if apply else "would delete"
     print(f"archive: {verb} {len(doomed)} of {len(names)} files")
     if apply:
@@ -76,7 +80,7 @@ def main() -> None:
         print(f"== {path}")
         prune_db(store, apply)
     if files:
-        prune_archive(stores, apply)
+        prune_archive(paths, apply)
     if not apply:
         print("dry run; re-run with --apply")
 

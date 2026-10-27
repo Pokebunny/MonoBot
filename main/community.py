@@ -3,9 +3,7 @@
 A community is a server's own match database, the caches derived from it and
 its slice of the config. Nothing is shared between communities — not matches,
 ratings, links nor achievements — so someone who plays in two of them links
-twice and has two unrelated ratings. The one exception is the pub stats
-(!pubunitstats), which pool every community with the pub archive (pubs.db)
-for the biggest sample — aggregate unit numbers, nobody's ladder.
+twice and has two unrelated ratings.
 
 The home community is the original ladder and keeps its database at
 resources/monobot.db; every other one lives under resources/guilds/<id>/.

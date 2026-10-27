@@ -10,7 +10,7 @@ The databases default to the home one (or MONOBOT_DB). --files also deletes
 every raw replay in the archive (main/resources/replays) that no database
 stores: a game turned away, or the weaker of two recordings of one game. The
 archive is shared, so this checks every database under main/resources (each
-community's and pubs.db, not backups) as well as the ones given.
+community's, not backups) as well as the ones given.
 
 The bot announces any achievement a deletion takes away at its next restart
 (the startup reconcile), so restart it once after pruning rather than leaving
@@ -46,9 +46,9 @@ def prune_db(store: MatchStore, apply: bool) -> None:
 
 def every_database(given: list[str]) -> list[str]:
     """The given databases plus every live one under main/resources: the
-    home ladder, each community's (guilds/<id>/), and pubs.db. Not backups
+    home ladder and each community's (guilds/<id>/). Not backups
     (monobot-*.db): a snapshot doesn't keep a file the bot no longer stores."""
-    found = [os.path.join(RESOURCES_DIR, name) for name in ("monobot.db", "pubs.db")]
+    found = [os.path.join(RESOURCES_DIR, "monobot.db")]
     found += glob.glob(os.path.join(RESOURCES_DIR, "guilds", "*", "monobot.db"))
     return sorted({os.path.abspath(p) for p in given + found if os.path.exists(p)})
 

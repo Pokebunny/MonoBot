@@ -29,7 +29,6 @@ cog_files = [
     "leaderboard",
     "recap",
     "matchmaking",
-    "pubs",
 ]
 
 

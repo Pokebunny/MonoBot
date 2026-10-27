@@ -42,7 +42,7 @@ cd MonoBot && ~/.local/bin/uv sync
 # live-only files (gitignored) — copy from your machine:
 #   main/.env               BOT_TOKEN=...
 #   main/resources/config.json
-#   main/resources/monobot.db   (and pubs.db if you want the pubs commands)
+#   main/resources/monobot.db
 # e.g. scp -r main/.env main/resources/*.json main/resources/*.db ec2-user@HOST:/tmp/
 #      then sudo mv them into place and chown monobot:monobot
 

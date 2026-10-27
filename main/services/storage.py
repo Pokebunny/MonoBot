@@ -307,48 +307,6 @@ def _same_game(a: _Recording, b: _Recording) -> bool:
     return a.lineup == b.lineup and gap < min(a.duration_seconds, b.duration_seconds)
 
 
-def combined_unit_records(stores, confidence_gate: float, min_duration: int) -> dict[str, list[int]]:
-    """pick -> [wins, losses] across several stores' decided matches, each
-    game counted once however many stores hold it (see _distinct_games).
-    The first store holding a game supplies it, so list the most up-to-date
-    first."""
-    records: dict[str, list[int]] = {}
-    for picks in _distinct_games(stores, confidence_gate, min_duration):
-        for pick, won in picks or ():
-            records.setdefault(pick, [0, 0])[0 if won else 1] += 1
-    return records
-
-
-def combined_game_count(stores) -> int:
-    """Distinct games across several stores, decided or not."""
-    return len(_distinct_games(stores, 1.0, 0, decided_only=False))
-
-
-def _distinct_games(
-    stores, confidence_gate: float, min_duration: int, decided_only: bool = True
-) -> list[list[tuple[str, bool]] | None]:
-    """games_for_pooling's picks for each distinct game across the stores,
-    from the first store that holds it (decided, unless not decided_only --
-    a store's undecided copy doesn't hide another's decided one). A game is the same one by
-    content_key or _same_game: each store merges its own duplicates, but two
-    stores may have kept different recordings of a game, under different
-    keys."""
-    seen_keys: set[str] = set()
-    seen: dict[frozenset, list[_Recording]] = {}
-    games = []
-    for store in stores:
-        for key, recording, picks in store.games_for_pooling(confidence_gate, min_duration):
-            if decided_only and picks is None:
-                continue
-            same_accounts = seen.setdefault(frozenset(h for h, _, _ in recording.lineup), [])
-            if key in seen_keys or any(_same_game(recording, other) for other in same_accounts):
-                continue
-            seen_keys.add(key)
-            same_accounts.append(recording)
-            games.append(picks)
-    return games
-
-
 def _migration_1_content_key(conn: sqlite3.Connection) -> None:
     """Backfill content_key on DBs created before it existed. No-op on DBs
     that already have the column (the pre-versioning baseline)."""
@@ -1515,39 +1473,6 @@ class MatchStore:
             "SELECT 1 FROM match_players WHERE name = ? COLLATE NOCASE LIMIT 1", (sc2_name,)
         ).fetchone()
         return row is not None
-
-    def unit_records(self, confidence_gate: float, min_duration: int) -> dict[str, list[int]]:
-        """pick -> [wins, losses] across decided matches."""
-        return combined_unit_records([self], confidence_gate, min_duration)
-
-    def games_for_pooling(
-        self, confidence_gate: float, min_duration: int
-    ) -> list[tuple[str, _Recording, list[tuple[str, bool]] | None]]:
-        """(content_key, recording, picks) for every stored game, where picks
-        is [(pick, won)] for a match decided past the gates and None
-        otherwise: unit records before they're summed, so several stores can
-        be combined without counting a game that more than one of them holds
-        twice (see _distinct_games)."""
-        lineups: dict[int, set] = {}
-        for r in self._conn.execute("SELECT match_id, toon_handle, team, pick FROM match_players"):
-            lineups.setdefault(r["match_id"], set()).add((r["toon_handle"], r["team"], r["pick"]))
-        games = []
-        for m in self._conn.execute("SELECT * FROM matches"):
-            lineup = lineups.get(m["id"], set())
-            decided = (
-                m["winning_team"] is not None
-                and m["winner_confidence"] >= confidence_gate
-                and (m["duration_seconds"] >= min_duration or m["approved"])
-            )
-            picks = [(pick, team == m["winning_team"]) for _, team, pick in lineup if pick is not None]
-            recording = _Recording(
-                m["game_seed"],
-                frozenset(lineup),
-                datetime.datetime.fromisoformat(m["played_at"]),
-                m["duration_seconds"],
-            )
-            games.append((m["content_key"], recording, picks if decided else None))
-        return games
 
     def picks(self) -> set[str]:
         """Every unit anyone has picked, in its stored spelling ("WidowMine")."""

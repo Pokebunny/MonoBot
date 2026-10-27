@@ -24,8 +24,7 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   would lose the user-written `player_links` table.
 - **Communities**: one ladder per Discord server (`community.py`). Each has
   its own match DB, caches (`RatingCache`/`AchievementCache`/`DuoCache`/
-  `UnitCache`/`PickCache`) and config slice; nothing is shared except the pub stats (`cogs/pubs.py`),
-  which pool `pubs.db` with every community's DB, deduped like ingest (below). The home
+  `UnitCache`/`PickCache`) and config slice; nothing is shared. The home
   community is `config.json`'s top-level fields + `resources/monobot.db`;
   each server under `guilds` gets `resources/guilds/<id>/monobot.db`.
   Unconfigured servers get none (`home_guild_id: null`, the legacy default,

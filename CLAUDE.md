@@ -96,8 +96,7 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   `spine_rush`, set by the parser; thresholds and why in
   `replay_parser.py`) adds a `CannonRush`/`SpineRush` board that the game
   counts on *as well as* the rusher's pick (`rating.boards_of`) — never
-  instead of it. `scripts/backfill_rushes.py` fills the flags in for old
-  games without touching anything else they store.
+  instead of it.
 - **Achievements** are derived from history but *held* in the
   `achievement_unlocks` ledger, which is reconciled rather than append-only:
   `achievements.reconcile` grants and revokes, and the startup hook announces
@@ -115,7 +114,7 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   the terrain's real name exists only inside the published map file. It is
   fetched once per hash from Blizzard's depot and cached in `map_versions`
   (`services/map_versions.py`); unresolved versions fall back to the arcade
-  name. `scripts/backfill_map_hashes.py` fills hashes in for older games.
+  name.
   Per-map stats group on the map's **name** (`map_versions.group_by_map`),
   never its hash — the same terrain is republished under new hashes — and
   leave out games whose map isn't known.

@@ -633,6 +633,15 @@ def _infer_winner(replay) -> tuple[int | None, float, str]:
     return None, _CONF_CONFLICT, "conflict:" + "+".join(sorted(picks))
 
 
+def _game_seed(replay) -> int | None:
+    return replay.raw_data["replay.initData"]["game_description"].get("random_value")
+
+
+def read_game_seed(path: str) -> int | None:
+    """Just the game's random seed: the init data, without parsing events."""
+    return _game_seed(sc2reader.load_replay(path, load_level=1))
+
+
 def parse_replay(path: str) -> MonobattleMatch:
     replay = sc2reader.load_replay(path, load_level=4)
     game_start = _find_game_start(replay)
@@ -702,7 +711,7 @@ def parse_replay(path: str) -> MonobattleMatch:
         map_name=replay.map_name,
         map_hash=replay.map_hash,
         played_at=replay.start_time,
-        game_seed=replay.raw_data["replay.initData"]["game_description"].get("random_value"),
+        game_seed=_game_seed(replay),
         duration_seconds=replay.game_length.seconds,
         game_type=replay.real_type,
         pick_mode=pick_mode,

@@ -4,7 +4,8 @@ from pydantic import BaseModel, model_validator
 class GuildConfig(BaseModel):
     """Settings for one community (one Discord server's ladder)."""
 
-    # Only parse .SC2Replay attachments posted in these channels. Empty means
+    # Only parse .SC2Replay attachments posted in these channels, which also
+    # get the morning recap and achievement announcements. Empty means
     # watch every channel in the server (simplest, but noisy — set this in
     # production).
     replays_channel_ids: list[int] = []

@@ -419,14 +419,6 @@ class TestMigrations:
             MatchStore(path)
 
 
-def test_replay_channel_toggle(store):
-    assert store.replay_channel_ids() == set()
-    assert store.toggle_replay_channel(123, 1, "42") is True
-    assert store.replay_channel_ids() == {123}
-    assert store.toggle_replay_channel(123, 1, "42") is False
-    assert store.replay_channel_ids() == set()
-
-
 def test_player_records_cover_merged_group(store):
     """Race/pick records must aggregate across a player's merged accounts."""
     store.ingest(_match(played_at=_at(0)), hash_replay(b"g1"))
@@ -820,7 +812,7 @@ def test_kills_by_unit_column_is_added_to_an_older_db(tmp_path):
     reopened.close()
 
 
-def test_rush_flags_round_trip_and_backfill(tmp_path):
+def test_rush_flags_round_trip(tmp_path):
     store = MatchStore(str(tmp_path / "c.db"))
     match = _match()
     match.players[0].cannon_rush = True
@@ -829,12 +821,15 @@ def test_rush_flags_round_trip_and_backfill(tmp_path):
     ((_, stored),) = store.all_matches()
     first, second = stored.players[0], stored.players[1]
     assert (first.cannon_rush, first.spine_rush, second.cannon_rush, second.spine_rush) == (True, None, None, True)
-    assert store.set_rushes("h1", {p.toon_handle: (False, p is first) for p in stored.players})
-    ((_, stored),) = store.all_matches()
-    assert all(p.cannon_rush is False for p in stored.players)
-    assert [p.spine_rush for p in stored.players[:2]] == [True, False]
-    assert not store.set_rushes("nope", {})
     store.close()
+
+
+def test_seed_backfill_sets_only_missing_seeds(store):
+    store.ingest(_match(played_at=_at(0)), "old")
+    store.ingest(_match(played_at=_at(1)).model_copy(update={"game_seed": 7}), "new")
+    assert store.set_game_seeds({"old": 5, "new": 9, "not-stored": 1}) == 1
+    seeds = dict(store._conn.execute("SELECT file_hash, game_seed FROM matches"))
+    assert seeds == {"old": 5, "new": 7}
 
 
 def test_reported_level_sets_where_the_first_game_starts(store):
@@ -945,3 +940,20 @@ def test_delete_matches_takes_the_players_too(store):
     assert store.get_match(drop) is None
     orphans = store._conn.execute("SELECT COUNT(*) FROM match_players WHERE match_id = ?", (drop,)).fetchone()[0]
     assert orphans == 0
+
+
+def test_migration_drops_replay_channels(tmp_path):
+    """Migration 19: watched channels live in config.json alone."""
+    import sqlite3
+
+    path = str(tmp_path / "v18.db")
+    MatchStore(path).close()
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE replay_channels (channel_id INTEGER PRIMARY KEY, guild_id INTEGER)")
+    conn.execute("INSERT INTO replay_channels VALUES (123, 1)")
+    conn.execute("PRAGMA user_version = 18")
+    conn.commit()
+    conn.close()
+    s = MatchStore(path)
+    assert s._conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'replay_channels'").fetchone() is None
+    s.close()

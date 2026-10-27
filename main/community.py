@@ -41,9 +41,9 @@ class Community:
         self.pick_boards = PickCache(store)
 
     def watched_channels(self) -> set[int]:
-        """Channels watched for replays: the runtime !watchreplays set plus
-        any config-file channels. Empty = watch everywhere (dev default)."""
-        return self.store.replay_channel_ids() | set(self.config.replays_channel_ids)
+        """Channels watched for replays: the config file's. Empty = watch
+        everywhere (dev default)."""
+        return set(self.config.replays_channel_ids)
 
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.config.admin_user_ids

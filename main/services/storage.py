@@ -97,7 +97,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -182,15 +182,6 @@ CREATE TABLE IF NOT EXISTS skill_levels (
     discord_id TEXT PRIMARY KEY,
     level TEXT NOT NULL,
     set_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- Channels watched for replay uploads, managed at runtime by !watchreplays.
--- Unioned with the config-file channel list; empty overall = watch everywhere.
-CREATE TABLE IF NOT EXISTS replay_channels (
-    channel_id INTEGER PRIMARY KEY,
-    guild_id INTEGER,
-    added_by TEXT,
-    added_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Achievement unlocks are a LEDGER, not derived state: once granted, a badge
@@ -422,8 +413,8 @@ def _migration_10_seasons(conn: sqlite3.Connection) -> None:
 def _migration_11_map_versions(conn: sqlite3.Connection) -> None:
     """Record which published version of the arcade map each game was played
     on, and cache the terrain name behind each version. Existing rows keep an
-    empty hash (they were parsed before it was read) until
-    scripts/backfill_map_hashes.py fills them in from the replay archive."""
+    empty hash (they were parsed before it was read) until filled in from the
+    replay archive (done for every game by Oct 2026)."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(matches)")}
     if "map_hash" not in cols:
         conn.execute("ALTER TABLE matches ADD COLUMN map_hash TEXT NOT NULL DEFAULT ''")
@@ -539,6 +530,19 @@ def _migration_18_merge_duplicate_recordings(conn: sqlite3.Connection) -> None:
             logger.info("Merged duplicate recordings of match %d: dropped %s", keep["id"], drop)
 
 
+def _migration_19_drop_replay_channels(conn: sqlite3.Connection) -> None:
+    """Watched channels come from config.json alone now (!watchreplays is
+    gone). Logs any channel this drops, to be added to the config."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'replay_channels'").fetchone():
+        for row in conn.execute("SELECT channel_id, guild_id FROM replay_channels"):
+            logger.warning(
+                "No longer watching replay channel %s (server %s): add it to config.json's replays_channel_ids",
+                row["channel_id"],
+                row["guild_id"],
+            )
+        conn.execute("DROP TABLE replay_channels")
+
+
 _MIGRATIONS = {
     1: _migration_1_content_key,
     2: _migration_2_replay_channels,
@@ -558,6 +562,7 @@ _MIGRATIONS = {
     16: _migration_16_skill_levels,
     17: _migration_17_approved,
     18: _migration_18_merge_duplicate_recordings,
+    19: _migration_19_drop_replay_channels,
 }
 
 
@@ -829,41 +834,18 @@ class MatchStore:
         rows = self._conn.execute("SELECT map_hash, name FROM map_versions WHERE name IS NOT NULL").fetchall()
         return {r["map_hash"]: r["name"] for r in rows}
 
-    def set_map_hash(self, match_id: int, map_hash: str) -> None:
-        """Backfill the published-version hash of a game stored before it was
-        recorded (see scripts/backfill_map_hashes.py)."""
-        self._conn.execute("UPDATE matches SET map_hash = ? WHERE id = ?", (map_hash, match_id))
-        self._conn.commit()
-        self.change_count += 1
-
-    def set_rushes(self, file_hash: str, rushes: dict[str, tuple[bool | None, bool | None]]) -> bool:
-        """Backfill (cannon_rush, spine_rush), by toon handle, on the game
-        stored from this exact replay file, touching nothing else about it --
-        unlike refresh_parse, which would also land every other parser change
-        since the game was stored. False if the file isn't stored. See
-        scripts/backfill_rushes.py."""
-        row = self._conn.execute("SELECT id FROM matches WHERE file_hash = ?", (file_hash,)).fetchone()
-        if row is None:
-            return False
-
-        def flag(value: bool | None) -> int | None:
-            return None if value is None else int(value)
-
-        self._conn.executemany(
-            "UPDATE match_players SET cannon_rush = ?, spine_rush = ? WHERE match_id = ? AND toon_handle = ?",
-            [(flag(cannon), flag(spine), row["id"], handle) for handle, (cannon, spine) in rushes.items()],
+    def set_game_seeds(self, seeds: dict[str, int]) -> int:
+        """Backfill game_seed, by file hash, on games stored before it was
+        read, touching nothing else -- unlike refresh_parse, which would also
+        land every other parser change since each game was stored. Returns
+        how many stored games got one. See scripts/backfill_seeds.py."""
+        cur = self._conn.executemany(
+            "UPDATE matches SET game_seed = ? WHERE file_hash = ? AND game_seed IS NULL",
+            [(seed, file_hash) for file_hash, seed in seeds.items()],
         )
         self._conn.commit()
         self.change_count += 1
-        return True
-
-    def match_ids_missing_map_hash(self) -> list[tuple[int, str, str]]:
-        """(id, played_at, content_key) of every stored game with no version
-        hash yet, oldest first."""
-        rows = self._conn.execute(
-            "SELECT id, played_at, content_key FROM matches WHERE map_hash = '' ORDER BY played_at"
-        ).fetchall()
-        return [(r["id"], r["played_at"], r["content_key"]) for r in rows]
+        return cur.rowcount
 
     def map_hash_samples(self) -> list[tuple[str, str]]:
         """(played_at, map_hash) for every game whose version is known,
@@ -1040,21 +1022,6 @@ class MatchStore:
             self.change_count += 1
             return True
         return False
-
-    def toggle_replay_channel(self, channel_id: int, guild_id: int | None, added_by: str) -> bool:
-        """Watch a channel for replay uploads, or stop if it's already
-        watched. Returns True if the channel is now watched."""
-        cur = self._conn.execute("DELETE FROM replay_channels WHERE channel_id = ?", (channel_id,))
-        if cur.rowcount == 0:
-            self._conn.execute(
-                "INSERT INTO replay_channels (channel_id, guild_id, added_by) VALUES (?, ?, ?)",
-                (channel_id, guild_id, added_by),
-            )
-        self._conn.commit()
-        return cur.rowcount == 0
-
-    def replay_channel_ids(self) -> set[int]:
-        return {r["channel_id"] for r in self._conn.execute("SELECT channel_id FROM replay_channels")}
 
     def record_unlocks(self, rows: list[tuple[str, str, str]]) -> None:
         """Append (handle, key, earned_at_iso) rows to the unlock ledger.

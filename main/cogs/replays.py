@@ -248,20 +248,6 @@ class Replays(CommunityCog):
                 except Exception:
                     logger.exception("Failed to process %s", attachment.filename)
 
-    @commands.hybrid_command(help="toggle watching this channel (or #channel) for replay uploads (mods)")
-    @is_bot_admin()
-    async def watchreplays(self, ctx, channel: discord.TextChannel | None = None):
-        self = self.at(ctx)
-        target = channel or ctx.channel
-        if target.id in set(self.community.config.replays_channel_ids) - self.store.replay_channel_ids():
-            await ctx.send(f"{target.mention} is watched via the config file — remove it there to stop.")
-            return
-        guild_id = target.guild.id if target.guild else None
-        now_watched = self.store.toggle_replay_channel(target.id, guild_id, str(ctx.author.id))
-        verb = "Now watching" if now_watched else "Stopped watching"
-        mentions = ", ".join(f"<#{cid}>" for cid in sorted(self._watched_channels())) or "every channel"
-        await ctx.send(f"{verb} {target.mention} for replay uploads. Currently watching: {mentions}")
-
     async def _process_attachment(self, channel, attachment: discord.Attachment, author: discord.abc.User):
         data = await attachment.read()
         file_hash = storage.hash_replay(data)

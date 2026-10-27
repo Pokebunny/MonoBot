@@ -117,7 +117,7 @@ def _level_label(level: str) -> str:
 
 class SkillLevelView(discord.ui.View):
     """The level buttons, for one player: shown privately on their first
-    Join, or by !level. Not persistent — !level brings them back."""
+    Join (until they answer, every Join asks again). Not persistent."""
 
     def __init__(self, lobby_for, owner_id: int):
         super().__init__(timeout=600)
@@ -131,7 +131,7 @@ class SkillLevelView(discord.ui.View):
     def _picker(self, level: str):
         async def pick(interaction: discord.Interaction):
             if interaction.user.id != self.owner_id:
-                await interaction.response.send_message("Run `!level` to set your own.", ephemeral=True)
+                await interaction.response.send_message("These buttons are someone else's.", ephemeral=True)
                 return
             if lobby := await _lobby_or_reply(self.lobby_for, interaction):
                 await interaction.response.edit_message(content=lobby.set_level(interaction.user, level), view=None)
@@ -438,7 +438,7 @@ class Lobby:
         """Build a QueuedPlayer, rated by the user's bound SC2 account with the
         most games. A season's seed counts until they've played in it, so a
         soft reset balances on carried-over skill from the first game. Users
-        who haven't played yet start from the level they reported (!level),
+        who haven't played yet start from the level they reported on Join,
         or the new-player default."""
         book = self.ratings.book()
         best = None
@@ -720,18 +720,7 @@ class Lobby:
         if self.has_played(uid):
             return "You've played here already, so your rating comes from your games now."
         self.store.set_skill_level(uid, level)
-        return (
-            f"Got it — you'll start as {_level_label(level)}. Change it with `!level` any time before your first game."
-        )
-
-    async def level_prompt(self, ctx):
-        uid = str(ctx.author.id)
-        if self.has_played(uid):
-            await ctx.send("You've played here already, so your rating comes from your games now.", ephemeral=True)
-            return
-        current = self.store.skill_level(uid)
-        content = LEVEL_PROMPT if current is None else f"You're down as {_level_label(current)}. Change it?"
-        await ctx.send(content, view=SkillLevelView(self.lobby_for, ctx.author.id), ephemeral=True)
+        return f"Got it — you'll start as {_level_label(level)}."
 
     async def handle_leave(self, interaction: discord.Interaction):
         # Answered first, like handle_join, so the press can't time out.
@@ -1113,10 +1102,6 @@ class Matchmaking(commands.Cog):
     @commands.hybrid_command(help="put a player into the queue (or on the waitlist while a game's on)")
     async def add(self, ctx, *, player: str):
         await self.lobby_for(ctx.guild).add(ctx, player)
-
-    @commands.hybrid_command(help="set your SC2 level, which seeds your rating before your first game")
-    async def level(self, ctx):
-        await self.lobby_for(ctx.guild).level_prompt(ctx)
 
     @commands.hybrid_command(help="clear the matchmaking queue")
     async def clearqueue(self, ctx):

@@ -6,7 +6,6 @@ import logging
 import zoneinfo
 
 import discord
-from checks import is_bot_admin
 from community import CommunityCog, daily_time, start_daily
 from discord.ext import commands
 from services import match_embeds, recap
@@ -14,10 +13,6 @@ from services.rating import season_start
 from views import PagedBoardView
 
 logger = logging.getLogger(__name__)
-
-# meta key holding the channel the morning recap goes to. Unset means the
-# replay channels — that's where the night's games were posted.
-RECAP_CHANNEL_META_KEY = "recap_channel"
 
 # The morning post covers this much history before it, so a session that runs
 # past midnight is reported whole.
@@ -89,33 +84,14 @@ class Recap(CommunityCog):
         view = PagedBoardView(render, len(sessions), start=len(sessions) - 1)
         view.message = await ctx.send(embed=view.embed(), view=view)
 
-    @commands.hybrid_command(
-        help="send the morning recap to this channel (or #channel); run again to go back to the default (mods)"
-    )
-    @is_bot_admin()
-    async def recapchannel(self, ctx, channel: discord.TextChannel | None = None):
-        self = self.at(ctx)
-        target = channel or ctx.channel
-        if self.store.get_meta(RECAP_CHANNEL_META_KEY) == str(target.id):
-            self.store.set_meta(RECAP_CHANNEL_META_KEY, "")
-            await ctx.send(f"Morning recap no longer pinned to {target.mention}; it goes to the replay channels.")
-            return
-        self.store.set_meta(RECAP_CHANNEL_META_KEY, str(target.id))
-        config = self.community.config
-        when = (
-            f"at {config.recap_time} {config.recap_timezone}"
-            if _recap_time(config)
-            else "(currently disabled in config)"
-        )
-        await ctx.send(f"The morning recap will be posted in {target.mention} {when}.")
-
     async def post_daily_recap(self):
         now = dt.datetime.now(dt.UTC)
         since = (now - DAILY_WINDOW).isoformat()
         session = self.store.all_matches(since=since)
         channels = [
             c
-            for c in (self.client.get_channel(cid) for cid in self._recap_channel_ids())
+            # The replay channels: that's where the night's games were posted.
+            for c in (self.client.get_channel(cid) for cid in sorted(self.community.watched_channels()))
             if c is not None and self.community.owns(c)
         ]
         if not channels:
@@ -130,12 +106,6 @@ class Recap(CommunityCog):
                 await channel.send(embed=embed)
             except discord.HTTPException:
                 logger.exception("Morning recap: failed to post in %s", channel)
-
-    def _recap_channel_ids(self) -> list[int]:
-        pinned = self.store.get_meta(RECAP_CHANNEL_META_KEY)
-        if pinned:
-            return [int(pinned)]
-        return sorted(self.community.watched_channels())
 
     def _embed(self, session, title: str, guild) -> discord.Embed | None:
         if not session:

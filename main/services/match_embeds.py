@@ -663,7 +663,7 @@ def proposed_match(
     embed.add_field(name=n2, value=v2, inline=True)
     if any(not p.rated for p in match.team1 + match.team2):
         embed.set_footer(
-            text="Unrated players were balanced at the level they reported (!level), or a default estimate."
+            text="Unrated players were balanced at the level they reported on joining, or a default estimate."
         )
     return embed
 

@@ -839,12 +839,6 @@ class Leaderboard(CommunityCog):
         )
         await self._send_board(ctx, view)
 
-    @commands.hybrid_command(help="rate unit picks, adjusted for who picked them — same as !leaderboard units")
-    @commands.cooldown(1, 5, commands.BucketType.user)
-    async def unitstats(self, ctx, *, query: str = ""):
-        self = self.at(ctx)
-        await self._unit_board(ctx, query)
-
     async def _unit_board(self, ctx, query: str):
         min_games, raw = self._parse_unit_query(query)
         units = self.units.units()
@@ -940,12 +934,6 @@ class Leaderboard(CommunityCog):
     def _next_season_name(self) -> str:
         """Default name continues the numbering: 'Season 1' -> 'Season 2'."""
         return f"Season {len(self.store.seasons()) + 1}"
-
-    @commands.hybrid_command(help="how many matches are stored")
-    @commands.cooldown(1, 5, commands.BucketType.user)
-    async def matchcount(self, ctx):
-        self = self.at(ctx)
-        await ctx.send(f"{self.store.match_count()} matches stored.")
 
 
 async def setup(client):

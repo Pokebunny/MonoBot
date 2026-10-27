@@ -53,7 +53,7 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   season's ratings only through `season_book`/`season_start`, or a soft reset
   shows on some screens and not others.
   A player's **reported level** (`skill_levels` table, asked on their first
-  Join or via `!level`, locked once they've played) moves only where their
+  Join, locked once set or once they've played) moves only where their
   first game starts (`rating.SKILL_LEVEL_MU`, as `RatingBook.priors`, set
   in `season_start` for both the career and season walks); before any game
   is uploaded, matchmaking reads it directly.
@@ -80,7 +80,7 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   Ranking on a level holds up where ranking on a residual does not; keep it
   that way. Career-wide and cached in `DuoCache`, since the walk does twelve
   model updates per match.
-- **Unit ratings** (`!leaderboard units`, `!unitstats`) come from
+- **Unit ratings** (`!leaderboard units`) come from
   `rating.unit_ratings`: each pick is an extra member of its picker's team, and
   the walk updates only the units — players enter at their pre-match ladder
   rating and are never changed by it, so the ladder is untouched. Shown as

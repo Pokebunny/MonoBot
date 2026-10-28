@@ -197,7 +197,7 @@ def _prior(book: "RatingBook", player) -> tuple[float, float]:
 UNIT_PRIOR_SIGMA = DEFAULT_SIGMA / 4
 
 
-def unit_ratings(matches, merge_map: dict[str, str] | None = None) -> dict[str, UnitRating]:
+def unit_ratings(matches, merge_map: dict[str, str] | None = None, season=None) -> dict[str, UnitRating]:
     """Every unit pick's rating, keyed by pick. `matches` is an iterable of
     MonobattleMatch, e.g. (m for _, m in store.all_matches()).
 
@@ -217,11 +217,16 @@ def unit_ratings(matches, merge_map: dict[str, str] | None = None) -> dict[str, 
     slightly worse, besides moving the ladder — which this must not do.
 
     Only games where every pick is known count; a side missing a unit would
-    be scored as if that slot were an average pick. Career-wide."""
+    be scored as if that slot were an average pick. Career-wide, unless
+    `season` is given: then only its games move the units, which start fresh
+    at its start. The players still walk all of `matches` and enter at their
+    career rating — a hard-reset season's ladder would have everyone at the
+    prior for its first games, and the units would soak up who picked them."""
     book = RatingBook(merge_map)
     units: dict[str, UnitRating] = {}
     for match in sorted(matches, key=lambda m: m.played_at):
-        if book.is_rateable(match) and all(p.pick for p in match.players):
+        counted = season is None or season.contains(match.played_at.isoformat())
+        if counted and book.is_rateable(match) and all(p.pick for p in match.players):
             _rate_units(book, match, units)
         book.rate_match(match)
     return units

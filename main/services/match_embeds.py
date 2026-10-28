@@ -793,7 +793,12 @@ def duo_board(
 
 
 def unit_board(
-    rows: list[UnitRating], page: int = 0, min_games: int = 1, baseline: float = 0.0, sort: str = "rating"
+    rows: list[UnitRating],
+    page: int = 0,
+    min_games: int = 1,
+    baseline: float = 0.0,
+    sort: str = "rating",
+    label: str = "Career",
 ) -> discord.Embed:
     """`rows` is pre-sorted; `sort` ("rating" or "raw") says which number
     leads. A unit's rating is a bonus in ladder points over the average pick,
@@ -828,7 +833,7 @@ def unit_board(
     )
     other = "!leaderboard units" if sort == "raw" else "!leaderboard units raw"
     note = f"min {min_games} games · " if min_games > 1 else ""
-    embed.set_footer(text=f"Career · {note}{meaning} · {other} · Page {page + 1}/{pages}")
+    embed.set_footer(text=f"{label} · {note}{meaning} · {other} · Page {page + 1}/{pages}")
     return embed
 
 

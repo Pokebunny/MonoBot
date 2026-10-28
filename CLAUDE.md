@@ -85,7 +85,8 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   the walk updates only the units — players enter at their pre-match ladder
   rating and are never changed by it, so the ladder is untouched. Shown as
   points over the games-weighted average pick. Career-wide, cached in
-  `UnitCache`. Updating players and units jointly was tried and predicted
+  `UnitCache`; a named season (`!leaderboard units s3`) moves units only on
+  its games, with players still at their career rating. Updating players and units jointly was tried and predicted
   worse; keep players fixed. Not to be confused with a **one-unit player
   board** (`!leaderboard marine`, `rating.pick_ratings`): players rated on
   their games with that unit, where only the focal player's slot is a

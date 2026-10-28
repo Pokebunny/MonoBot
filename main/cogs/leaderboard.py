@@ -21,6 +21,7 @@ from services.rating import (
     season_book,
     unit_baseline,
     unit_kings,
+    unit_ratings,
 )
 from views import ExpiringView, PagedBoardView, person_or_pick
 
@@ -317,7 +318,7 @@ class Leaderboard(CommunityCog):
         help="show the rating leaderboard — add a race (!leaderboard zerg), a unit (!leaderboard marine), "
         "a pick mode (br / blind random, sd / single draft), "
         "'kings' for who tops the most unit boards, "
-        "a season (s1), 'career' for all-time, or 'units' to rate unit picks",
+        "a season (s1), 'career' for all-time, or 'units' to rate unit picks (all-time, or !leaderboard units s3)",
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def leaderboard(self, ctx, *, query: str = ""):
@@ -339,10 +340,8 @@ class Leaderboard(CommunityCog):
         if career:
             season, label = None, "All-Time"
         elif season_query:
-            season = self.store.find_season(season_query)
+            season = await self._named_season(ctx, season_query)
             if season is None:
-                known = ", ".join(s.name for s in self.store.seasons())
-                await ctx.send(f"No season called **{season_query}**. Seasons so far: {known}.")
                 return
             label = season.name
         else:
@@ -388,6 +387,15 @@ class Leaderboard(CommunityCog):
             else:
                 season_words.append(token)
         return min_games, race, " ".join(season_words)
+
+    async def _named_season(self, ctx, query: str):
+        """The season `query` names, or None once the user's been told there
+        isn't one."""
+        season = self.store.find_season(query)
+        if season is None:
+            known = ", ".join(s.name for s in self.store.seasons())
+            await ctx.send(f"No season called **{query}**. Seasons so far: {known}.")
+        return season
 
     def _book_for(self, season, career: bool, by_race: bool = False, mode: str | None = None):
         """The rating book for a season. The open season comes from the shared
@@ -844,34 +852,49 @@ class Leaderboard(CommunityCog):
         await self._send_board(ctx, view)
 
     async def _unit_board(self, ctx, query: str):
-        min_games, raw = self._parse_unit_query(query)
-        units = self.units.units()
+        min_games, raw, season_query = self._parse_unit_query(query)
+        # All-time unless a season is named, like the one-unit player boards.
+        if season_query.lower() in ("", "career", "all", "alltime", "all-time"):
+            units, label = self.units.units(), "Career"
+        else:
+            season = await self._named_season(ctx, season_query)
+            if season is None:
+                return
+            units = unit_ratings((m for _, m in self.store.all_matches()), self.store.merge_map(), season)
+            label = season.name
         # The zero is the average pick across every unit, not just the ones
         # shown, so raising the floor doesn't shift everyone's number.
         baseline = unit_baseline(units.values())
         rows = [u for u in units.values() if u.games >= min_games]
         if not rows:
-            await ctx.send(f"No unit has {min_games} rated games yet.")
+            where = "" if label == "Career" else f" in {label}"
+            await ctx.send(f"No unit has {min_games} rated games{where} yet.")
             return
         rows.sort(key=(lambda u: (u.win_rate, u.games)) if raw else (lambda u: u.mu), reverse=True)
         sort = "raw" if raw else "rating"
         view = PagedBoardView(
-            lambda page: match_embeds.unit_board(rows, page, min_games, baseline, sort),
+            lambda page: match_embeds.unit_board(rows, page, min_games, baseline, sort, label),
             match_embeds.page_count(rows),
         )
         await self._send_board(ctx, view)
 
     @staticmethod
-    def _parse_unit_query(query: str) -> tuple[int, bool]:
-        """Split '[units] [min_games] [raw]' into (min_games, sort by raw win
-        rate). Unit boards are career-wide, so season words are ignored."""
-        min_games, raw = UNIT_MIN_GAMES, False
-        for token in query.lower().split():
-            if token.isdigit():
-                min_games = max(1, int(token))
-            elif token in _UNIT_RAW_WORDS:
+    def _parse_unit_query(query: str) -> tuple[int, bool, str]:
+        """Split '[units] [min_games] [raw] [season]' into (min_games, sort by
+        raw win rate, season words). As on the main board, a number is a
+        season's only straight after the word 'season'."""
+        min_games, raw, season_words = UNIT_MIN_GAMES, False, []
+        for token in query.split():
+            word = token.lower()
+            if word in _UNIT_WORDS:
+                continue
+            if word.isdigit() and not (season_words and season_words[-1].lower() == "season"):
+                min_games = max(1, int(word))
+            elif word in _UNIT_RAW_WORDS:
                 raw = True
-        return min_games, raw
+            else:
+                season_words.append(token)
+        return min_games, raw, " ".join(season_words)
 
     @commands.hybrid_command(help="show the current ladder season")
     @commands.cooldown(1, 5, commands.BucketType.user)

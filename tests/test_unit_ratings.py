@@ -96,6 +96,20 @@ def test_board_leads_with_bonus_and_footer_points_at_raw():
 
 
 def test_parse_unit_query():
-    assert Leaderboard._parse_unit_query("units") == (UNIT_MIN_GAMES, False)
-    assert Leaderboard._parse_unit_query("units 30 raw") == (30, True)
-    assert Leaderboard._parse_unit_query("Units Winrate") == (UNIT_MIN_GAMES, True)
+    assert Leaderboard._parse_unit_query("units") == (UNIT_MIN_GAMES, False, "")
+    assert Leaderboard._parse_unit_query("units 30 raw") == (30, True, "")
+    assert Leaderboard._parse_unit_query("Units Winrate") == (UNIT_MIN_GAMES, True, "")
+    assert Leaderboard._parse_unit_query("units s3 20") == (20, False, "s3")
+    assert Leaderboard._parse_unit_query("units season 3") == (UNIT_MIN_GAMES, False, "season 3")
+
+
+def test_season_unit_ratings_count_only_its_games():
+    from services.storage import Season
+
+    before = [_match(1, picks1=["Zealot"] * 4, picks2=["Stalker"] * 4, minutes=i) for i in range(3)]
+    during = [_match(1, minutes=10 + i) for i in range(2)]
+    start = (BASE + datetime.timedelta(minutes=10)).isoformat()
+    units = unit_ratings(before + during, season=Season(1, "Season 2", start, None))
+    assert set(units) == {"Zergling", "Roach"}
+    # Counted per slot: four Zerglings a game, two games.
+    assert (units["Zergling"].wins, units["Roach"].losses) == (8, 8)

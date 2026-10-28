@@ -130,10 +130,10 @@ class MatchPlayer(BaseModel):
         """Enemy value destroyed by this player's PICK, excluding their static
         defense, their workers, and anything else that got a kill for them.
 
-        Zero for a game parsed before attribution existed, so callers that need
-        to tell "no army kills" from "not recorded" should check kills_by_unit
-        directly. A few picks deal their damage through spells the tracker
-        credits to nobody (Infestor ~34% of its player's value, Sentry ~31%),
+        Every stored game has attribution (see docs/kill-attribution.md), so
+        zero means the pick was credited with nothing. A few picks deal their
+        damage through spells the tracker credits to nobody (Infestor ~34% of
+        its player's value, Sentry ~31%),
         so this UNDERSTATES those specifically -- see docs/kill-attribution.md
         before setting a threshold on one."""
         if not self.pick:

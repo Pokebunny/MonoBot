@@ -2,13 +2,15 @@ import asyncio
 import datetime as dt
 import types
 
+import discord
 import pytest
 from cogs.matchmaking import (
     ACTIVE_GAME_MINUTES,
     MATCH_POSTED_AT_META_KEY,
+    MATCH_ROSTER_META_KEY,
+    QUEUE_MSG_META_KEY,
+    LegacyLineupView,
     Lobby,
-    NextGameView,
-    ProposedMatchView,
     SkillLevelView,
 )
 from models.config import GuildConfig
@@ -94,9 +96,105 @@ def test_ranked_matches_single_split_for_a_pair():
     assert len(options) == 1  # nothing to shuffle through
 
 
-class _Response:
-    """Records what the view did with the interaction."""
+_T0 = dt.datetime(2026, 9, 27, 20, 0, tzinfo=dt.UTC)
+_TIMEOUT = dt.timedelta(minutes=60)
 
+
+class TestQueueTimeoutRule:
+    def test_removed_once_the_timeout_has_passed(self):
+        joined = {"a": _T0, "b": _T0 + dt.timedelta(minutes=10)}
+        assert expired(joined, _T0 + _TIMEOUT, _TIMEOUT) == ["a"]
+
+
+class TestNextRoster:
+    def test_sit_outs_hand_their_spots_to_the_line_in_order(self):
+        roster, promoted, short = next_roster(["a", "b", "c", "d"], ["b"], ["x", "y"])
+        assert roster == ["a", "c", "d", "x"] and promoted == ["x"] and short == 0
+
+    def test_nobody_sitting_out_means_nobody_moves(self):
+        assert next_roster(["a", "b"], [], ["x"]) == (["a", "b"], [], 0)
+
+    def test_short_when_the_line_cannot_cover_the_sit_outs(self):
+        _, _, short = next_roster(["a", "b", "c", "d"], ["a", "b"], ["x"])
+        assert short == 1
+
+
+# --- fakes -------------------------------------------------------------------
+
+
+class _Store:
+    def __init__(self):
+        self.meta = {}
+        self.count = 5
+        self.handles = {}  # uid -> toon handles, for anyone who has played
+        self.unlinked = set()
+        self.level = None
+
+    def get_meta(self, key):
+        return self.meta.get(key)
+
+    def set_meta(self, key, value):
+        self.meta[key] = value
+
+    def match_count(self):
+        return self.count
+
+    def sc2_names_for(self, uid):
+        return [] if uid in self.unlinked else ["linked"]
+
+    def handles_for(self, uid):
+        return list(self.handles.get(uid, ()))
+
+    def skill_level(self, uid):
+        return self.level
+
+    def set_skill_level(self, uid, level):
+        self.level = level
+
+
+def _user(uid):
+    return types.SimpleNamespace(id=int(uid), display_name=f"p{uid}")
+
+
+class _Guild:
+    """Everyone is still in the server."""
+
+    def get_member(self, uid):
+        return _user(uid)
+
+
+class _Message:
+    def __init__(self, id, channel=None, **kwargs):
+        self.id = id
+        self.channel = channel or types.SimpleNamespace(id=9)
+        self.kwargs = kwargs
+        self.content = kwargs.get("content")
+        self.embeds = [kwargs["embed"]] if kwargs.get("embed") is not None else []
+        self.deleted = False
+        self.edits = []
+
+    async def edit(self, **kwargs):
+        self.edits.append(kwargs)
+        if kwargs.get("embed") is not None:
+            self.embeds = [kwargs["embed"]]
+
+    async def delete(self):
+        self.deleted = True
+
+
+class _Channel:
+    id = 9
+
+    def __init__(self):
+        self.sent = []
+
+    async def send(self, content=None, **kwargs):
+        message = _Message(100 + len(self.sent), channel=self, content=content, **kwargs)
+        self.sent.append(message)
+        return message
+
+
+class _Response:
     def __init__(self):
         self.edited = self.deferred = False
         self.message = None
@@ -111,32 +209,6 @@ class _Response:
         self.message = content
 
 
-class _Message:
-    def __init__(self, id=0):
-        self.id = id
-        self.deleted = False
-        self.embeds = []  # no embed to redraw; the lineup is read off the cog
-
-    async def edit(self, **kwargs):
-        pass
-
-    async def delete(self):
-        self.deleted = True
-
-
-class _Interaction:
-    def __init__(self, user_id="1"):
-        self.user = types.SimpleNamespace(id=user_id)
-        self.response = _Response()
-        self.channel = object()
-        self.guild = _Guild()
-        self.message = _Message()
-        self.followup = _Followup()
-
-    async def edit_original_response(self, **kwargs):
-        self.response.edited = True
-
-
 class _Followup:
     def __init__(self):
         self.sent = []
@@ -145,392 +217,102 @@ class _Followup:
         self.sent.append((content, view, ephemeral))
 
 
-class _Guild:
-    """Every waitlister is still in the server."""
-
-    def get_member(self, uid):
-        return types.SimpleNamespace(id=str(uid))
-
-
-class _Store:
-    def __init__(self, count=0):
-        self.count = count
-        self.meta = {}
-
-    def get_meta(self, key):
-        return self.meta.get(key)
-
-    def set_meta(self, key, value):
-        self.meta[key] = value
-
-    def match_count(self):
-        return self.count
-
-    def sc2_names_for(self, uid):
-        return ["linked"]
-
-
-class _Cog:
-    """A Lobby's lineup state with the Discord-facing parts faked."""
-
-    def __init__(self, store, stored_ids=(), resolved=None):
-        self.store = store
-        self.config = GuildConfig()
-        self.lobby_for = lambda _guild: self  # every view finds this lobby
-        self.reposted = None
-        self.stored_ids = list(stored_ids)
-        self.resolved = list(resolved) if resolved is not None else None
-        self.promoted = None
-        self.sitting_out = []
-        self.waitlist = []
-        self.last_roster = []
-        self.match_message = None
-        self.lineup_messages = []
-        self.match_view = None
-
-    # The real lineup logic, run against this fake's state.
-    lineup_for_next = Lobby.lineup_for_next
-    lineup_embed = Lobby.lineup_embed
-    meeting_point = Lobby.meeting_point
-    toggle_lineup = Lobby.toggle_lineup
-    re_team = Lobby.re_team
-    _redraw_lineup = Lobby._redraw_lineup
-    _clear_match_message = Lobby._clear_match_message
-
-    def save_lineup(self):
-        pass
-
-    async def post_match(self, channel, users, promoted=()):
-        self.reposted = users
-        self.promoted = list(promoted)
-
-    def stored_roster_ids(self):
-        return self.stored_ids
-
-    def resolve_roster(self, guild):
-        return list(self.resolved or [])
-
-
-def _view(store, option_count=3):
-    """A posted match between eight players, with `option_count` splits ranked."""
-    players = [_p(f"p{i}") for i in range(8)]
-    options = ranked_matches(players, limit=option_count)
-    users = [types.SimpleNamespace(id=str(i)) for i in range(8)]
-    cog = _Cog(store)
-    return ProposedMatchView(cog.lobby_for, users, options, store.match_count()), users
-
-
-class TestNewTeamsButton:
-    """One button: cycle the ranked splits until a game is played, re-balance
-    from live ratings afterwards."""
-
-    def test_cycles_splits_when_nothing_has_been_played(self):
-        view, _ = _view(_Store(count=5))
-        interaction = _Interaction()
-        asyncio.run(view.new_teams.callback(interaction))
-        assert view.index == 1
-        assert interaction.response.edited  # edited in place, not reposted
-        assert view.lobby_for(None).reposted is None
-
-    def test_rebalances_once_a_game_is_stored(self):
-        store = _Store(count=5)
-        view, users = _view(store)
-        store.count += 1  # a replay went up while the teams sat there
-        interaction = _Interaction()
-        asyncio.run(view.new_teams.callback(interaction))
-        assert view.lobby_for(None).reposted == users  # re-split from current ratings
-        assert view.index == 0  # the stale options were not cycled
-
-    def test_single_split_and_no_games_says_so(self):
-        view, _ = _view(_Store(count=5), option_count=1)
-        interaction = _Interaction()
-        asyncio.run(view.new_teams.callback(interaction))
-        assert "no games have been played since" in interaction.response.message
-
-    def test_only_players_in_the_match_may_re_team(self):
-        view, _ = _view(_Store(count=5))
-        interaction = _Interaction(user_id="stranger")
-        asyncio.run(view.new_teams.callback(interaction))
-        assert "Only a player in this match" in interaction.response.message
-        assert view.index == 0
-
-
-class TestMeetingPoint:
-    """The server's SC2 chat channel shows on the queue and the teams."""
-
-    def test_proposal_names_the_channel_and_region(self):
-        view, _ = _view(_Store(count=5))
-        lobby = view.lobby_for(None)
-        lobby.config = GuildConfig(sc2_chat_channel="bgh1")
-        assert "**bgh1** (Americas server)" in view.embed(lobby).description
-
-    def test_queue_names_the_channel(self):
-        meet = match_embeds.meeting_point("mono", "Americas")
-        assert meet in match_embeds.queue_status([], 8, meet=meet).description
-
-    def test_left_off_when_unconfigured(self):
-        view, _ = _view(_Store(count=5))
-        assert "chat channel" not in view.embed(view.lobby_for(None)).description
-
-
-class TestRestoredAfterRestart:
-    """A deploy restarts the bot under proposals still sitting in chat. The
-    view is persistent so the click still dispatches; what it lost is the
-    ranked options, so it re-balances the stored roster instead."""
-
-    def test_rebalances_from_the_stored_roster(self):
-        users = [types.SimpleNamespace(id=str(i)) for i in range(8)]
-        cog = _Cog(_Store(count=5), stored_ids=[str(i) for i in range(8)], resolved=users)
-        view = ProposedMatchView(cog.lobby_for)  # no users, no options: restored
-        interaction = _Interaction()
-        asyncio.run(view.new_teams.callback(interaction))
-        assert cog.reposted == users
-        assert interaction.message.deleted  # the pre-restart proposal goes away
-
-    def test_says_so_when_the_roster_cannot_be_resolved(self):
-        cog = _Cog(_Store(count=5), stored_ids=["1"], resolved=[])
-        view = ProposedMatchView(cog.lobby_for)
-        interaction = _Interaction()
-        asyncio.run(view.new_teams.callback(interaction))
-        assert "run `!teams`" in interaction.response.message
-        assert cog.reposted is None
-
-    def test_permission_falls_back_to_the_stored_roster(self):
-        cog = _Cog(_Store(count=5), stored_ids=["7"], resolved=[])
-        view = ProposedMatchView(cog.lobby_for)
-        interaction = _Interaction(user_id="stranger")
-        asyncio.run(view.new_teams.callback(interaction))
-        assert "Only a player in this match" in interaction.response.message
-
-
-class _Ctx:
-    def __init__(self):
-        self.sent = []
-
-    async def send(self, content=None, **kwargs):
-        message = _Message(id=len(self.sent) + 1)
-        message.content, message.kwargs = content, kwargs
-        self.sent.append(message)
-        return message
-
-
-class TestWaitlistCommand:
-    """!waitlist brings the live teams and lineup back to the bottom of chat
-    without re-teaming."""
-
-    def test_moves_the_live_proposal_down_without_re_teaming(self):
-        view, _ = _view(_Store(count=5))
-        cog = view.lobby_for(None)
-        view.index = 2  # someone had cycled to the third split
-        old = _Message(id=-1)
-        cog.match_message, cog.match_view = old, view
-        ctx = _Ctx()
-        asyncio.run(Lobby.show_lineup(cog, ctx))
-        reposted = ctx.sent[0]
-        assert reposted.kwargs["view"] is view and view.index == 2  # same split, same buttons
-        assert "Option 3 of 3" in reposted.kwargs["embed"].description
-        assert old.deleted and cog.match_message is reposted  # still one live proposal
-        assert cog.reposted is None
-
-    def test_shows_the_waitlist_under_the_teams(self):
-        view, _ = _view(_Store(count=5))
-        cog = view.lobby_for(None)
-        cog.waitlist = ["42"]
-        cog.match_message, cog.match_view = _Message(id=-1), view
-        ctx = _Ctx()
-        asyncio.run(Lobby.show_lineup(cog, ctx))
-        fields = {f.name: f.value for f in ctx.sent[0].kwargs["embed"].fields}
-        assert "<@42>" in fields["Waitlist"]
-
-    def test_after_a_restart_posts_the_stored_roster_with_the_lineup_buttons(self):
-        cog = _Cog(_Store(), stored_ids=["1", "2"])
-        cog.waitlist = ["42"]
-        ctx = _Ctx()
-        asyncio.run(Lobby.show_lineup(cog, ctx))
-        sent = ctx.sent[0]
-        assert isinstance(sent.kwargs["view"], NextGameView)
-        fields = {f.name: f.value for f in sent.kwargs["embed"].fields}
-        assert fields["Playing"] == "<@1> <@2>" and "<@42>" in fields["Waitlist"]
-        assert cog.lineup_messages == [sent]  # redrawn when the lineup changes
-
-    def test_with_no_match_says_so(self):
-        ctx = _Ctx()
-        asyncio.run(Lobby.show_lineup(_Cog(_Store()), ctx))
-        assert "No match in progress" in ctx.sent[0].content
-
-
-_T0 = dt.datetime(2026, 9, 27, 20, 0, tzinfo=dt.UTC)
-_TIMEOUT = dt.timedelta(minutes=60)
-
-
-class TestQueueTimeout:
-    def test_removed_once_the_timeout_has_passed(self):
-        joined = {"a": _T0, "b": _T0 + dt.timedelta(minutes=10)}
-        assert expired(joined, _T0 + _TIMEOUT, _TIMEOUT) == ["a"]
-
-    def test_pressing_join_again_restarts_the_timer(self):
-        cog = object.__new__(Lobby)  # just the queue state, no Discord client
-        cog.store, cog.queue, cog.joined_at = _Store(), {}, {}
-        member = types.SimpleNamespace(id=1, display_name="p1")
-        cog._add(member)
-        cog.joined_at["1"] = _T0  # joined an hour ago
-        message, _ = cog._add(member)
-        assert "restarted" in message
-        assert expired(cog.joined_at, _T0 + _TIMEOUT, _TIMEOUT) == []
-
-
-class TestNextRoster:
-    def test_sit_outs_hand_their_spots_to_the_waitlist_in_order(self):
-        roster, promoted, short = next_roster(["a", "b", "c", "d"], ["b"], ["x", "y"])
-        assert roster == ["a", "c", "d", "x"] and promoted == ["x"] and short == 0
-
-    def test_nobody_sitting_out_means_nobody_moves(self):
-        assert next_roster(["a", "b"], [], ["x"]) == (["a", "b"], [], 0)
-
-    def test_short_when_the_waitlist_cannot_cover_the_sit_outs(self):
-        _, _, short = next_roster(["a", "b", "c", "d"], ["a", "b"], ["x"])
-        assert short == 1
-
-
-class TestSitOutAndWaitlist:
-    """Between games, players give up spots with Sit out and others claim them
-    with Waitlist; the swap happens at the next New teams."""
-
-    def test_sit_out_then_new_teams_swaps_in_the_first_waitlister(self):
-        view, users = _view(_Store(count=5))
-        asyncio.run(view.waitlist.callback(_Interaction(user_id="101")))
-        asyncio.run(view.waitlist.callback(_Interaction(user_id="102")))
-        asyncio.run(view.sit_out.callback(_Interaction(user_id="3")))
-        # No game stored yet, but the roster changed, so it re-balances.
-        asyncio.run(view.new_teams.callback(_Interaction()))
-        assert [u.id for u in view.lobby_for(None).reposted] == [u.id for u in users if u.id != "3"] + ["101"]
-        assert [u.id for u in view.lobby_for(None).promoted] == ["101"]
-
-    def test_pressing_again_takes_it_back(self):
-        view, _ = _view(_Store(count=5))
-        asyncio.run(view.sit_out.callback(_Interaction(user_id="3")))
-        asyncio.run(view.sit_out.callback(_Interaction(user_id="3")))
-        asyncio.run(view.waitlist.callback(_Interaction(user_id="101")))
-        asyncio.run(view.waitlist.callback(_Interaction(user_id="101")))
-        assert view.lobby_for(None).sitting_out == [] and view.lobby_for(None).waitlist == []
-
-    def test_no_swap_without_someone_to_take_the_spot(self):
-        view, _ = _view(_Store(count=5))
-        asyncio.run(view.sit_out.callback(_Interaction(user_id="3")))
-        interaction = _Interaction()
-        asyncio.run(view.new_teams.callback(interaction))
-        assert "need 1 more" in interaction.response.message
-        assert view.lobby_for(None).reposted is None
-        assert view.lobby_for(None).sitting_out == ["3"]  # still waiting for a taker
-
-    def test_players_sit_out_and_outsiders_wait(self):
-        view, _ = _view(_Store(count=5))
-        outsider = _Interaction(user_id="stranger")
-        asyncio.run(view.sit_out.callback(outsider))
-        assert "Waitlist" in outsider.response.message
-        player = _Interaction(user_id="3")
-        asyncio.run(view.waitlist.callback(player))
-        assert "Sit out" in player.response.message
-        assert view.lobby_for(None).sitting_out == [] and view.lobby_for(None).waitlist == []
-
-
-class TestBumpFromMatch:
-    """!bump on someone in the live match sits them out, as if they'd
-    pressed Sit out themselves."""
-
-    def _cog(self):
-        cog = _Cog(_Store(count=5), stored_ids=[str(i) for i in range(8)])
-        cog.queue = {}
-        cog._bump = types.MethodType(Lobby._bump, cog)
-        cog._bump_from_match = types.MethodType(Lobby._bump_from_match, cog)
-        return cog
-
-    def test_sits_the_player_out_and_the_waitlister_takes_the_spot(self):
-        cog = self._cog()
-        cog.waitlist = ["101"]
-        reply = asyncio.run(cog._bump(types.SimpleNamespace(id=3), "p3"))
-        assert "sit out" in reply
-        assert cog.sitting_out == ["3"] and cog.waitlist == ["101"]
-        users = [types.SimpleNamespace(id=str(i)) for i in range(8)]
-        roster, promoted = cog.lineup_for_next(_Guild(), users)
-        assert [u.id for u in promoted] == ["101"]
-        assert "3" not in [u.id for u in roster]
-
-    def test_bumping_twice_says_so(self):
-        cog = self._cog()
-        asyncio.run(cog._bump(types.SimpleNamespace(id=3), "p3"))
-        reply = asyncio.run(cog._bump(types.SimpleNamespace(id=3), "p3"))
-        assert "already" in reply and cog.sitting_out == ["3"]
-
-
-class TestNextGameButtonsOnSummary:
-    """The same Sit out / Waitlist / New teams on the summary of the game just
-    played, acting on the live roster."""
-
-    def _view(self):
-        users = [types.SimpleNamespace(id=str(i)) for i in range(8)]
-        cog = _Cog(_Store(count=5), stored_ids=[u.id for u in users])
-        cog.last_roster = users
-        return NextGameView(cog.lobby_for), users
-
-    def test_sit_out_and_new_teams_swap_in_the_waitlister(self):
-        view, users = self._view()
-        asyncio.run(view.waitlist.callback(_Interaction(user_id="101")))
-        asyncio.run(view.sit_out.callback(_Interaction(user_id="3")))
-        interaction = _Interaction()
-        asyncio.run(view.new_teams.callback(interaction))
-        assert [u.id for u in view.lobby_for(None).promoted] == ["101"]
-        assert not interaction.message.deleted  # the summary stays
-
-    def test_only_players_on_the_roster_may_re_team(self):
-        view, _ = self._view()
-        interaction = _Interaction(user_id="stranger")
-        asyncio.run(view.new_teams.callback(interaction))
-        assert "Only a player" in interaction.response.message
-        assert view.lobby_for(None).reposted is None
-
-
-class _MetaStore(_Store):
-    def __init__(self):
-        super().__init__()
-        self.meta = {}
-
-    def get_meta(self, key):
-        return self.meta.get(key)
-
-    def set_meta(self, key, value):
-        self.meta[key] = value
-
-    handles = ()
-    level = None
-
-    def handles_for(self, uid):
-        return list(self.handles)
-
-    def skill_level(self, uid):
-        return self.level
-
-    def set_skill_level(self, uid, level):
-        self.level = level
-
-
-class TestJoinButton:
-    """The Join button end to end, so a helper it leans on can't go missing
-    unnoticed again."""
-
-    def test_join_queues_the_player_and_adopts_the_message(self):
-        cog = object.__new__(Lobby)
-        cog.store, cog.queue, cog.joined_at = _MetaStore(), {}, {}
-        cog.config, cog.lobby_for = GuildConfig(), lambda _guild: cog
-        cog.queue_message = None
-        cog._players = lambda: []  # no ratings to look up
-        interaction = _Interaction(user_id=1)
-        interaction.message.channel = types.SimpleNamespace(id=9)
-        interaction.message.id = 42
-        asyncio.run(cog.handle_join(interaction))
-        assert "1" in cog.queue and "1" in cog.joined_at
-        assert cog.queue_message is interaction.message
-        assert cog.store.meta["queue_message"] == "9:42"
+class _Interaction:
+    def __init__(self, uid, message=None, channel=None):
+        self.user = _user(uid)
+        self.response = _Response()
+        self.followup = _Followup()
+        self.guild = _Guild()
+        self.channel = channel or _Channel()
+        self.message = message or _Message(1)
+
+
+def _lobby(store=None):
+    store = store or _Store()
+    community = types.SimpleNamespace(
+        config=GuildConfig(), store=store, ratings=types.SimpleNamespace(book=lambda: None), guild_id=1
+    )
+    holder = {}
+    lobby = Lobby(None, community, lambda _guild: holder["lobby"])
+    holder["lobby"] = lobby
+    return lobby
+
+
+def _game_on(lobby, uids=range(8), minutes_ago=10):
+    """A group of `uids` has teams up, posted `minutes_ago`."""
+    users = [_user(u) for u in uids]
+    lobby.last_roster = users
+    lobby.store.set_meta(MATCH_ROSTER_META_KEY, ",".join(str(u.id) for u in users))
+    posted = discord.utils.utcnow() - dt.timedelta(minutes=minutes_ago)
+    lobby.store.set_meta(MATCH_POSTED_AT_META_KEY, posted.isoformat())
+    return users
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+# --- the queue (no game on) ----------------------------------------------------
+
+
+class TestQueue:
+    def test_join_on_the_queue_message_redraws_it_in_place(self):
+        lobby = _lobby()
+        lobby.message = _Message(1)
+        interaction = _Interaction(1, message=lobby.message)
+        run(lobby.handle_join(interaction))
+        assert lobby.line == ["1"] and "1" in lobby.joined_at
+        assert interaction.response.edited and interaction.response.message is None
+
+    def test_join_elsewhere_replies_privately_and_redraws_the_queue(self):
+        lobby = _lobby()
+        lobby.message = _Message(1)
+        interaction = _Interaction(1, message=_Message(2))
+        run(lobby.handle_join(interaction))
+        assert interaction.response.message == "You're in the queue."
+        assert lobby.message.edits  # the queue message shows them
+
+    def test_unlinked_players_are_told_to_link(self):
+        store = _Store()
+        store.unlinked.add("1")
+        lobby = _lobby(store)
+        interaction = _Interaction(1)
+        run(lobby.handle_join(interaction))
+        assert "!link" in interaction.response.message and lobby.line == []
+
+    def test_joining_again_restarts_the_timer(self):
+        lobby = _lobby()
+        lobby.join(_user(1), _Guild())
+        lobby.joined_at["1"] = _T0
+        outcome = lobby.join(_user(1), _Guild())
+        assert "restarted" in outcome.reply and lobby.joined_at["1"] > _T0
+
+    def test_leave_takes_them_out(self):
+        lobby = _lobby()
+        lobby.join(_user(1), _Guild())
+        outcome = lobby.leave("1")
+        assert lobby.line == [] and outcome.quiet
+
+    def test_the_eighth_join_hands_over_the_first_eight(self):
+        lobby = _lobby()
+        for uid in range(1, 8):
+            lobby.join(_user(uid), _Guild())
+        outcome = lobby.join(_user(8), _Guild())
+        assert [u.id for u in outcome.roster] == list(range(1, 9)) and lobby.line == []
+
+    def test_the_queue_lists_mentions_and_flags_the_unrated(self):
+        store = _Store()
+        store.handles["1"] = ["h1"]
+        lobby = _lobby(store)
+        lobby.join(_user(1), _Guild())
+        lobby.join(_user(2), _Guild())
+        assert lobby._embed().description.startswith("• <@1>\n• <@2> *(unrated)*")
+
+    def test_a_restart_keeps_the_line(self):
+        lobby = _lobby()
+        lobby.join(_user(1), _Guild())
+        again = _lobby(lobby.store)
+        assert again.line == ["1"] and "1" in again.joined_at
 
 
 class TestFullQueue:
@@ -541,24 +323,18 @@ class TestFullQueue:
         import cogs.matchmaking as mm
 
         monkeypatch.setattr(mm, "POST_RETRY_DELAYS", (0, 0))
-        cog = object.__new__(Lobby)
-        cog.store, cog.joined_at = _MetaStore(), {}
-        cog.queue = {str(i): types.SimpleNamespace(id=i, display_name=f"p{i}") for i in range(2, 9)}
-        cog.config, cog.lobby_for = GuildConfig(), lambda _guild: cog
-        cog.queue_message, cog.last_roster = None, []
-        cog._players = lambda: []
-        cog.post_match = post_match
-        interaction = _Interaction(user_id=1)
-        interaction.user.display_name = "p1"
-        interaction.message.channel = types.SimpleNamespace(id=9)
+        lobby = _lobby()
+        for uid in range(2, 9):
+            lobby.join(_user(uid), _Guild())
+        lobby.post_match = post_match
         sent = []
 
         async def send(content):
             sent.append(content)
 
-        interaction.channel = types.SimpleNamespace(send=send)
-        asyncio.run(cog.handle_join(interaction))
-        return cog, interaction, sent
+        interaction = _Interaction(1, channel=types.SimpleNamespace(send=send))
+        run(lobby.handle_join(interaction))
+        return lobby, interaction, sent
 
     def test_the_press_is_answered_and_the_match_posted(self, monkeypatch):
         posted = []
@@ -566,9 +342,9 @@ class TestFullQueue:
         async def post_match(channel, users, announce=False):
             posted.append(len(users))
 
-        cog, interaction, sent = self._eighth_join(monkeypatch, post_match)
-        assert interaction.response.deferred and posted == [8] and sent == []
-        assert cog.queue == {} and len(cog.last_roster) == 8
+        lobby, interaction, sent = self._eighth_join(monkeypatch, post_match)
+        assert interaction.response.message and posted == [8] and sent == []
+        assert lobby.line == [] and len(lobby.last_roster) == 8
 
     def test_a_failed_post_is_retried_then_points_to_teams(self, monkeypatch):
         calls = []
@@ -577,114 +353,249 @@ class TestFullQueue:
             calls.append(1)
             raise RuntimeError("Discord 503")
 
-        cog, _, sent = self._eighth_join(monkeypatch, post_match)
+        lobby, _, sent = self._eighth_join(monkeypatch, post_match)
         assert len(calls) == 3
         assert len(sent) == 1 and "!teams" in sent[0]
-        assert len(cog.last_roster) == 8  # so !teams has the roster to split
-        assert cog.store.meta["match_roster"].count(",") == 7
+        assert len(lobby.last_roster) == 8  # so !teams has the roster to split
+        assert lobby.store.meta[MATCH_ROSTER_META_KEY].count(",") == 7
 
 
-def _join(store):
-    cog = object.__new__(Lobby)
-    cog.store, cog.queue, cog.joined_at = store, {}, {}
-    cog.config, cog.lobby_for = GuildConfig(), lambda _guild: cog
-    cog.queue_message = None
-    cog._players = lambda: []
-    interaction = _Interaction(user_id=1)
-    interaction.message.channel = types.SimpleNamespace(id=9)
-    asyncio.run(cog.handle_join(interaction))
-    return cog, interaction
+class TestPostedTeams:
+    def test_teams_become_the_lobby_message_and_the_queue_goes(self):
+        lobby = _lobby()
+        channel = _Channel()
+        old = _Message(1, channel=channel)
+        lobby.message = old
+        lobby.store.set_meta(QUEUE_MSG_META_KEY, "9:1")
+        users = [_user(u) for u in range(8)]
+        run(lobby.post_match(channel, users, announce=True))
+        teams = channel.sent[0]
+        assert lobby.message is teams and old.deleted
+        assert "your match is ready" in teams.content
+        labels = [item.label for item in teams.kwargs["view"].children]
+        assert labels == ["Join", "Leave", "New teams"]
+
+    def test_the_queue_message_has_no_new_teams_button(self):
+        labels = [item.label for item in _lobby()._view().children]
+        assert labels == ["Join", "Leave"]
+
+
+# --- while a game is on ----------------------------------------------------------
+
+
+class TestDuringAGame:
+    def test_an_outsider_joins_the_line(self):
+        lobby = _lobby()
+        _game_on(lobby)
+        interaction = _Interaction(101)
+        run(lobby.handle_join(interaction))
+        assert lobby.line == ["101"] and "#1 in line" in interaction.response.message
+
+    def test_eight_in_line_do_not_start_a_second_match(self):
+        lobby = _lobby()
+        _game_on(lobby)
+        outcomes = [lobby.join(_user(100 + i), _Guild()) for i in range(9)]
+        assert all(o.roster is None for o in outcomes) and len(lobby.line) == 9
+
+    def test_a_player_leaving_sits_out_and_join_brings_them_back(self):
+        lobby = _lobby()
+        _game_on(lobby)
+        assert "sit out" in lobby.leave("3").reply and lobby.sitting_out == ["3"]
+        assert "already sitting out" in lobby.leave("3").reply
+        assert "back in" in lobby.join(_user(3), _Guild()).reply and lobby.sitting_out == []
+
+    def test_a_player_joining_is_told_they_are_playing(self):
+        lobby = _lobby()
+        _game_on(lobby)
+        assert "already in this game" in lobby.join(_user(3), _Guild()).reply
+
+    def test_the_teams_show_who_is_sitting_out_and_who_is_in_line(self):
+        lobby = _lobby()
+        _game_on(lobby)
+        lobby.leave("3")
+        lobby.join(_user(101), _Guild())
+        fields = {f.name: f.value for f in lobby._embed().fields}
+        assert fields["Sitting out next game"] == "<@3>"
+        assert fields["In line for a spot"] == "1. <@101>"
+
+    def test_waiting_in_line_does_not_time_out_during_a_game(self):
+        lobby = _lobby()
+        _game_on(lobby)
+        lobby.join(_user(101), _Guild())
+        lobby.joined_at["101"] = _T0  # long ago
+        run(lobby.sweep_timeouts())
+        assert lobby.line == ["101"]
+
+    def test_the_line_clock_starts_when_the_session_ends(self):
+        lobby = _lobby()
+        # Teams went up 100 minutes ago: the session ended 10 minutes ago.
+        _game_on(lobby, minutes_ago=ACTIVE_GAME_MINUTES + 10)
+        lobby.line = ["101"]
+        lobby.joined_at["101"] = discord.utils.utcnow() - dt.timedelta(minutes=95)
+        run(lobby.sweep_timeouts())
+        assert lobby.line == ["101"]  # 10 minutes into the queue, not 95
+
+    def test_once_the_session_ends_the_line_is_the_queue(self):
+        lobby = _lobby()
+        _game_on(lobby, minutes_ago=ACTIVE_GAME_MINUTES + 1)
+        lobby.line = [str(100 + i) for i in range(7)]
+        outcome = lobby.join(_user(200), _Guild())
+        assert outcome.roster is not None and len(outcome.roster) == 8
+
+    def test_commands_speak_of_the_person_by_name(self):
+        lobby = _lobby()
+        _game_on(lobby)
+        assert lobby.join(_user(101), _Guild(), "Zed").reply.startswith("**Zed** is #1 in line")
+        assert lobby.leave("3", "Ann").reply.startswith("**Ann** will sit out")
+
+
+class TestNewTeams:
+    def _posted(self):
+        lobby = _lobby()
+        users = _game_on(lobby)
+        channel = _Channel()
+        run(lobby.post_match(channel, users))
+        return lobby, channel
+
+    def test_cycles_the_splits_in_place_until_a_game_is_played(self):
+        lobby, channel = self._posted()
+        interaction = _Interaction(1, message=lobby.message, channel=channel)
+        run(lobby.handle_new_teams(interaction))
+        assert lobby.option_index == 1 and interaction.response.edited and len(channel.sent) == 1
+
+    def test_rebalances_once_a_game_is_stored(self):
+        lobby, channel = self._posted()
+        lobby.store.count += 1
+        run(lobby.handle_new_teams(_Interaction(1, message=lobby.message, channel=channel)))
+        assert len(channel.sent) == 2 and lobby.message is channel.sent[1] and channel.sent[0].deleted
+
+    def test_a_sit_out_swaps_in_the_first_in_line_and_pings_them(self):
+        lobby, channel = self._posted()
+        lobby.join(_user(101), _Guild())
+        lobby.join(_user(102), _Guild())
+        lobby.leave("3")
+        run(lobby.handle_new_teams(_Interaction(1, channel=channel)))
+        roster = lobby.stored_roster_ids()
+        assert "3" not in roster and "101" in roster and lobby.line == ["102"]
+        assert channel.sent[-1].content.startswith("<@101>") and lobby.sitting_out == []
+
+    def test_no_swap_without_someone_to_take_the_spot(self):
+        lobby, channel = self._posted()
+        lobby.leave("3")
+        interaction = _Interaction(1, channel=channel)
+        run(lobby.handle_new_teams(interaction))
+        assert "need 1 more" in interaction.response.message and len(channel.sent) == 1
+
+    def test_only_players_in_the_match_may_re_team(self):
+        lobby, channel = self._posted()
+        interaction = _Interaction(999, channel=channel)
+        run(lobby.handle_new_teams(interaction))
+        assert "Only a player" in interaction.response.message
+
+    def test_after_a_restart_rebalances_the_stored_roster(self):
+        lobby = _lobby()
+        _game_on(lobby)
+        lobby.last_roster = []  # a restart lost the users and the splits
+        channel = _Channel()
+        run(lobby.handle_new_teams(_Interaction(1, channel=channel)))
+        assert len(channel.sent) == 1 and lobby.options
+
+    def test_teams_command_re_splits(self):
+        lobby, channel = self._posted()
+        ctx = types.SimpleNamespace(guild=_Guild(), channel=channel, send=channel.send)
+        run(lobby.teams(ctx))
+        assert len(channel.sent) == 2
+
+
+class TestOldButtons:
+    """Proposals and summaries posted before the redesign carry Sit out /
+    Waitlist; they act as Leave / Join."""
+
+    def test_waitlist_joins_and_sit_out_leaves(self):
+        lobby = _lobby()
+        _game_on(lobby)
+        view = LegacyLineupView(lobby.lobby_for)
+        run(view.match_waitlist.callback(_Interaction(101)))
+        run(view.next_sit_out.callback(_Interaction(3)))
+        assert lobby.line == ["101"] and lobby.sitting_out == ["3"]
+
+    def test_an_old_waitlist_field_is_replaced_not_duplicated(self):
+        embed = discord.Embed(title="t")
+        embed.add_field(name="Waitlist", value="1. <@5>")
+        fields = [f.name for f in match_embeds.with_lineup_changes(embed, [], ["7"]).fields]
+        assert fields == ["In line for a spot"]
+
+
+class TestRestart:
+    def test_the_lobby_message_is_picked_back_up(self):
+        lobby = _lobby()
+        lobby.join(_user(1), _Guild())
+        lobby.store.set_meta(QUEUE_MSG_META_KEY, "9:42")
+        message = _Message(42)
+
+        async def fetch(ref):
+            return message
+
+        lobby._fetch_message_ref = fetch
+        run(lobby.restore_message())
+        assert lobby.message is message and message.edits
+
+    def test_a_gone_message_clears_the_pointer(self):
+        lobby = _lobby()
+        lobby.store.set_meta(QUEUE_MSG_META_KEY, "9:42")
+
+        async def fetch(ref):
+            return None
+
+        lobby._fetch_message_ref = fetch
+        run(lobby.restore_message())
+        assert lobby.message is None and lobby.store.meta[QUEUE_MSG_META_KEY] == ""
+
+
+class TestMeetingPoint:
+    def test_teams_name_the_channel_and_region(self):
+        lobby = _lobby()
+        lobby.config = GuildConfig(sc2_chat_channel="bgh1")
+        run(lobby.post_match(_Channel(), _game_on(lobby)))
+        assert "**bgh1** (Americas server)" in lobby._embed().description
+
+    def test_queue_names_the_channel(self):
+        meet = match_embeds.meeting_point("mono", "Americas")
+        assert meet in match_embeds.queue_status([], 8, meet=meet).description
 
 
 class TestSkillLevel:
     """A player who hasn't played here is asked their SC2 level on Join."""
 
     def test_first_join_asks_privately(self):
-        _, interaction = _join(_MetaStore())
-        [(content, view, ephemeral)] = interaction.followup.sent
+        lobby = _lobby()
+        interaction = _Interaction(1)
+        run(lobby.handle_join(interaction))
+        [(_, view, ephemeral)] = interaction.followup.sent
         assert ephemeral and isinstance(view, SkillLevelView)
 
     def test_not_asked_once_set(self):
-        store = _MetaStore()
+        store = _Store()
         store.level = "mid"
-        _, interaction = _join(store)
+        interaction = _Interaction(1)
+        run(_lobby(store).handle_join(interaction))
         assert interaction.followup.sent == []
 
     def test_not_asked_once_played(self):
-        store = _MetaStore()
-        store.handles = ["1-S2-1-1"]
-        _, interaction = _join(store)
+        store = _Store()
+        store.handles["1"] = ["1-S2-1-1"]
+        interaction = _Interaction(1)
+        run(_lobby(store).handle_join(interaction))
         assert interaction.followup.sent == []
 
     def test_locked_after_first_game(self):
-        store = _MetaStore()
-        store.handles = ["1-S2-1-1"]
-        cog, _ = _join(store)
-        assert "comes from your games" in cog.set_level(types.SimpleNamespace(id=1), "top")
+        store = _Store()
+        store.handles["1"] = ["1-S2-1-1"]
+        assert "comes from your games" in _lobby(store).set_level(_user(1), "top")
         assert store.level is None
 
     def test_unplayed_player_balances_at_their_level(self):
-        store = _MetaStore()
+        store = _Store()
         store.level = "top"
-        cog = object.__new__(Lobby)
-        cog.store = store
-        cog.ratings = types.SimpleNamespace(book=lambda: None)
-        player = cog._queued_player(types.SimpleNamespace(id=1, display_name="new"))
+        player = _lobby(store)._queued_player(_user(1))
         assert player.mu == SKILL_LEVEL_MU["top"] and not player.rated
-
-
-class TestAddWhileAGameIsOn:
-    """!add puts a late arrival on the waitlist while a game is on and nobody
-    is queuing for another; !waitlist <name> does it outright."""
-
-    def _cog(self, posted_minutes_ago=10):
-        cog = _Cog(_Store(), stored_ids=[str(i) for i in range(8)])
-        cog.queue, cog.joined_at = {}, {}
-        for name in ("_add", "_add_or_wait", "waitlist_member", "game_active", "renew"):
-            setattr(cog, name, types.MethodType(getattr(Lobby, name), cog))
-        if posted_minutes_ago is not None:
-            posted = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=posted_minutes_ago)
-            cog.store.set_meta(MATCH_POSTED_AT_META_KEY, posted.isoformat())
-        return cog
-
-    def _member(self, uid=101):
-        return types.SimpleNamespace(id=uid, display_name=f"p{uid}")
-
-    def test_goes_on_the_waitlist_while_a_game_is_on(self):
-        cog = self._cog()
-        message, roster = asyncio.run(cog._add_or_wait(self._member()))
-        assert "waitlist" in message and roster is None
-        assert cog.waitlist == ["101"] and cog.queue == {}
-
-    def test_joins_a_queue_that_is_already_forming(self):
-        cog = self._cog()
-        cog.queue["200"] = self._member(200)
-        message, _ = asyncio.run(cog._add_or_wait(self._member()))
-        assert "to the queue" in message
-        assert "101" in cog.queue and cog.waitlist == []
-
-    def test_queues_once_the_teams_are_stale(self):
-        cog = self._cog(posted_minutes_ago=ACTIVE_GAME_MINUTES + 1)
-        asyncio.run(cog._add_or_wait(self._member()))
-        assert "101" in cog.queue and cog.waitlist == []
-
-    def test_queues_when_teams_never_went_up(self):
-        cog = self._cog(posted_minutes_ago=None)
-        asyncio.run(cog._add_or_wait(self._member()))
-        assert "101" in cog.queue
-
-    def test_someone_in_the_match_is_queued_not_waitlisted(self):
-        cog = self._cog()
-        asyncio.run(cog._add_or_wait(self._member(3)))
-        assert "3" in cog.queue and cog.waitlist == []
-
-    def test_waitlisting_twice_says_where_they_are(self):
-        cog = self._cog()
-        asyncio.run(cog.waitlist_member(self._member(), "p101"))
-        reply = asyncio.run(cog.waitlist_member(self._member(), "p101"))
-        assert "already #1" in reply and cog.waitlist == ["101"]
-
-    def test_cannot_waitlist_a_player_in_the_match(self):
-        cog = self._cog()
-        reply = asyncio.run(cog.waitlist_member(self._member(3), "p3"))
-        assert "!bump" in reply and cog.waitlist == []

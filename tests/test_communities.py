@@ -86,8 +86,8 @@ def test_a_bound_cog_reads_only_its_community(communities):
 def test_each_community_has_its_own_queue(communities):
     cog = Matchmaking(types.SimpleNamespace(communities=communities))
     home, other = cog.lobby_for(_guild(HOME)), cog.lobby_for(_guild(OTHER))
-    home.queue["1"] = object()
-    assert other is not home and other.queue == {}
+    home.line.append("1")
+    assert other is not home and other.line == []
     assert cog.lobby_for(_guild(HOME)) is home  # made once, then reused
     assert cog.lobby_for(_guild(STRANGER)) is None
 

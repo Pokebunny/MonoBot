@@ -622,20 +622,18 @@ def meeting_point(channel: str | None, region: str) -> str | None:
 
 
 def queue_status(
-    players: list[QueuedPlayer], target: int, timeout_minutes: int | None = None, meet: str | None = None
+    entries: list[tuple[str, bool]], target: int, timeout_minutes: int | None = None, meet: str | None = None
 ) -> discord.Embed:
+    """The queue with no game on. `entries` is (Discord id, has played here)
+    in join order; mentions in an embed render as names and never ping."""
     embed = discord.Embed(title="Matchmaking Queue", color=ACCENT)
-    if players:
-        lines = []
-        for p in players:
-            tag = "" if p.rated else " *(unrated)*"
-            lines.append(f"• {p.display_name}{tag}")
-        embed.description = "\n".join(lines)
+    if entries:
+        embed.description = "\n".join(f"• <@{uid}>{'' if rated else ' *(unrated)*'}" for uid, rated in entries)
     else:
         embed.description = "*Queue is empty. Click **Join** to get in.*"
     if meet:
         embed.description += f"\n\n{meet}"
-    footer = f"{len(players)}/{target} — teams form automatically when full"
+    footer = f"{len(entries)}/{target} — teams form automatically when full"
     if timeout_minutes:
         footer += f"\nPlayers are removed after {timeout_minutes} minutes — press Join again to restart your timer."
     embed.set_footer(text=footer)
@@ -668,15 +666,9 @@ def proposed_match(
     return embed
 
 
-def waiting_for_players(reason: str) -> discord.Embed:
-    """!teams couldn't fill the spots of players sitting out; `reason` says
-    how many more it needs. Goes out with the lineup buttons."""
-    return discord.Embed(title="Waiting for players", description=reason, color=ACCENT)
-
-
 def current_lineup(roster_ids: list[str]) -> discord.Embed:
     """The roster in play when a restart lost its team split. Goes out with
-    the lineup buttons, whose New teams splits it again."""
+    the lobby buttons, whose New teams splits it again."""
     embed = discord.Embed(
         title="Current lineup",
         description="I lost the team split in my last restart — 🔀 **New teams** splits this roster again.",
@@ -687,24 +679,25 @@ def current_lineup(roster_ids: list[str]) -> discord.Embed:
 
 
 SITTING_OUT_FIELD = "Sitting out next game"
-WAITLIST_FIELD = "Waitlist"
+LINE_FIELD = "In line for a spot"
 
 
-def with_lineup_changes(embed: discord.Embed, sitting_out: list[str], waitlist: list[str]) -> discord.Embed:
-    """Show who's giving up their spot and who's waiting for one under the
+def with_lineup_changes(embed: discord.Embed, sitting_out: list[str], line: list[str]) -> discord.Embed:
+    """Show who's giving up their spot and who's in line for one under the
     teams, replacing any earlier copy of those fields. Works on an embed read
     back off a message, so a proposal from before a restart can be updated
     too. Takes Discord ids; mentions in an embed render as names and never
     ping."""
-    keep = [f for f in embed.fields if f.name not in (SITTING_OUT_FIELD, WAITLIST_FIELD)]
+    # "Waitlist" is the line's name on messages posted before it had this one.
+    keep = [f for f in embed.fields if f.name not in (SITTING_OUT_FIELD, LINE_FIELD, "Waitlist")]
     embed.clear_fields()
     for f in keep:
         embed.add_field(name=f.name, value=f.value, inline=f.inline)
     if sitting_out:
         embed.add_field(name=SITTING_OUT_FIELD, value=" ".join(f"<@{uid}>" for uid in sitting_out), inline=False)
-    if waitlist:
-        value = "\n".join(f"{i}. <@{uid}>" for i, uid in enumerate(waitlist, 1))
-        embed.add_field(name=WAITLIST_FIELD, value=value, inline=False)
+    if line:
+        value = "\n".join(f"{i}. <@{uid}>" for i, uid in enumerate(line, 1))
+        embed.add_field(name=LINE_FIELD, value=value, inline=False)
     return embed
 
 

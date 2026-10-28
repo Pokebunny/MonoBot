@@ -134,10 +134,17 @@ one — and re-measure on whatever population a feature will actually score.
 ## Storage and backfill
 
 `kills_by_unit` is a JSON column on `match_players` (schema 12), written the
-same way `unit_counts` is. The migration is additive — existing rows default to
-`'{}'`, which reads as "not recorded", never as "killed nothing".
+same way `unit_counts` is. The migration was additive: rows stored before it
+defaulted to `'{}'` until their replay was re-parsed.
 
-Games only gain attribution when their replay is re-parsed:
+**Every stored game has attribution now** (checked 2026-10-27: every stored
+game's replay is archived and has been re-parsed). So `'{}'` means nothing
+was credited to that player. Of 10,800 player-games, 449 empty records were
+players who destroyed nothing; the other 12 destroyed 100–500 each, through
+kills the tracker credits to no unit (the tail described above). An empty
+record is no longer a sign of a missing parse.
+
+A re-parse, should attribution change again:
 
 ```
 MONOBOT_DB=/path/to/monobot.db uv run python scripts/reparse_stored.py <archive_dir>
@@ -149,10 +156,8 @@ archive (`main/resources/replays`), not a personal replay folder. Pointing it at
 a general Replays directory works but wastes time failing to parse every
 campaign and ladder replay it finds.
 
-A game whose replay is no longer in the archive keeps an empty dict forever, so
-any feature reading this must treat empty as unknown and exclude those games
-rather than scoring them as zero — the same rule per-map stats follow for
-unresolved map hashes.
+The archive now keeps exactly one file per stored game (the weaker recording of
+a duplicate is deleted), so every stored game can be re-parsed.
 
 ## Reproducing
 

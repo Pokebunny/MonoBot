@@ -123,8 +123,10 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   player's pick, seeing through Carrier->Interceptor and the other spawners in
   `PICK_KILLERS`). It is its OWN metric, not a breakdown of `resources_killed`:
   the medians agree but a 5% tail under-attributes, concentrated in air picks.
-  Read `docs/kill-attribution.md` before setting any threshold on it, and treat
-  an empty dict as "not recorded" (pre-schema-12 parse), never as zero kills.
+  Read `docs/kill-attribution.md` before setting any threshold on it. Every
+  stored game has been parsed with attribution (checked Oct 2026), so an
+  empty dict means nothing was credited to the player — usually they
+  destroyed nothing, occasionally a kill the tracker credits to no unit.
 - **One game, many recordings**: every player's replay of a game is a
   different file, so ingest matches games, not files — by the game's random
   seed (`game_seed`, identical in every recording) when both sides have one,

@@ -87,7 +87,7 @@ class ConfirmWinnerView(ExpiringView):
         self.store = store
         self.match_id = match_id
         self.achievements = achievements
-        # The current group's lineup buttons (NextGameView), swapped in once
+        # The current group's lobby buttons (LobbyView), swapped in once
         # the winner is settled.
         self.next_view = next_view
 
@@ -321,7 +321,7 @@ class Replays(CommunityCog):
         needs_confirmation = long_enough(match) and (
             match.winning_team is None or match.winner_confidence < MIN_WINNER_CONFIDENCE
         )
-        # The current group's game gets Sit out / Waitlist / New teams, since
+        # The current group's game gets Join / Leave / New teams, since
         # its summary is the message the players are looking at between games.
         matchmaking = self.client.get_cog("Matchmaking")
         lobby = matchmaking.lobby_for(self.community) if matchmaking else None

@@ -2,6 +2,7 @@ import datetime
 
 from models.replay import MatchPlayer, MonobattleMatch
 from services import match_embeds, records
+from services.storage import MatchStore
 
 BASE = datetime.datetime(2026, 9, 1, tzinfo=datetime.timezone.utc)
 
@@ -62,5 +63,14 @@ def test_category_words_open_their_page():
 
 def test_embed_points_to_last():
     board = _board(records.record_boards([(7, _match(1, 900, comeback=12000))]), "comebacks")
-    embed = match_embeds.record_board(board, 0, 6)
-    assert "#7" in embed.description and "!last" in embed.footer.text
+    embed = match_embeds.record_board(board, 0, 6, {7: 1})
+    assert "#1" in embed.description and "!last" in embed.footer.text
+
+
+def test_match_numbers_follow_play_order(tmp_path):
+    store = MatchStore(str(tmp_path / "m.db"))
+    # Uploaded out of order: the later game first.
+    late = store.ingest(_match(3, 900), "a").match_id
+    early = store.ingest(_match(1, 900), "b").match_id
+    assert store.match_numbers() == {early: 1, late: 2}
+    assert [i for i, _ in store.all_matches()] == [early, late]

@@ -1250,8 +1250,17 @@ class MatchStore:
             clauses.append("played_at < ?")
             params.append(until)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        rows = self._conn.execute(f"SELECT * FROM matches {where} ORDER BY played_at", params).fetchall()
+        rows = self._conn.execute(f"SELECT * FROM matches {where} ORDER BY played_at, id", params).fetchall()
         return [(row["id"], self._build_match(row)) for row in rows]
+
+    def match_numbers(self) -> dict[int, int]:
+        """Each match id's match number — the one every summary shows and
+        !last takes: its place in play order, from #1, so all_matches()[n - 1]
+        is game #n. Derived, not stored: a late-uploaded old replay slots in
+        where it was played and shifts the later numbers up by one, accepted
+        because uploads are almost always in order."""
+        rows = self._conn.execute("SELECT id FROM matches ORDER BY played_at, id")
+        return {row["id"]: n for n, row in enumerate(rows, 1)}
 
     def season_matches(self, season: "Season") -> list[tuple[int, MonobattleMatch]]:
         return self.all_matches(since=season.started_at, until=season.ended_at)

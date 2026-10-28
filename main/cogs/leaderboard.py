@@ -189,24 +189,25 @@ class CatalogView(ExpiringView):
 
 class MatchBrowserView(ExpiringView):
     """⏮ ◀ ▶ ⏭ browsing over a snapshot of match history (oldest→newest);
-    opens on the newest game, ◀ steps back in time."""
+    opens on the newest game, ◀ steps back in time. `numbers` is
+    MatchStore.match_numbers(), for the footer."""
 
-    def __init__(self, matches, map_names: dict[str, str] | None = None, start: int | None = None):
+    def __init__(
+        self, matches, numbers: dict[int, int], map_names: dict[str, str] | None = None, start: int | None = None
+    ):
         super().__init__()
         self.matches = matches
+        self.numbers = numbers
         self.map_names = map_names or {}
         self.index = len(matches) - 1 if start is None else start
         self._sync()
 
     def embed(self) -> discord.Embed:
         match_id, match = self.matches[self.index]
-        embed = match_embeds.match_summary(match, match_id, map_label=map_versions.label(match, self.map_names))
-        # One number per game — the match number every summary shows, and the
-        # one !last takes. Its place in the list is said in words, so it's
-        # never mistaken for a second game number.
-        newer = len(self.matches) - 1 - self.index
-        where = "newest" if newer == 0 else f"{newer} newer"
-        embed.set_footer(text=f"Match #{match_id} · {where}")
+        number = self.numbers[match_id]
+        embed = match_embeds.match_summary(match, number, map_label=map_versions.label(match, self.map_names))
+        # Out of the whole ladder's games, even when browsing one player's.
+        embed.set_footer(text=f"Match #{number}/{len(self.numbers)}")
         return embed
 
     def _sync(self):
@@ -630,15 +631,15 @@ class Leaderboard(CommunityCog):
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def last(self, ctx, *, player: str | None = None):
         self = self.at(ctx)
-        matches = self.store.all_matches()  # oldest first
+        matches = self.store.all_matches()  # oldest first, so game #n is matches[n - 1]
+        numbers = self.store.match_numbers()
         number = _MATCH_NUMBER.fullmatch(player.strip()) if player else None
         if number:
-            match_id = int(number.group(1))
-            index = next((i for i, (mid, _) in enumerate(matches) if mid == match_id), None)
-            if index is None:
-                await ctx.send(f"There's no match #{match_id}.")
+            n = int(number.group(1))
+            if not 1 <= n <= len(matches):
+                await ctx.send(f"There's no match #{n}.")
                 return
-            view = MatchBrowserView(matches, self.store.map_version_names(), start=index)
+            view = MatchBrowserView(matches, numbers, self.store.map_version_names(), start=n - 1)
             view.message = await ctx.send(embed=view.embed(), view=view)
             return
         if player:
@@ -653,7 +654,7 @@ class Leaderboard(CommunityCog):
                         content=f"No games found for **{person.sc2_name}**.", view=None
                     )
                     return
-                browser = MatchBrowserView(theirs, self.store.map_version_names())
+                browser = MatchBrowserView(theirs, numbers, self.store.map_version_names())
                 await interaction.response.edit_message(
                     content=None, embed=browser.embed(), view=browser if len(theirs) > 1 else None
                 )
@@ -668,7 +669,7 @@ class Leaderboard(CommunityCog):
         if not matches:
             await ctx.send("No matches stored yet.")
             return
-        view = MatchBrowserView(matches, self.store.map_version_names())
+        view = MatchBrowserView(matches, numbers, self.store.map_version_names())
         if len(matches) == 1:
             await ctx.send(embed=view.embed())
             return
@@ -691,8 +692,9 @@ class Leaderboard(CommunityCog):
                 await ctx.send(f"No records called **{category}**. Try one of: {names}.")
                 return
         boards = records.record_boards(self.store.all_matches())
+        numbers = self.store.match_numbers()
         view = PagedBoardView(
-            lambda page: match_embeds.record_board(boards[page], page, len(boards)), len(boards), start
+            lambda page: match_embeds.record_board(boards[page], page, len(boards), numbers), len(boards), start
         )
         view.message = await ctx.send(embed=view.embed(), view=view)
 
@@ -749,7 +751,9 @@ class Leaderboard(CommunityCog):
         if not (sum(vs) + sum(together)):
             return _text(f"**{name1}** and **{name2}** haven't shared a decided game yet.")
         duo = self._duo_for(group1, group2) if sum(together) else None
-        embed = match_embeds.h2h_summary(name1, name2, vs, together, opposed, group1, group2, duo)
+        embed = match_embeds.h2h_summary(
+            name1, name2, vs, together, opposed, group1, group2, self.store.match_numbers(), duo
+        )
         return {"content": None, "embed": embed}
 
     def _duo_for(self, group1: list[str], group2: list[str]):

@@ -257,25 +257,25 @@ def _three_games(store):
 
 
 def test_last_opens_at_a_match_number(store):
-    ids = _three_games(store)
+    _three_games(store)
     cog = _leaderboard_cog(store)
-    for typed in (str(ids[0]), f"#{ids[0]}"):
+    for typed in ("1", "#1"):
         ctx = _Ctx()
         _run(cog.last.callback(cog, ctx, player=typed))
-        assert ctx.sent[-1].embed.footer.text == f"Match #{ids[0]} · 2 newer"
+        assert ctx.sent[-1].embed.footer.text == "Match #1/3"
 
 
 def test_last_says_when_a_match_number_does_not_exist(store):
-    ids = _three_games(store)
+    _three_games(store)
     cog = _leaderboard_cog(store)
     ctx = _Ctx()
-    _run(cog.last.callback(cog, ctx, player=str(max(ids) + 100)))
-    assert ctx.sent[-1].content == f"There's no match #{max(ids) + 100}."
+    _run(cog.last.callback(cog, ctx, player="4"))
+    assert ctx.sent[-1].content == "There's no match #4."
 
 
 def test_last_opens_on_the_newest_game(store):
-    ids = _three_games(store)
+    _three_games(store)
     cog = _leaderboard_cog(store)
     ctx = _Ctx()
     _run(cog.last.callback(cog, ctx))
-    assert ctx.sent[-1].embed.footer.text == f"Match #{ids[-1]} · newest"
+    assert ctx.sent[-1].embed.footer.text == "Match #3/3"

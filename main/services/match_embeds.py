@@ -63,7 +63,7 @@ def _team_lines(
 
 def match_summary(
     match: MonobattleMatch,
-    match_id: int | None = None,
+    number: int | None = None,
     rating_deltas: dict[str, tuple[int, int]] | None = None,
     map_label: str | None = None,
 ) -> discord.Embed:
@@ -114,8 +114,8 @@ def match_summary(
         result = f"Team {match.winning_team} (inferred, {match.winner_confidence:.0%} confidence)"
     embed.add_field(name="Result", value=result, inline=False)
 
-    if match_id is not None:
-        embed.set_footer(text=f"Match #{match_id}")
+    if number is not None:
+        embed.set_footer(text=f"Match #{number}")
     return embed
 
 
@@ -576,6 +576,7 @@ def h2h_summary(
     opposed: list[tuple[int, MonobattleMatch]],
     group1: list[str],
     group2: list[str],
+    numbers: dict[int, int],
     duo: DuoRecord | None = None,
 ) -> discord.Embed:
     """`duo` is this pair's entry from rating.duo_records, when they have one.
@@ -606,7 +607,7 @@ def h2h_summary(
         winner = name1 if p1.team == match.winning_team else name2
         lines.append(
             f"<t:{int(match.played_at.timestamp())}:d> — **{winner}** won"
-            f" · {p1.pick or '?'} vs {p2.pick or '?'} · #{match_id}"
+            f" · {p1.pick or '?'} vs {p2.pick or '?'} · #{numbers[match_id]}"
         )
     if lines:
         embed.add_field(name="Recent meetings", value="\n".join(reversed(lines)), inline=False)
@@ -913,11 +914,11 @@ def _recap_highlights(players: list, names: dict[str, str]) -> list[str]:
     return out
 
 
-def record_board(board, page: int, pages: int) -> discord.Embed:
+def record_board(board, page: int, pages: int, numbers: dict[int, int]) -> discord.Embed:
     """One `records.RecordBoard` as a page of !records."""
     lines = [
         f"`{i:>2}` **{row.value}** · {row.who} · {row.played_at:%b} {row.played_at.day}, {row.played_at.year} "
-        f"· #{row.match_id}"
+        f"· #{numbers[row.match_id]}"
         for i, row in enumerate(board.rows, 1)
     ]
     embed = discord.Embed(title=f"{board.emoji} Records — {board.title}", color=ACCENT)

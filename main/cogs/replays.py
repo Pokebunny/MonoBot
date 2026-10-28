@@ -110,10 +110,11 @@ class ConfirmWinnerView(ExpiringView):
             return
         self.store.confirm_winner(self.match_id, team)
         match = self.store.get_match(self.match_id)
+        number = self.store.match_numbers()[self.match_id]
         embed = match_embeds.match_summary(
-            match, self.match_id, map_label=map_versions.label(match, self.store.map_version_names())
+            match, number, map_label=map_versions.label(match, self.store.map_version_names())
         )
-        embed.set_footer(text=f"Match #{self.match_id} · confirmed by {interaction.user.display_name}")
+        embed.set_footer(text=f"Match #{number} · confirmed by {interaction.user.display_name}")
         self.stop()
         if self.next_view is not None:
             embed = self.next_view.lobby_for(interaction.guild).lineup_embed(embed)
@@ -304,14 +305,15 @@ class Replays(CommunityCog):
             await map_versions.resolve_pending_async(self.store)
         except Exception:
             logger.exception("Could not resolve the map for %s", match.file_name)
+        number = self.store.match_numbers()[result.match_id]
         embed = match_embeds.match_summary(
             match,
-            result.match_id,
+            number,
             rating_deltas=deltas,
             map_label=map_versions.label(match, self.store.map_version_names()),
         )
         if result.status == "updated":
-            embed.set_footer(text=f"Match #{result.match_id} · refined from a more complete recording")
+            embed.set_footer(text=f"Match #{number} · refined from a more complete recording")
         # Grant before posting: the ledger write is the part that matters, and
         # a Discord hiccup on the summary must not leave the match ungranted.
         pre_discovered = self.store.discovered_keys()  # before grant, to spot community-first secrets
@@ -421,9 +423,10 @@ class Replays(CommunityCog):
             return
         # Re-post the most recent few with confirm buttons.
         names = self.store.map_version_names()
+        numbers = self.store.match_numbers()
         for match_id, match in pending[-3:]:
             view = ConfirmWinnerView(self.store, match_id, self.achievements)
-            embed = match_embeds.match_summary(match, match_id, map_label=map_versions.label(match, names))
+            embed = match_embeds.match_summary(match, numbers[match_id], map_label=map_versions.label(match, names))
             view.message = await ctx.send(embed=embed, view=view)
         if len(pending) > 3:
             await ctx.send(f"...and {len(pending) - 3} more. Confirm these and run !pending again.")

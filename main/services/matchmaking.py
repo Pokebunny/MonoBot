@@ -20,14 +20,30 @@ def _win_probability(team1: list[QueuedPlayer], team2: list[QueuedPlayer]) -> fl
     )
 
 
+def _as_shown(team1: list[QueuedPlayer], team2: list[QueuedPlayer], p1: float) -> ProposedMatch:
+    """A split the way players see it: each team strongest first, and the
+    strongest player's team as Team 1. Strength is mu, the balancer's own
+    read of skill -- not the board's mu - 3*sigma, which sinks anyone with
+    few games however good they are."""
+
+    def by_skill(team: list[QueuedPlayer]) -> list[QueuedPlayer]:
+        return sorted(team, key=lambda p: p.mu, reverse=True)
+
+    team1, team2 = by_skill(team1), by_skill(team2)
+    if team2[0].mu > team1[0].mu:
+        team1, team2, p1 = team2, team1, 1.0 - p1
+    return ProposedMatch(team1=team1, team2=team2, team1_win_probability=p1)
+
+
 def ranked_matches(players: list[QueuedPlayer], limit: int | None = None) -> list[ProposedMatch]:
     """Every distinct split of an even roster into two teams, most balanced
     first (predicted win probability closest to 50/50). `limit` keeps only the
     top N — enough for players to shuffle through fair alternatives without
     wandering into lopsided splits.
 
-    Fixing the first player on team1 dedupes mirror-image splits (team1/team2
-    swaps), so 8 players yield 35 candidates rather than 70."""
+    Fixing the first player on one side dedupes mirror-image splits (team1/
+    team2 swaps), so 8 players yield 35 candidates rather than 70. Which side
+    is shown as Team 1 is decided after, by _as_shown."""
     n = len(players)
     if n < 2 or n % 2 != 0:
         raise ValueError(f"need an even number of players (>=2), got {n}")
@@ -38,8 +54,7 @@ def ranked_matches(players: list[QueuedPlayer], limit: int | None = None) -> lis
     for combo in itertools.combinations(range(len(rest)), half - 1):
         team1 = [anchor] + [rest[i] for i in combo]
         team2 = [rest[i] for i in range(len(rest)) if i not in combo]
-        p1 = _win_probability(team1, team2)
-        matches.append(ProposedMatch(team1=team1, team2=team2, team1_win_probability=p1))
+        matches.append(_as_shown(team1, team2, _win_probability(team1, team2)))
     matches.sort(key=lambda m: abs(0.5 - m.team1_win_probability))
     return matches if limit is None else matches[:limit]
 

@@ -53,10 +53,28 @@ def test_balancer_beats_naive_stacking():
     assert match.fairness == pytest.approx(1.0 - 2 * abs(0.5 - match.team1_win_probability))
 
 
-def test_anchor_always_on_team1():
-    players = [_p(f"p{i}") for i in range(8)]
-    match = balance_teams(players)
-    assert players[0] in match.team1
+def test_team1_holds_the_strongest_player():
+    # Join order no longer decides the sides: the weakest player joined first,
+    # and every option still puts the strongest on Team 1, with the win chance
+    # still read from Team 1's side.
+    players = [_p("w", mu=15, sigma=2)] + [_p(f"p{i}", mu=20 + 3 * i, sigma=2) for i in range(7)]
+    for option in ranked_matches(players):
+        assert option.team1[0].display_name == "p6"
+        assert predict_win_probability(
+            [(p.mu, p.sigma) for p in option.team1], [(p.mu, p.sigma) for p in option.team2]
+        ) == pytest.approx(option.team1_win_probability)
+
+
+def test_teams_list_strongest_first_by_mu():
+    # By mu, not the board's mu - 3*sigma: an uncertain newcomer the balancer
+    # rates highly still tops their team.
+    # Here "new" has the top mu but the board would rank them last.
+    players = [_p("new", mu=40, sigma=8), *(_p(f"p{i}", mu=20 + 2 * i, sigma=2) for i in range(7))]
+    for option in ranked_matches(players):
+        assert option.team1[0].display_name == "new"
+        for team in (option.team1, option.team2):
+            mus = [p.mu for p in team]
+            assert mus == sorted(mus, reverse=True)
 
 
 def test_three_v_three():

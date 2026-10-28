@@ -15,6 +15,8 @@ class QueuedPlayer(BaseModel):
 
 
 class ProposedMatch(BaseModel):
+    # As shown: each team strongest first (by mu), and team1 holds the
+    # strongest player of all.
     team1: list[QueuedPlayer]
     team2: list[QueuedPlayer]
     team1_win_probability: float  # predicted; 0.5 = perfectly balanced

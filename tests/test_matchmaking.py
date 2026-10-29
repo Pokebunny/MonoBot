@@ -9,6 +9,7 @@ from cogs.matchmaking import (
     MATCH_POSTED_AT_META_KEY,
     MATCH_ROSTER_META_KEY,
     QUEUE_MSG_META_KEY,
+    EndSessionView,
     LegacyLineupView,
     Lobby,
     SkillLevelView,
@@ -223,8 +224,9 @@ class _Response:
     async def defer(self):
         self.deferred = True
 
-    async def send_message(self, content, ephemeral=False):
+    async def send_message(self, content, view=None, ephemeral=False):
         self.message = content
+        self.view = view
 
 
 class _Followup:
@@ -391,7 +393,7 @@ class TestPostedTeams:
         assert lobby.message is teams and old.deleted
         assert "your match is ready" in teams.content
         labels = [item.label for item in teams.kwargs["view"].children]
-        assert labels == ["Join", "Leave", "New teams"]
+        assert labels == ["Join", "Leave", "New teams", "End session"]
 
     def test_the_queue_message_has_no_new_teams_button(self):
         labels = [item.label for item in _lobby()._view().children]
@@ -523,6 +525,57 @@ class TestNewTeams:
         ctx = types.SimpleNamespace(guild=_Guild(), channel=channel, send=channel.send)
         run(lobby.teams(ctx))
         assert len(channel.sent) == 2
+
+
+class TestEndSession:
+    def _posted(self):
+        lobby = _lobby()
+        users = _game_on(lobby)
+        channel = _Channel()
+        run(lobby.post_match(channel, users))
+        return lobby, channel
+
+    def test_asks_first_and_only_players_in_the_match_may(self):
+        lobby, _ = self._posted()
+        stranger = _Interaction(999)
+        run(lobby.handle_end_session(stranger))
+        assert "Only a player" in stranger.response.message
+        player = _Interaction(1)
+        run(lobby.handle_end_session(player))
+        assert isinstance(player.response.view, EndSessionView) and lobby.game_active()
+
+    def test_the_line_becomes_the_queue_with_fresh_clocks(self):
+        lobby, channel = self._posted()
+        lobby.join(_user(101), _Guild())
+        lobby.join(_user(102), _Guild())
+        lobby.leave("3")
+        lobby.joined_at["101"] -= dt.timedelta(hours=3)
+        run(lobby.end_session(channel, _Guild(), "p1"))
+        assert not lobby.game_active() and lobby.line == ["101", "102"] and lobby.sitting_out == []
+        assert discord.utils.utcnow() - lobby.joined_at["101"] < dt.timedelta(minutes=1)
+        assert lobby.message is channel.sent[-1] and channel.sent[0].deleted
+        assert channel.sent[-1].content == "p1 ended the session — the queue's open."
+        assert "End session" not in [b.label for b in channel.sent[-1].kwargs["view"].children]
+
+    def test_a_full_line_forms_the_next_match(self):
+        lobby, channel = self._posted()
+        for uid in range(101, 109):
+            lobby.join(_user(uid), _Guild())
+        run(lobby.end_session(channel, _Guild(), "p1"))
+        assert lobby.line == [] and set(lobby.stored_roster_ids()) == {str(u) for u in range(101, 109)}
+
+    def test_a_session_that_runs_out_redraws_the_lobby(self):
+        lobby, _ = self._posted()
+        lobby.message = _Message(1)
+        run(lobby.notice_session_end())
+        assert lobby.message.edits == []
+        lobby.store.set_meta(
+            MATCH_POSTED_AT_META_KEY,
+            (discord.utils.utcnow() - dt.timedelta(minutes=ACTIVE_GAME_MINUTES + 1)).isoformat(),
+        )
+        run(lobby.notice_session_end())
+        run(lobby.notice_session_end())
+        assert len(lobby.message.edits) == 1
 
 
 class TestOldButtons:

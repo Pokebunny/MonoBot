@@ -6,6 +6,9 @@ game on, Join queues you and the eighth join forms a match. While a group is
 playing, Join puts you in line for the next open spot, and a player's Leave
 sits them out of the next game; the first in line takes the spot at the next
 re-team (New teams / !teams). Nobody has to know which list they belong on.
+A session ends when a player presses End session, or on its own once nobody
+has re-teamed for ACTIVE_GAME_MINUTES; either way the lobby turns back into
+the queue, with the line at its head.
 
 Each community has its own Lobby, and the cog routes every command and button
 press to the lobby of the server it came from. discord.py runs interaction
@@ -84,7 +87,7 @@ async def _lobby_or_reply(lobby_for, interaction: discord.Interaction) -> "Lobby
 
 
 class LobbyView(discord.ui.View):
-    """Join / Leave / New teams. On the live lobby message, and on the summary
+    """Join / Leave / New teams / End session. On the live lobby message, and on the summary
     of each game the current group plays: once a game starts nobody scrolls
     back up to the teams, but everyone sees the summary of the game they just
     finished.
@@ -102,8 +105,9 @@ class LobbyView(discord.ui.View):
         super().__init__(timeout=None)
         self.lobby_for = lobby_for
         if not teams:
-            # A queue with no game on has no teams to re-split.
+            # A queue with no game on has no teams to re-split or session to end.
             self.remove_item(self.new_teams)
+            self.remove_item(self.end_session)
 
     def track(self, message: discord.Message | None):
         """Record a summary this view went out on, so lineup changes made
@@ -127,6 +131,28 @@ class LobbyView(discord.ui.View):
     async def new_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
         if lobby := await _lobby_or_reply(self.lobby_for, interaction):
             await lobby.handle_new_teams(interaction)
+
+    @discord.ui.button(label="End session", style=discord.ButtonStyle.secondary, custom_id="monobot:match:end")
+    async def end_session(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if lobby := await _lobby_or_reply(self.lobby_for, interaction):
+            await lobby.handle_end_session(interaction)
+
+
+class EndSessionView(discord.ui.View):
+    """The private "are you sure?" behind End session: one tap from any of
+    eight players shouldn't end a game the other seven are still playing."""
+
+    def __init__(self, lobby: "Lobby"):
+        super().__init__(timeout=60)
+        self.lobby = lobby
+
+    @discord.ui.button(label="End session", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.lobby.game_active():
+            await interaction.response.edit_message(content="The session has already ended.", view=None)
+            return
+        await interaction.response.edit_message(content="Session ended — the queue's open.", view=None)
+        await self.lobby.end_session(interaction.channel, interaction.guild, interaction.user.display_name)
 
 
 class LegacyLineupView(discord.ui.View):
@@ -244,6 +270,9 @@ class Lobby:
         self.store = community.store
         self.ratings = community.ratings
         self.lobby_for = lobby_for
+        # Whether a session was on at the last look, so the sweep can tell
+        # when one runs out (notice_session_end).
+        self.was_active = self.game_active()
         self.line: list[str] = self._stored_ids(LINE_META_KEY)
         self.sitting_out: list[str] = self._stored_ids(SITTING_OUT_META_KEY)
         # Users seen pressing a button or added by command, so forming a match
@@ -442,6 +471,39 @@ class Lobby:
         return [found[uid] for uid in roster], [found[uid] for uid in promoted]
 
     # -- timers and resets ---------------------------------------------------
+
+    async def notice_session_end(self):
+        """Redraw the lobby as the queue once a session runs past
+        ACTIVE_GAME_MINUTES. Nothing else would: the clock running out isn't
+        an event, so the old teams and their buttons stayed up until someone
+        happened to press something."""
+        active = self.game_active()
+        if self.was_active and not active:
+            logger.info("Session ran out (community %s)", self.community.guild_id)
+            await self._refresh()
+        self.was_active = active
+
+    async def end_session(self, channel: discord.abc.Messageable, guild: discord.Guild | None, by: str):
+        """End session: the group's done before the clock says so. The line
+        becomes the queue, in order, its timeout clocks starting now (they're
+        paused through a game). The players aren't queued: when a group breaks
+        up most are leaving, and anyone who isn't presses Join. The queue goes
+        up fresh at the bottom of the channel, naming who ended the session."""
+        self.store.set_meta(MATCH_POSTED_AT_META_KEY, "")
+        self.was_active = False
+        self.options = []
+        self.sitting_out.clear()
+        for uid in self.line:
+            self.renew(uid)
+        self.save_lineup()
+        logger.info("Session ended by %s (community %s)", by, self.community.guild_id)
+        if len(self.line) >= QUEUE_TARGET and (roster := self._take_queue(guild)):
+            await self.post_formed_match(channel, roster)
+            return
+        message = await channel.send(
+            content=f"{by} ended the session — the queue's open.", embed=self._embed(), view=self._view()
+        )
+        await asyncio.gather(self._show(message), self._refresh(skip=message))
 
     # A queue that sat unfilled overnight is stale: people who joined, never
     # got a game and forgot to leave make the count look healthier than it is.
@@ -651,6 +713,21 @@ class Lobby:
 
     async def handle_leave(self, interaction: discord.Interaction):
         await self._answer(interaction, self.leave(str(interaction.user.id)))
+
+    async def handle_end_session(self, interaction: discord.Interaction):
+        """End session asks first, privately; EndSessionView does the ending.
+        Only a player in the match may press it, as with New teams."""
+        if not self.game_active():
+            await interaction.response.send_message("No game's on — the lobby is already the queue.", ephemeral=True)
+            return
+        if str(interaction.user.id) not in self.stored_roster_ids():
+            await interaction.response.send_message("Only a player in this match can end the session.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            "End the session? The lobby goes back to the queue; anyone in line keeps their place.",
+            view=EndSessionView(self),
+            ephemeral=True,
+        )
 
     async def handle_new_teams(self, interaction: discord.Interaction):
         """New teams does whichever of two things the moment calls for:
@@ -926,8 +1003,7 @@ class Matchmaking(commands.Cog):
         self.daily_resets = start_daily(
             self.client, _reset_time, lambda community: self.lobby_for(community).daily_reset(), "Daily queue reset"
         )
-        if any(c.config.queue_timeout_minutes for c in self.client.communities.all()):
-            self.timeout_sweep.start()
+        self.timeout_sweep.start()
 
     async def cog_unload(self):
         for loop in self.daily_resets:
@@ -936,9 +1012,13 @@ class Matchmaking(commands.Cog):
 
     @tasks.loop(seconds=TIMEOUT_SWEEP_SECONDS)
     async def timeout_sweep(self):
+        """Each community's queue timeouts, and whether its session has run
+        out since the last look."""
         for community in self.client.communities.all():
+            lobby = self.lobby_for(community)
+            await lobby.notice_session_end()
             if community.config.queue_timeout_minutes:
-                await self.lobby_for(community).sweep_timeouts()
+                await lobby.sweep_timeouts()
 
     @timeout_sweep.before_loop
     async def before_timeout_sweep(self):

@@ -21,12 +21,24 @@ ALWAYS_PUBLIC = {"queue", "waitlist"}
 
 
 class MonoContext(commands.Context):
+    def private_by_default(self) -> bool:
+        return not (self.command is not None and self.command.name in ALWAYS_PUBLIC)
+
+    async def defer_slash(self):
+        """Acknowledge a slash invocation before the command body runs.
+
+        Discord drops an interaction not answered within 3 seconds, and the
+        stats commands walk the whole match history on the event loop. The
+        first reply after a defer takes the DEFER's visibility, whatever it
+        passes itself, so this defers with the same default send applies."""
+        if self.interaction is not None and not self.interaction.response.is_done():
+            await self.defer(ephemeral=self.private_by_default())
+
     async def send(self, *args, **kwargs):
         # Only default the visibility for slash invocations, and never override
         # an explicit ephemeral= the caller passed (e.g. /gallery's private
         # secret-recipe reveal). Text (prefix) invocations have no interaction,
         # so ephemeral is meaningless and left untouched.
         if self.interaction is not None and "ephemeral" not in kwargs:
-            public = self.command is not None and self.command.name in ALWAYS_PUBLIC
-            kwargs["ephemeral"] = not public
+            kwargs["ephemeral"] = self.private_by_default()
         return await super().send(*args, **kwargs)

@@ -64,6 +64,13 @@ async def on_ready():
             logger.warning("Config for community %s: %s", community.guild_id, problem)
 
 
+@bot.before_invoke
+async def defer_slash(ctx):
+    # Runs after checks and cooldowns, so their errors still answer the
+    # interaction directly (and privately) from on_command_error.
+    await ctx.defer_slash()
+
+
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):

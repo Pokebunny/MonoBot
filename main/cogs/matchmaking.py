@@ -683,7 +683,13 @@ class Lobby:
         rather than opening a second one. No role ping -- re-opening it
         mid-session is routine, and pinging the whole role each time is
         noise. Whoever wants the community called in can @ the role."""
-        await self._show(await ctx.send(embed=self._embed(), view=self._view()))
+        message = await ctx.send(embed=self._embed(), view=self._view())
+        if ctx.interaction is not None:
+            # A slash reply edits and deletes through the interaction's token,
+            # which dies after 15 minutes -- after that the lobby couldn't be
+            # redrawn or cleared away. Fetched back, it's the bot's own message.
+            message = await ctx.channel.fetch_message(message.id)
+        await self._show(message)
 
     # -- buttons ---------------------------------------------------------
 

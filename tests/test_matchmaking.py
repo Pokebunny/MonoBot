@@ -623,6 +623,35 @@ class TestRestart:
         assert lobby.message is None and lobby.store.meta[QUEUE_MSG_META_KEY] == ""
 
 
+class TestSlashQueue:
+    def test_a_slash_lobby_is_held_as_the_bots_own_message(self):
+        # The reply ctx.send hands back is bound to the interaction's token,
+        # which expires; the lobby must hold the copy fetched off the channel.
+        lobby = _lobby()
+        channel = _Channel()
+        own = _Message(77, channel=channel)
+
+        async def fetch_message(message_id):
+            assert message_id == 77
+            return own
+
+        channel.fetch_message = fetch_message
+
+        async def send(**kwargs):
+            return _Message(77, channel=channel, **kwargs)
+
+        ctx = types.SimpleNamespace(interaction=object(), channel=channel, send=send)
+        run(lobby.open_queue(ctx))
+        assert lobby.message is own
+
+    def test_a_text_lobby_is_held_as_sent(self):
+        lobby = _lobby()
+        channel = _Channel()
+        ctx = types.SimpleNamespace(interaction=None, channel=channel, send=channel.send)
+        run(lobby.open_queue(ctx))
+        assert lobby.message is channel.sent[0]
+
+
 class TestMeetingPoint:
     def test_teams_name_the_channel_and_region(self):
         lobby = _lobby()

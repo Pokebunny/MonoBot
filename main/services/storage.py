@@ -162,27 +162,6 @@ CREATE INDEX IF NOT EXISTS idx_match_players_name ON match_players(name);
 CREATE INDEX IF NOT EXISTS idx_match_players_handle ON match_players(toon_handle);
 CREATE INDEX IF NOT EXISTS idx_matches_played_at ON matches(played_at);
 
--- Maps a Discord user to the SC2 name(s) they claim. sc2_name is the display
--- name they entered; toon_handle is SC2's unique account id, bound the first
--- time that name is seen in an uploaded game (NULL until then). Rating and
--- participant checks key on the handle, so two players who share a display
--- name never merge.
-CREATE TABLE IF NOT EXISTS player_links (
-    discord_id TEXT NOT NULL,
-    sc2_name TEXT NOT NULL,
-    toon_handle TEXT,
-    linked_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (sc2_name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_player_links_discord ON player_links(discord_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_player_links_handle
-    ON player_links(toon_handle) WHERE toon_handle IS NOT NULL;
--- Name claims and lookups are case-insensitive: SC2 names have fixed casing
--- but users won't reproduce it, and "Rain"/"rain" must not be two claims.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_player_links_name_nocase
-    ON player_links(sc2_name COLLATE NOCASE);
-
 -- The SC2 level a player reports before their first game here (beginner /
 -- mid / top, see rating.SKILL_LEVEL_MU). Written by users like player_links,
 -- so it survives everything a reparse touches. Only the walk's starting point
@@ -559,6 +538,56 @@ def _migration_20_remake_called(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE matches ADD COLUMN remake_called INTEGER")
 
 
+# Discord links are GLOBAL: one table for every community, since a Discord
+# user is the same person on every server and claims the same SC2 accounts.
+# It lives in the home DB (so sync_live_db's pull carries every link); other
+# communities' stores ATTACH it as LINKS_SCHEMA and read it unqualified, which
+# SQLite resolves to the attached table because their own DB has none.
+# "{s}" is the schema prefix: "" in the DB that holds the links, "links."
+# when attached.
+LINKS_SCHEMA = "links"
+_LINKS_SCHEMA = """
+-- Maps a Discord user to the SC2 name(s) they claim. sc2_name is the display
+-- name they entered; toon_handle is SC2's unique account id, bound the first
+-- time that name is seen in an uploaded game (NULL until then). Rating and
+-- participant checks key on the handle, so two players who share a display
+-- name never merge.
+CREATE TABLE IF NOT EXISTS {s}player_links (
+    discord_id TEXT NOT NULL,
+    sc2_name TEXT NOT NULL,
+    toon_handle TEXT,
+    linked_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (sc2_name)
+);
+
+CREATE INDEX IF NOT EXISTS {s}idx_player_links_discord ON player_links(discord_id);
+CREATE UNIQUE INDEX IF NOT EXISTS {s}idx_player_links_handle
+    ON player_links(toon_handle) WHERE toon_handle IS NOT NULL;
+-- Name claims and lookups are case-insensitive: SC2 names have fixed casing
+-- but users won't reproduce it, and "Rain"/"rain" must not be two claims.
+CREATE UNIQUE INDEX IF NOT EXISTS {s}idx_player_links_name_nocase
+    ON player_links(sc2_name COLLATE NOCASE);
+"""
+
+
+class SharedLinks:
+    """The DB file holding the Discord links, shared by every store that
+    names it, and a counter of link writes made through any of them. Link
+    writes change merge_map, so they must invalidate EVERY community's
+    caches, not just the writer's: each store's change_count includes it."""
+
+    def __init__(self, db_path: str = DEFAULT_DB_PATH):
+        self.db_path = db_path
+        self.version = 0
+
+    def held_by(self, db_path: str) -> bool:
+        return _same_file(self.db_path, db_path)
+
+
+def _same_file(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
 _MIGRATIONS = {
     1: _migration_1_content_key,
     2: _migration_2_replay_channels,
@@ -584,23 +613,85 @@ _MIGRATIONS = {
 
 
 class MatchStore:
-    def __init__(self, db_path: str = DEFAULT_DB_PATH):
+    def __init__(self, db_path: str = DEFAULT_DB_PATH, links: SharedLinks | None = None):
+        """`links` names the DB holding the Discord links when they're shared
+        between communities; without it (scripts, tests) the store keeps its
+        own, in its own file."""
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self._db_path = db_path
+        self._links = links or SharedLinks(db_path)
         self._conn = sqlite3.connect(db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
+        # Several connections share the links DB, so a write can meet a lock.
+        self._conn.execute("PRAGMA busy_timeout = 10000")
         fresh = self._conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'matches'").fetchone()
         self._conn.executescript(_SCHEMA)
+        if self._links.held_by(db_path):
+            self._conn.executescript(_LINKS_SCHEMA.format(s=""))
+        else:
+            self._conn.execute(f"ATTACH DATABASE ? AS {LINKS_SCHEMA}", (self._links.db_path,))
+            self._conn.executescript(_LINKS_SCHEMA.format(s=f"{LINKS_SCHEMA}."))
         if fresh is None:
             # Brand-new DB: _SCHEMA created it at the latest version already.
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._conn.commit()
         else:
             self._migrate()
-        # Bumped on every write so callers (e.g. the leaderboard cog) can
-        # cache derived data like rating books and know when it's stale.
-        self.change_count = 0
+        if not self._links.held_by(db_path):
+            self._adopt_own_links()
+        self._changes = 0
+
+    @property
+    def change_count(self) -> int:
+        """Bumped on every write so callers (e.g. the leaderboard cog) can
+        cache derived data like rating books and know when it's stale. Counts
+        link writes made through ANY store sharing these links."""
+        return self._changes + self._links.version
+
+    def _adopt_own_links(self) -> None:
+        """Move links this DB kept for itself (from before links were global,
+        or written by a script that opened it standalone) into the shared
+        table, then set its own table aside: while it exists, SQLite would
+        resolve every unqualified player_links to it instead of the shared
+        one. A row that clashes with a shared link (the name or account is
+        already someone else's) is not copied; it stays in
+        player_links_premerge and is logged."""
+        own = self._conn.execute("SELECT 1 FROM main.sqlite_master WHERE type = 'table' AND name = 'player_links'")
+        if own.fetchone() is None:
+            return
+        rows = self._conn.execute(
+            "SELECT discord_id, sc2_name, toon_handle, linked_at FROM main.player_links"
+        ).fetchall()
+        moved = 0
+        for r in rows:
+            cur = self._conn.execute(
+                f"INSERT OR IGNORE INTO {LINKS_SCHEMA}.player_links (discord_id, sc2_name, toon_handle, linked_at) "
+                "VALUES (?, ?, ?, ?)",
+                tuple(r),
+            )
+            if cur.rowcount:
+                moved += 1
+                continue
+            same = self._conn.execute(
+                f"SELECT 1 FROM {LINKS_SCHEMA}.player_links WHERE discord_id = ? AND sc2_name = ? COLLATE NOCASE",
+                (r["discord_id"], r["sc2_name"]),
+            ).fetchone()
+            if same is None:
+                logger.warning(
+                    "%s: link %s -> %s clashes with a shared link; kept only in player_links_premerge",
+                    self._db_path,
+                    r["discord_id"],
+                    r["sc2_name"],
+                )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS main.player_links_premerge AS SELECT * FROM main.player_links WHERE 0"
+        )
+        self._conn.execute("INSERT INTO main.player_links_premerge SELECT * FROM main.player_links")
+        self._conn.execute("DROP TABLE main.player_links")
+        self._conn.commit()
+        self._links.version += 1
+        logger.info("%s: moved %d of %d links into the shared links table", self._db_path, moved, len(rows))
 
     def _migrate(self) -> None:
         """Bring an existing DB up to SCHEMA_VERSION, one step at a time."""
@@ -648,7 +739,7 @@ class MatchStore:
                 return IngestResult("duplicate", existing["id"], dropped_hash=file_hash)
             self._replace_match(existing["id"], match, file_hash, existing["content_key"], uploaded_by)
             self.bind_handles_from_match(match)
-            self.change_count += 1
+            self._changes += 1
             return IngestResult("updated", existing["id"], dropped_hash=existing["file_hash"])
 
         try:
@@ -669,7 +760,7 @@ class MatchStore:
         self._insert_players(match_id, match)
         self._conn.commit()
         self.bind_handles_from_match(match)
-        self.change_count += 1
+        self._changes += 1
         return IngestResult("inserted", match_id)
 
     def _find_same_game(self, match: MonobattleMatch) -> sqlite3.Row | None:
@@ -793,7 +884,7 @@ class MatchStore:
         announced, by the next reconcile."""
         cur = self._conn.executemany("DELETE FROM matches WHERE id = ?", [(i,) for i in match_ids])
         self._conn.commit()
-        self.change_count += 1
+        self._changes += 1
         return cur.rowcount
 
     def file_hashes(self) -> set[str]:
@@ -819,7 +910,7 @@ class MatchStore:
         if row["approved"]:
             match = match.model_copy(update={"approved": True})
         self._replace_match(row["id"], match, file_hash, row["content_key"], row["uploaded_by"])
-        self.change_count += 1
+        self._changes += 1
         return True
 
     # -- map versions ----------------------------------------------------
@@ -836,7 +927,7 @@ class MatchStore:
             (map_hash, version.name if version else None, version.author if version else None),
         )
         self._conn.commit()
-        self.change_count += 1
+        self._changes += 1
 
     def unresolved_map_hashes(self) -> list[str]:
         """Map versions seen in history that have never been looked up."""
@@ -863,7 +954,7 @@ class MatchStore:
             [(seed, file_hash) for file_hash, seed in seeds.items()],
         )
         self._conn.commit()
-        self.change_count += 1
+        self._changes += 1
         return cur.rowcount
 
     def map_hash_samples(self) -> list[tuple[str, str]]:
@@ -886,7 +977,7 @@ class MatchStore:
                 "INSERT INTO player_links (discord_id, sc2_name) VALUES (?, ?)",
                 (discord_id, sc2_name),
             )
-            self.change_count += 1
+            self._links.version += 1
         handles = self.handles_for_name(sc2_name)
         if len(handles) == 1:
             self._try_bind(sc2_name)
@@ -942,7 +1033,7 @@ class MatchStore:
             self._conn.commit()
             return False  # that account is already bound to someone else
         self._conn.commit()
-        self.change_count += 1
+        self._links.version += 1
         return True
 
     def add_account(self, discord_id: str, handle: str) -> bool:
@@ -961,7 +1052,7 @@ class MatchStore:
         except sqlite3.IntegrityError:
             return False
         self._conn.commit()
-        self.change_count += 1
+        self._links.version += 1
         return True
 
     def aliases_for_handle(self, toon_handle: str) -> list[str]:
@@ -1013,10 +1104,12 @@ class MatchStore:
         if len(handles) != 1:
             return
         try:
-            self._conn.execute(
+            cur = self._conn.execute(
                 "UPDATE player_links SET toon_handle = ? WHERE sc2_name = ? COLLATE NOCASE AND toon_handle IS NULL",
                 (handles[0], sc2_name),
             )
+            if cur.rowcount:
+                self._links.version += 1  # a new binding can change merge_map
         except sqlite3.IntegrityError:
             pass  # handle already bound to another claimed name; leave as-is
 
@@ -1038,7 +1131,7 @@ class MatchStore:
                 )
         self._conn.commit()
         if cur.rowcount:
-            self.change_count += 1
+            self._links.version += 1
             return True
         return False
 
@@ -1064,7 +1157,7 @@ class MatchStore:
             return 0
         cur = self._conn.executemany("DELETE FROM achievement_unlocks WHERE handle = ? AND key = ?", rows)
         self._conn.commit()
-        self.change_count += 1
+        self._changes += 1
         return cur.rowcount
 
     def unlocks_for(self, handles: list[str]) -> list[tuple[str, str]]:
@@ -1142,7 +1235,7 @@ class MatchStore:
             (winning_team, match_id),
         )
         self._conn.commit()
-        self.change_count += 1
+        self._changes += 1
 
     # -- reads -----------------------------------------------------------
 
@@ -1163,7 +1256,7 @@ class MatchStore:
                 "ON CONFLICT(discord_id) DO UPDATE SET level = excluded.level, set_at = datetime('now')",
                 (discord_id, level),
             )
-        self.change_count += 1
+        self._changes += 1
 
     def skill_levels_by_handle(self) -> dict[str, str]:
         """Each linked account's owner's reported level, by toon_handle."""
@@ -1340,7 +1433,7 @@ class MatchStore:
                 "INSERT INTO seasons (name, started_at, carryover, seed_sigma) VALUES (?, ?, ?, ?)",
                 (name, now, carryover, seed_sigma),
             )
-        self.change_count += 1
+        self._changes += 1
         return Season(cur.lastrowid, name, now, None, carryover, seed_sigma)
 
     def pending_confirmations(self, confidence_gate: float, min_duration: int) -> list[tuple[int, MonobattleMatch]]:

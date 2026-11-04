@@ -61,12 +61,14 @@ def test_legacy_config_serves_every_server_from_home(tmp_path, monkeypatch):
     found.home.store.close()
 
 
-def test_communities_keep_separate_databases(communities, tmp_path):
+def test_communities_keep_separate_databases_but_share_links(communities, tmp_path):
     home, other = communities.home, communities.others[OTHER]
-    home.store.link_player("42", "Somebody")
-    assert home.store.pending_names_for("42") == ["Somebody"]
-    assert other.store.pending_names_for("42") == []
     assert (tmp_path / "guilds" / str(OTHER) / "monobot.db").exists()
+    home.store.set_meta("probe", "home only")
+    assert other.store.get_meta("probe") is None
+    # A Discord user is the same person on every server: linking once counts everywhere.
+    home.store.link_player("42", "Somebody")
+    assert other.store.pending_names_for("42") == ["Somebody"]
 
 
 def test_admins_are_global_or_per_community(communities):

@@ -1,9 +1,11 @@
 """Communities: one ladder per Discord server.
 
 A community is a server's own match database, the caches derived from it and
-its slice of the config. Nothing is shared between communities — not matches,
-ratings, links nor achievements — so someone who plays in two of them links
-twice and has two unrelated ratings.
+its slice of the config. Matches, ratings and achievements are its own, so
+someone who plays in two communities has two unrelated ratings. Discord links
+are the one exception: a Discord user is the same person everywhere, so links
+are global (held in the home DB, see storage.SharedLinks) and linking once
+counts on every server.
 
 The home community is the original ladder and keeps its database at
 resources/monobot.db; every other one lives under resources/guilds/<id>/.
@@ -22,7 +24,7 @@ from discord.ext import commands, tasks
 from models.config import BotConfig, GuildConfig
 from services.achievements import AchievementCache
 from services.rating import DuoCache, PickCache, RatingCache, UnitCache
-from services.storage import DEFAULT_DB_PATH, MatchStore
+from services.storage import DEFAULT_DB_PATH, MatchStore, SharedLinks
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +81,11 @@ class Communities:
 
     def __init__(self, config: BotConfig, guilds_dir: str = GUILDS_DIR):
         self.config = config
-        self.home = Community(config.home_guild_id, config, MatchStore(DEFAULT_DB_PATH))
+        links = SharedLinks(DEFAULT_DB_PATH)
+        self.home = Community(config.home_guild_id, config, MatchStore(DEFAULT_DB_PATH, links))
         self.others = {
             guild_id: Community(
-                guild_id, guild_config, MatchStore(os.path.join(guilds_dir, str(guild_id), "monobot.db"))
+                guild_id, guild_config, MatchStore(os.path.join(guilds_dir, str(guild_id), "monobot.db"), links)
             )
             for guild_id, guild_config in config.guilds.items()
         }

@@ -221,3 +221,29 @@ class TestLabel:
 
     def test_match_stored_before_hashes_existed(self):
         assert map_versions.label(_match(), {ASHEN: "The Ashen Cradle"}) == "Monobattle LotV - Map Rotation"
+
+
+class TestFixedMaps:
+    """Arcade maps other than the rotation are one terrain each: named from
+    their own name, with no version lookup (their header names no map)."""
+
+    KIMERAN = "Monobattle LotV - Kimeran Refuge"
+
+    def _on(self, arcade_name, map_hash=ASHEN):
+        return _match(map_hash=map_hash).model_copy(update={"map_name": arcade_name})
+
+    def test_named_after_the_arcade_map(self):
+        assert map_versions.named(self._on(self.KIMERAN), {}) == "Kimeran Refuge"
+        assert map_versions.label(self._on(self.KIMERAN, map_hash=""), {}) == "Kimeran Refuge"
+
+    def test_counts_in_per_map_stats(self):
+        kimeran = self._on(self.KIMERAN, map_hash="7a73729b" * 8)  # its own version, never named in the table
+        groups = map_versions.group_by_map([kimeran, _match(map_hash=ASHEN)], {ASHEN: "The Ashen Cradle"})
+        assert set(groups) == {"Kimeran Refuge", "The Ashen Cradle"}
+
+    def test_the_rotation_map_still_needs_its_version(self):
+        assert map_versions.fixed_map(map_versions.ROTATION_MAP) is None
+        assert map_versions.named(_match(map_hash=ASHEN), {}) is None
+
+    def test_an_unprefixed_arcade_name_is_kept_whole(self):
+        assert map_versions.fixed_map("Some Custom Mono") == "Some Custom Mono"

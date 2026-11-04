@@ -11,6 +11,7 @@ import logging
 from collections import Counter
 
 from models.replay import MonobattleMatch
+from services import map_versions
 from services.achievements.core import (
     MIN_UNIT_GAMES_FOR_RANKING,
     RARITIES,
@@ -140,7 +141,7 @@ class AchievementBook:
         return {pick for pick in rated if rates[pick] == worst}
 
     def _tally_match(self, match: MonobattleMatch) -> None:
-        ctx = _match_context(match, self._map_names.get(match.map_hash))
+        ctx = _match_context(match, map_versions.named(match, self._map_names))
         ctx.canonical = {p.toon_handle: self.canonical(p.toon_handle) for p in match.players}
         handles = set(ctx.canonical.values())
         ctx.newcomers = {h for h in handles if h not in self.histories}

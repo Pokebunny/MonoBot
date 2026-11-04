@@ -1,11 +1,14 @@
 """Resolving the real map behind a monobattle.
 
-Every game is played on one arcade map, so a match's map_name is always
-"Monobattle LotV - Map Rotation". The rotation happens out-of-band: the author
-republishes the arcade map with new terrain, which changes its hash. The
-terrain's real name is only inside the published map file, so it is fetched
-once per hash (network) and cached in the DB — see
+Most games are played on one arcade map, "Monobattle LotV - Map Rotation".
+The rotation happens out-of-band: the author republishes it with new terrain,
+which changes its hash. The terrain's real name is only inside the published
+map file, so it is fetched once per hash (network) and cached in the DB — see
 replay_parser.fetch_map_version and MatchStore.record_map_version.
+
+Other monobattle arcade maps (EU plays "Monobattle LotV - Kimeran Refuge" a
+lot) are one fixed terrain each, with no "Current Map:" line to read: their
+arcade name IS the map, so they are named from it directly.
 """
 
 import asyncio
@@ -16,6 +19,9 @@ from models.replay import MapVersion, MonobattleMatch
 from services import replay_parser
 
 logger = logging.getLogger(__name__)
+
+ROTATION_MAP = "Monobattle LotV - Map Rotation"
+_ARCADE_PREFIXES = ("Monobattle LotV - ", "Monobattle - ")
 
 
 def resolve_pending(store) -> list[MapVersion]:
@@ -79,8 +85,20 @@ def named(match: MonobattleMatch, names: dict[str, str]) -> str | None:
     version was never resolved, or the game predates map hashes. Stats group
     on this; the arcade name is a placeholder, not a map, so it never becomes
     a bucket of its own."""
-    name = names.get(match.map_hash)
+    name = names.get(match.map_hash) or fixed_map(match.map_name)
     return canonical(name) if name else None
+
+
+def fixed_map(arcade_name: str) -> str | None:
+    """The terrain of a single-terrain arcade map: its own name, minus the
+    "Monobattle LotV - " every one of them starts with. None for the rotation
+    map, whose terrain changes under one name and must come from its version."""
+    if not arcade_name or arcade_name == ROTATION_MAP:
+        return None
+    for prefix in _ARCADE_PREFIXES:
+        if arcade_name.startswith(prefix) and len(arcade_name) > len(prefix):
+            return arcade_name.removeprefix(prefix)
+    return arcade_name
 
 
 def group_by_map(matches: Iterable[MonobattleMatch], names: dict[str, str]) -> dict[str, list[MonobattleMatch]]:

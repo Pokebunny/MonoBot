@@ -51,6 +51,12 @@ class GuildConfig(BaseModel):
     # top-level list is admin everywhere; a guild's own list only there.
     admin_user_ids: list[int] = []
 
+    # Servers (by guild id) whose uploads also count here: every replay or
+    # zip added there is stored in this ladder too and posted in this
+    # server's replay channel, and a winner confirmed in either server
+    # settles both copies. One way only — this server's uploads stay here.
+    counts_games_from: list[int] = []
+
 
 class BotConfig(GuildConfig):
     """The top-level fields are the home community's settings — the original

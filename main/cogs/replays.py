@@ -60,7 +60,10 @@ async def send_with_retry(channel, **kwargs) -> discord.Message | None:
     """channel.send, retried through transient Discord 5xx errors. Gives up
     with a logged error and returns None rather than raising: by the time a
     summary is posted the match is already stored, so a lost post must not
-    abort whatever the caller does next."""
+    abort whatever the caller does next. A missing channel (a community
+    with none to post in) sends nothing."""
+    if channel is None:
+        return None
     for delay in (*SEND_RETRY_DELAYS, None):
         try:
             return await channel.send(**kwargs)
@@ -85,11 +88,15 @@ class ConfirmWinnerView(ExpiringView):
         match_id: int,
         achievements: AchievementCache | None = None,
         next_view: discord.ui.View | None = None,
+        shared: list | None = None,
     ):
         super().__init__()
         self.store = store
         self.match_id = match_id
         self.achievements = achievements
+        # Other communities holding a copy of this game (counts_games_from):
+        # the winner confirmed here settles theirs too.
+        self.shared = shared or []
         # The current group's lobby buttons (LobbyView), swapped in once
         # the winner is settled.
         self.next_view = next_view
@@ -137,6 +144,30 @@ class ConfirmWinnerView(ExpiringView):
                     if achievements.is_secret(e.spec) and e.spec.key not in pre_discovered
                 )
                 await interaction.followup.send(embed=match_embeds.achievement_unlocks(unlocks, first))
+        for other in self.shared:
+            try:
+                await settle_copy(interaction.client, other, match, team)
+            except Exception:
+                logger.exception("Could not copy match %s winner to community %s", self.match_id, other.guild_id)
+
+
+async def settle_copy(client, community, match, team: int) -> None:
+    """Give another community's copy of a game the winner just confirmed for
+    it, and announce there any badges that unlocks. A copy someone already
+    confirmed is left alone."""
+    row = community.store.find_game(match)
+    if row is None or row["winner_method"] == "confirmed":
+        return
+    community.store.confirm_winner(row["id"], team)
+    pre_discovered = community.store.discovered_keys()
+    unlocks = achievements.grant_new_unlocks(
+        community.store, community.achievements, community.store.get_match(row["id"])
+    )
+    if unlocks:
+        first = frozenset(
+            e.spec.key for _, e in unlocks if achievements.is_secret(e.spec) and e.spec.key not in pre_discovered
+        )
+        await send_with_retry(community.post_channel(client), embed=match_embeds.achievement_unlocks(unlocks, first))
 
     @discord.ui.button(label="Team 1 won", style=discord.ButtonStyle.primary)
     async def team1(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -287,6 +318,13 @@ class ZipUploadView(ExpiringView):
         await interaction.message.edit(embed=embed, view=self)
         if sweep is not None:
             await send_with_retry(interaction.channel, embed=sweep)
+        for other in self.cog.client.communities.collectors_of(self.cog.community):
+            try:
+                await self.cog.at(other).forward_zip(
+                    self.entries, self.uploader, self.file_name, interaction.guild.name
+                )
+            except Exception:
+                logger.exception("Could not add zip %s to community %s", self.file_name, other.guild_id)
         self.entries = []
 
     @discord.ui.button(label="Discard", style=discord.ButtonStyle.danger)
@@ -396,7 +434,26 @@ class Replays(CommunityCog):
         await self._record(channel, match, data, file_hash, author)
 
     async def _record(self, channel, match, data: bytes, file_hash: str, author: discord.abc.User):
-        """Store a parsed upload and post its summary, unlocks and buttons."""
+        """Store a parsed upload here and in every community that counts this
+        one's games, posting it in each."""
+        try:
+            await self._record_in(channel, match, data, file_hash, author)
+        finally:
+            for other in self.client.communities.collectors_of(self.community):
+                try:
+                    await self.at(other)._record_in(
+                        other.post_channel(self.client), match, data, file_hash, author, from_guild=channel.guild.name
+                    )
+                except Exception:
+                    logger.exception("Could not add %s to community %s", match.file_name, other.guild_id)
+
+    async def _record_in(
+        self, channel, match, data: bytes, file_hash: str, author: discord.abc.User, from_guild: str | None = None
+    ):
+        """Store a parsed upload in this community and post its summary,
+        unlocks and buttons. `from_guild` names the server it was uploaded in
+        when that's another one: then a game already stored here goes
+        unmentioned, and the summary carries no lobby buttons."""
         # uploaded_by keys on the Discord id so Chronicler can credit it.
         uploader = str(author.id)
         result = self.store.ingest(match, file_hash, uploaded_by=uploader)
@@ -404,6 +461,8 @@ class Replays(CommunityCog):
         if result.status == "duplicate":
             # Same game already stored (this file, or a recording at least as
             # complete from another player).
+            if from_guild is not None:
+                return
             await channel.send(embed=match_embeds.duplicate_notice(match.file_name))
             return
 
@@ -430,8 +489,13 @@ class Replays(CommunityCog):
             rating_deltas=deltas,
             map_label=map_versions.label(match, self.store.map_version_names()),
         )
+        footer = [f"Match #{number}"]
         if result.status == "updated":
-            embed.set_footer(text=f"Match #{number} · refined from a more complete recording")
+            footer.append("refined from a more complete recording")
+        if from_guild is not None:
+            footer.append(f"uploaded in {from_guild}")
+        if len(footer) > 1:
+            embed.set_footer(text=" · ".join(footer))
         # Grant before posting: the ledger write is the part that matters, and
         # a Discord hiccup on the summary must not leave the match ungranted.
         pre_discovered = self.store.discovered_keys()  # before grant, to spot community-first secrets
@@ -445,11 +509,13 @@ class Replays(CommunityCog):
         # its summary is the message the players are looking at between games.
         matchmaking = self.client.get_cog("Matchmaking")
         lobby = matchmaking.lobby_for(self.community) if matchmaking else None
-        next_view = lobby.next_game_view({p.toon_handle for p in match.players}) if lobby else None
+        next_view = (
+            lobby.next_game_view({p.toon_handle for p in match.players}) if lobby and from_guild is None else None
+        )
         if next_view is not None:
             embed = lobby.lineup_embed(embed)
         if needs_confirmation:
-            view = ConfirmWinnerView(self.store, result.match_id, self.achievements, next_view)
+            view = ConfirmWinnerView(self.store, result.match_id, self.achievements, next_view, shared=self._sharing())
             view.message = await send_with_retry(channel, embed=embed, view=view)
         elif next_view is not None:
             next_view.track(await send_with_retry(channel, embed=embed, view=next_view))
@@ -460,6 +526,9 @@ class Replays(CommunityCog):
                 e.spec.key for _, e in unlocks if achievements.is_secret(e.spec) and e.spec.key not in pre_discovered
             )
             await send_with_retry(channel, embed=match_embeds.achievement_unlocks(unlocks, first))
+
+    def _sharing(self) -> list:
+        return self.client.communities.sharing_games_with(self.community)
 
     def _chronicler_unlock(self, author, match) -> list:
         """Chronicler is earned by uploading, not playing — grant it here
@@ -540,6 +609,21 @@ class Replays(CommunityCog):
         )
         return match_embeds.zip_result(file_name, results, need_winner), sweep
 
+    async def forward_zip(self, entries: list[ZipEntry], author: discord.abc.User, file_name: str, from_guild: str):
+        """Add a zip confirmed in another server here too (this community
+        counts that one's games), posting the result in this server's replay
+        channel. Judged afresh against this ladder, which may hold games the
+        other doesn't and the other way round."""
+        entries = classify_zip(self.store, [(e.name, e.data, e.match) for e in entries])
+        if not any(e.outcome in ("new", "better", "in_zip") for e in entries):
+            return
+        embed, sweep = await self.add_zip(entries, author, file_name)
+        embed.set_footer(text=f"Uploaded in {from_guild}")
+        channel = self.community.post_channel(self.client)
+        await send_with_retry(channel, embed=embed)
+        if sweep is not None:
+            await send_with_retry(channel, embed=sweep)
+
     @commands.hybrid_command(help="list stored matches that still need a winner confirmed")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def pending(self, ctx):
@@ -552,7 +636,7 @@ class Replays(CommunityCog):
         names = self.store.map_version_names()
         numbers = self.store.match_numbers()
         for match_id, match in pending[-3:]:
-            view = ConfirmWinnerView(self.store, match_id, self.achievements)
+            view = ConfirmWinnerView(self.store, match_id, self.achievements, shared=self._sharing())
             embed = match_embeds.match_summary(match, numbers[match_id], map_label=map_versions.label(match, names))
             view.message = await ctx.send(embed=embed, view=view)
         if len(pending) > 3:

@@ -58,6 +58,16 @@ class Community:
         guild = getattr(channel, "guild", None)
         return self.guild_id is None or (guild is not None and guild.id == self.guild_id)
 
+    def post_channel(self, client):
+        """Where this community's own posts go when no one asked anywhere in
+        particular (a game counted here from another server): its first
+        replay channel the bot can see. None if it has none."""
+        for channel_id in sorted(self.watched_channels()):
+            channel = client.get_channel(channel_id)
+            if channel is not None and self.owns(channel):
+                return channel
+        return None
+
     def config_problems(self, client) -> list[str]:
         """What's wrong with this community's config, as seen from Discord:
         a server the bot isn't in, or a configured channel it can't see or
@@ -105,6 +115,20 @@ class Communities:
         if self.config.home_guild_id in (None, guild_id):
             return self.home
         return None
+
+    def collectors_of(self, community: Community) -> list[Community]:
+        """The communities that count this one's uploads too
+        (`counts_games_from`)."""
+        if community.guild_id is None:
+            return []
+        return [c for c in self.all() if c is not community and community.guild_id in c.config.counts_games_from]
+
+    def sharing_games_with(self, community: Community) -> list[Community]:
+        """Every other community that may hold a copy of this one's games:
+        its collectors and the ones it collects from. A winner confirmed in
+        one is copied to these."""
+        sources = [c for c in self.all() if c is not community and c.guild_id in community.config.counts_games_from]
+        return [*self.collectors_of(community), *(c for c in sources if c not in self.collectors_of(community))]
 
     def is_admin(self, user_id: int) -> bool:
         """Admin everywhere: the top-level admin_user_ids."""

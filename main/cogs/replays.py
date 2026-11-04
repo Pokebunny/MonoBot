@@ -1,17 +1,20 @@
 """Replay ingestion: watch for .SC2Replay attachments, parse, store, and
-ask for manual winner confirmation when inference is below the rating gate."""
+ask for manual winner confirmation when inference is below the rating gate.
+A .zip of replays is previewed first and added in one go once an admin
+confirms it."""
 
 import asyncio
 import logging
 import os
 import tempfile
 from collections import Counter
+from typing import NamedTuple
 
 import discord
-from checks import is_admin, is_bot_admin
+from checks import is_admin
 from community import CommunityCog
 from discord.ext import commands
-from services import achievements, map_versions, match_embeds, replay_parser, storage
+from services import achievements, map_versions, match_embeds, replay_parser, replay_zip, storage
 from services.achievements import AchievementCache
 from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, long_enough, match_rating_deltas, season_start
 from services.storage import MatchStore
@@ -183,6 +186,119 @@ class ApproveGameView(ExpiringView):
         await self.cog._record(interaction.channel, match, self.data, self.file_hash, self.uploader)
 
 
+# Refuse an attachment this big before downloading it: far past what Discord
+# lets anyone upload without Nitro, and past any real batch of replays.
+MAX_ZIP_ATTACHMENT_BYTES = 100 * 1024 * 1024
+
+
+class ZipEntry(NamedTuple):
+    name: str
+    data: bytes
+    file_hash: str
+    match: object | None  # MonobattleMatch, or None if it couldn't be parsed
+    outcome: str  # new / better / stored / in_zip / rejected / failed
+    reason: str | None = None  # why it's rejected
+
+
+def _parse_bytes(data: bytes):
+    """parse_replay wants a path; write the bytes to a scratch file."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "upload.SC2Replay")
+        with open(path, "wb") as f:
+            f.write(data)
+        return replay_parser.parse_replay(path)
+
+
+def parse_all(replays: list[tuple[str, bytes]]) -> list[tuple[str, bytes, object | None]]:
+    """Parse every replay (run in a worker thread: ~1-2s each). A file that
+    won't parse comes back with None rather than sinking the batch."""
+    parsed = []
+    for name, data in replays:
+        try:
+            parsed.append((name, data, _parse_bytes(data)))
+        except Exception:
+            logger.exception("Zip upload: failed to parse %s", name)
+            parsed.append((name, data, None))
+    return parsed
+
+
+def classify_zip(store: MatchStore, parsed: list[tuple[str, bytes, object | None]]) -> list[ZipEntry]:
+    """What adding each replay would do, decided without writing anything.
+    Two recordings of one game inside the zip both look new to the store;
+    the later one is marked in_zip (ingest keeps whichever is better)."""
+    entries, seen_hashes, seen_games = [], set(), set()
+    for name, data, match in parsed:
+        file_hash = storage.hash_replay(data)
+        if file_hash in seen_hashes or store.has_replay(file_hash):
+            entries.append(ZipEntry(name, data, file_hash, match, "stored"))
+            continue
+        seen_hashes.add(file_hash)
+        if match is None:
+            entries.append(ZipEntry(name, data, file_hash, None, "failed"))
+            continue
+        reason = storage.rejection_reason(match)
+        if reason is not None:
+            entries.append(ZipEntry(name, data, file_hash, match, "rejected", reason))
+            continue
+        outcome = store.ingest_preview(match)
+        game = match.game_seed or storage.content_key(match)
+        if outcome in ("new", "better") and game in seen_games:
+            outcome = "in_zip"
+        seen_games.add(game)
+        entries.append(ZipEntry(name, data, file_hash, match, outcome))
+    return entries
+
+
+class ZipUploadView(ExpiringView):
+    """Add / Discard under a zip's preview. Only an admin decides: a zip can
+    hold dozens of games from anywhere, a different thing to vouch for than
+    the one game a player just played. Holds the replays in memory until
+    it's decided or expires."""
+
+    def __init__(self, cog: "Replays", file_name: str, entries: list[ZipEntry]):
+        super().__init__()
+        self.cog = cog  # bound to the uploading server's community
+        self.file_name = file_name
+        self.entries = entries
+        self.uploader: discord.abc.User | None = None
+        self._decided = False
+
+    async def _claim(self, interaction: discord.Interaction) -> bool:
+        """True for the one admin click that gets to decide."""
+        if not is_admin(interaction.client, interaction.guild, interaction.user):
+            await interaction.response.send_message("Only an admin can add or discard a zip upload.", ephemeral=True)
+            return False
+        if self._decided:
+            await interaction.response.send_message("Someone already decided this one.", ephemeral=True)
+            return False
+        self._decided = True
+        self.stop()
+        for child in self.children:
+            child.disabled = True
+        return True
+
+    @discord.ui.button(label="Add", style=discord.ButtonStyle.success)
+    async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._claim(interaction):
+            return
+        await interaction.response.edit_message(view=self)
+        embed, sweep = await self.cog.add_zip(self.entries, self.uploader, self.file_name)
+        embed.set_footer(text=f"Added by {interaction.user.display_name}")
+        await interaction.message.edit(embed=embed, view=self)
+        if sweep is not None:
+            await send_with_retry(interaction.channel, embed=sweep)
+        self.entries = []
+
+    @discord.ui.button(label="Discard", style=discord.ButtonStyle.danger)
+    async def discard(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._claim(interaction):
+            return
+        embed = interaction.message.embeds[0]
+        embed.set_footer(text=f"Discarded by {interaction.user.display_name} · nothing was added")
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.entries = []
+
+
 class Replays(CommunityCog):
     def __init__(self, client):
         super().__init__(client)
@@ -242,12 +358,14 @@ class Replays(CommunityCog):
         if watched and message.channel.id not in watched:
             return
         for attachment in message.attachments:
-            if attachment.filename.lower().endswith(".sc2replay"):
-                # One bad upload must not skip the rest of the message's replays.
-                try:
+            # One bad upload must not skip the rest of the message's replays.
+            try:
+                if attachment.filename.lower().endswith(".sc2replay"):
                     await self._process_attachment(message.channel, attachment, message.author)
-                except Exception:
-                    logger.exception("Failed to process %s", attachment.filename)
+                elif replay_zip.is_zip(attachment.filename):
+                    await self._process_zip(message.channel, attachment, message.author)
+            except Exception:
+                logger.exception("Failed to process %s", attachment.filename)
 
     async def _process_attachment(self, channel, attachment: discord.Attachment, author: discord.abc.User):
         data = await attachment.read()
@@ -357,61 +475,70 @@ class Replays(CommunityCog):
             return [(author.display_name, achievements.Earned(spec, match.played_at))]
         return []
 
-    @commands.hybrid_command(help="re-scan a channel's history for replays, refreshing stored games (mods)")
-    @is_bot_admin()
-    async def backfillchannel(self, ctx, channel: discord.TextChannel | None = None, limit: int = 2000):
-        """Downloads every .SC2Replay ever posted in the channel, archives the
-        raw files of stored games, re-parses already-stored games in place (so new parser
-        fields apply retroactively), and ingests any games we missed."""
-        self = self.at(ctx)
-        target = channel or ctx.channel
-        await ctx.send(f"Scanning the last {limit} messages of {target.mention} for replays…")
-        stats = Counter()
-        async for message in target.history(limit=limit, oldest_first=True):
-            for attachment in message.attachments:
-                if not attachment.filename.lower().endswith(".sc2replay"):
-                    continue
-                try:
-                    data = await attachment.read()
-                except discord.HTTPException:
-                    stats["download failed"] += 1
-                    continue
-                file_hash = storage.hash_replay(data)
-                try:
-                    with tempfile.TemporaryDirectory() as tmp:
-                        path = os.path.join(tmp, attachment.filename)
-                        with open(path, "wb") as f:
-                            f.write(data)
-                        match = await asyncio.to_thread(replay_parser.parse_replay, path)
-                except Exception:
-                    logger.exception("Backfill: failed to parse %s", attachment.filename)
-                    stats["parse failed"] += 1
-                    continue
-                if storage.rejection_reason(match) is not None and not self.store.is_approved(file_hash):
-                    stats["rejected"] += 1
-                    continue
-                if self.store.refresh_parse(match, file_hash):
-                    archive_replay(data, file_hash)
-                    stats["refreshed"] += 1
-                else:
-                    result = self.store.ingest(match, file_hash, uploaded_by=str(message.author.id))
-                    keep_archive(self.client, result, data, file_hash)
-                    stats[result.status] += 1
-        # Re-parsing recorded a map version for every game scanned, most of
-        # them for the first time (games stored before versions existed have
-        # no hash). Resolve them here in one pass — otherwise nothing names
-        # them until the next fresh upload happens to trigger it.
+    async def _process_zip(self, channel, attachment: discord.Attachment, author: discord.abc.User):
+        """Preview a zip of replays; an admin's Add stores them (add_zip)."""
+        if attachment.size > MAX_ZIP_ATTACHMENT_BYTES:
+            await channel.send(embed=match_embeds.zip_refused(attachment.filename, "it's too big"))
+            return
         try:
-            identified = await map_versions.resolve_pending_async(self.store)
-            if identified:
-                stats["maps identified"] = len(identified)
+            replays = replay_zip.read_replays(await attachment.read())
+        except replay_zip.BadZip as e:
+            await channel.send(embed=match_embeds.zip_refused(attachment.filename, str(e)))
+            return
+        status = await channel.send(f"Checking {len(replays)} replays from `{attachment.filename}`…")
+        parsed = await asyncio.to_thread(parse_all, replays)
+        entries = classify_zip(self.store, parsed)
+        outcomes = Counter(e.outcome for e in entries)
+        reasons = Counter(e.reason for e in entries if e.reason)
+        waiting = bool(outcomes["new"] or outcomes["better"])
+        embed = match_embeds.zip_preview(attachment.filename, outcomes, reasons, author.display_name, waiting)
+        if not waiting:
+            await status.edit(content=None, embed=embed)
+            return
+        view = ZipUploadView(self, attachment.filename, entries)
+        view.uploader = author
+        await status.edit(content=None, embed=embed, view=view)
+        view.message = status
+
+    async def add_zip(self, entries: list[ZipEntry], author: discord.abc.User, file_name: str):
+        """Store a confirmed zip's games in play order, with no summary per
+        game. Returns the result embed and the achievement sweep (or None):
+        a reconcile, as on a deploy, since a batch of old games can move
+        badges either way and a silent revoke is never acceptable."""
+        uploader = str(author.id)
+        results = Counter()
+        storable = [e for e in entries if e.outcome in ("new", "better", "in_zip")]
+        for entry in sorted(storable, key=lambda e: e.match.played_at):
+            # The preview is a snapshot; ingest decides afresh in case the
+            # store moved while the buttons waited.
+            result = self.store.ingest(entry.match, entry.file_hash, uploaded_by=uploader)
+            keep_archive(self.client, result, entry.data, entry.file_hash)
+            results[result.status] += 1
+        need_winner = sum(
+            1
+            for e in storable
+            if self.store.has_replay(e.file_hash)
+            and long_enough(e.match)
+            and (e.match.winning_team is None or e.match.winner_confidence < MIN_WINNER_CONFIDENCE)
+        )
+        try:
+            await map_versions.resolve_pending_async(self.store)
         except Exception:
-            logger.exception("Could not resolve maps after scanning %s", target)
-        granted = achievements.sweep_grants(self.store, self.achievements)
-        if granted:
-            stats["achievements granted quietly"] = granted
-        summary = ", ".join(f"{k}: {n}" for k, n in stats.most_common()) or "no replays found"
-        await ctx.send(f"Backfill of {target.mention} done — {summary}.")
+            logger.exception("Could not resolve maps after a zip upload")
+        granted, revoked = achievements.reconcile(self.store, self.achievements)
+        sweep = None
+        if granted or revoked:
+            names = {h: (self.store.aliases_for_handles([h]) or [h])[0] for h, _ in list(granted) + list(revoked)}
+            sweep = match_embeds.achievement_sweep(granted, names, revoked)
+        logger.info(
+            "Zip upload %s by %s: %s, %d granted, %d revoked",
+            file_name,
+            uploader,
+            dict(results),
+            len(granted),
+            len(revoked),
+        )
+        return match_embeds.zip_result(file_name, results, need_winner), sweep
 
     @commands.hybrid_command(help="list stored matches that still need a winner confirmed")
     @commands.cooldown(1, 5, commands.BucketType.user)

@@ -11,7 +11,8 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
 
 - `cogs/` — discord.py `commands.Cog` modules; one feature area each. Listed in
   `MonoBot.py`'s `cog_files` and loaded via `load_extension`. `replays` ingests
-  `.SC2Replay` attachments; `leaderboard` serves ratings/stats commands.
+  `.SC2Replay` attachments (a `.zip` of them is previewed and stored only
+  once an admin presses Add; `services/replay_zip.py` reads it defensively); `leaderboard` serves ratings/stats commands.
 - `services/` — stateless helpers cogs call. Third-party engines are isolated
   here: sc2reader behind `replay_parser`, openskill behind `rating`, sqlite
   behind `storage`. Embed builders live in `match_embeds`.

@@ -1,6 +1,7 @@
 """Discord embed builders for matches, leaderboards, and stats."""
 
 import datetime
+from collections import Counter
 
 import discord
 from models.matchmaking import ProposedMatch, QueuedPlayer
@@ -143,6 +144,65 @@ def parse_failure(file_name: str, error: str) -> discord.Embed:
     )
     embed.add_field(name="Error", value=error[:1000], inline=False)
     return embed
+
+
+def zip_preview(file_name: str, outcomes: Counter, reasons: Counter, uploader: str, waiting: bool) -> discord.Embed:
+    """What adding a zip of replays would do, before anything is stored.
+    `outcomes` counts new / better / stored / in_zip / rejected / failed;
+    `reasons` counts the rejected ones by why. `waiting`: there is something
+    to add, so the message carries Add / Discard for an admin."""
+    addable = outcomes["new"] + outcomes["better"]
+    lines = [f"**{_count(outcomes['new'], 'new game')}**"]
+    if outcomes["better"]:
+        lines.append(f"**{_count(outcomes['better'], 'better recording')}** of games already recorded")
+    if outcomes["in_zip"]:
+        lines.append(f"{_count(outcomes['in_zip'], 'more recording')} of games in this zip")
+    if outcomes["stored"]:
+        lines.append(f"{outcomes['stored']} already recorded")
+    if outcomes["rejected"]:
+        lines.append(f"{outcomes['rejected']} can't be recorded:")
+        lines += [f"  {n} × {reason.removeprefix("it's ")}" for reason, n in reasons.most_common()]
+    if outcomes["failed"]:
+        lines.append(f"{outcomes['failed']} couldn't be read")
+    embed = discord.Embed(
+        title=f"Zip upload: {file_name}",
+        description="\n".join(lines),
+        color=ACCENT if addable else WARNING,
+    )
+    if waiting:
+        embed.set_footer(text=f"Posted by {uploader} · an admin adds or discards it")
+    else:
+        embed.set_footer(text=f"Posted by {uploader} · nothing new to add")
+    return embed
+
+
+def zip_result(file_name: str, results: Counter, need_winner: int) -> discord.Embed:
+    """What adding a zip did. `results` counts ingest statuses."""
+    lines = [f"Added **{_count(results['inserted'], 'game')}**"]
+    if results["updated"]:
+        lines.append(f"refined {_count(results['updated'], 'recorded game')}")
+    if results["duplicate"]:
+        lines.append(f"skipped {_count(results['duplicate'], 'weaker recording')}")
+    embed = discord.Embed(title=f"Zip upload: {file_name}", description=", ".join(lines) + ".", color=ACCENT)
+    if need_winner:
+        embed.add_field(
+            name="Needs a winner",
+            value=f"The bot couldn't tell who won {_count(need_winner, 'game')} — `!pending` to confirm.",
+            inline=False,
+        )
+    return embed
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
+def zip_refused(file_name: str, reason: str) -> discord.Embed:
+    return discord.Embed(
+        title="Zip not read",
+        description=f"`{file_name}` wasn't opened: {reason}. Nothing was added.",
+        color=WARNING,
+    )
 
 
 BOARD_PAGE_SIZE = 20

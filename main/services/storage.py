@@ -723,13 +723,7 @@ class MatchStore:
         if reason is not None:
             return IngestResult("rejected", None, reason)
         key = content_key(match)
-        existing = self._conn.execute(
-            """SELECT id, file_hash, content_key, duration_seconds, winner_confidence, winner_method
-               FROM matches WHERE content_key = ?""",
-            (key,),
-        ).fetchone()
-        if existing is None:
-            existing = self._find_same_game(match)
+        existing = self.find_game(match)
 
         if existing is not None:
             if existing["file_hash"] == file_hash:
@@ -762,6 +756,25 @@ class MatchStore:
         self.bind_handles_from_match(match)
         self._changes += 1
         return IngestResult("inserted", match_id)
+
+    def find_game(self, match: MonobattleMatch) -> sqlite3.Row | None:
+        """The stored recording of this game, if any: by content_key, else
+        _same_game. Read-only, so a preview can say what ingest would do."""
+        existing = self._conn.execute(
+            """SELECT id, file_hash, content_key, duration_seconds, winner_confidence, winner_method
+               FROM matches WHERE content_key = ?""",
+            (content_key(match),),
+        ).fetchone()
+        return existing if existing is not None else self._find_same_game(match)
+
+    def ingest_preview(self, match: MonobattleMatch) -> str:
+        """What ingest would do with an acceptable game, without doing it:
+        "new", "better" (replaces a weaker stored recording of it) or
+        "stored" (a recording at least as good is already kept)."""
+        existing = self.find_game(match)
+        if existing is None:
+            return "new"
+        return "better" if self._is_more_complete(match, existing) else "stored"
 
     def _find_same_game(self, match: MonobattleMatch) -> sqlite3.Row | None:
         """A stored recording of this game that content_key didn't find: one

@@ -407,15 +407,16 @@ class Leaderboard(CommunityCog):
         return season_book(self.store, None if career else season, by_race, mode)
 
     def _shown_name(self, ctx, handles, fallback: str) -> str:
-        """The Discord display name of whoever these accounts are linked to —
-        the member is the source of truth for identity — else the SC2 name."""
+        """The display name in THIS server of whoever these accounts are
+        linked to, else the SC2 name. Links are global, so the linked person
+        may not be here; their name from another server would mean nothing
+        to this one, and the SC2 name is what people see in game."""
         for handle in handles if isinstance(handles, list) else [handles]:
             discord_id = self.store.discord_id_for_handle(handle)
             if discord_id is None:
                 continue
             member = ctx.guild.get_member(int(discord_id)) if ctx.guild else None
-            user = member or self.client.get_user(int(discord_id))
-            return user.display_name if user else fallback
+            return member.display_name if member else fallback
         return fallback
 
     def _career_book(self):

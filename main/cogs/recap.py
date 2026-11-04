@@ -125,15 +125,14 @@ class Recap(CommunityCog):
         return match_embeds.session_recap(summary, names, _recap_timezone(self.community.config), title)
 
     def _shown_name(self, guild, handle: str, fallback: str) -> str:
-        """The linked member's Discord name, else the SC2 name — the same
-        rule the leaderboard uses."""
+        """The linked member's name in this server, else the SC2 name — the
+        same rule the leaderboard uses."""
         for h in self.store.merged_handles(handle):
             discord_id = self.store.discord_id_for_handle(h)
             if discord_id is None:
                 continue
             member = guild.get_member(int(discord_id)) if guild else None
-            user = member or self.client.get_user(int(discord_id))
-            return user.display_name if user else fallback
+            return member.display_name if member else fallback
         return fallback
 
 

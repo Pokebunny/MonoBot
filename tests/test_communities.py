@@ -123,3 +123,18 @@ def test_config_problems_name_what_to_fix(communities):
         get_guild=lambda _id: object(), get_channel=lambda _id: types.SimpleNamespace(guild=_guild(OTHER))
     )
     assert other.config_problems(fine) == []
+
+
+def test_a_linked_player_outside_this_server_shows_their_sc2_name(communities):
+    """Links are global, but a Discord name from another server means nothing
+    here — people know them by the name they play under."""
+    communities.home.store.add_account("42", "h-1")
+    member = types.SimpleNamespace(display_name="Nickname")
+    client = types.SimpleNamespace(
+        communities=communities, get_user=lambda _id: types.SimpleNamespace(display_name="ElsewhereName")
+    )
+    cog = Leaderboard(client)
+    here = types.SimpleNamespace(guild=types.SimpleNamespace(id=HOME, get_member=lambda _id: member))
+    away = types.SimpleNamespace(guild=types.SimpleNamespace(id=OTHER, get_member=lambda _id: None))
+    assert cog.at(_ctx(HOME))._shown_name(here, ["h-1"], "Rain") == "Nickname"
+    assert cog.at(_ctx(OTHER))._shown_name(away, ["h-1"], "Rain") == "Rain"

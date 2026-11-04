@@ -193,6 +193,11 @@ _ARMY_MINIMUM = 2000  # leader must have real army or the snapshot is noise
 _GG_WINDOW_SECONDS = 90  # gg this close before leaving = concession
 # Standalone gg/ggs/ggwp/ggggg — not the "gg" inside "laggin" or "buggy".
 _GG_RE = re.compile(r"(?<![a-z])g{2,}\s*(wp)?s?(?![a-z])")
+# A call for a remake: remake, rehost, redo or restart anywhere in a message,
+# or re/rm/rmk ending one ("re?", "pls re", "we got an afk, rm") — never the
+# "re" in "you're", or the split typo in "theya re hitting". Only counted once
+# the battle is on: in the pick phase "re" means repick.
+_REMAKE_RE = re.compile(r"(?<![a-z'])(?:(?:remake|rehost|redo|re ?start)(?![a-z])|(?:re|rm|rmk)\W*$)")
 _RECORDER_LEAVE_WINDOW = 10  # a leave this close to the end is the recorder's
 _CONF_RECORDED = 1.0
 _CONF_AGREEMENT = 0.9
@@ -633,6 +638,22 @@ def _infer_winner(replay) -> tuple[int | None, float, str]:
     return None, _CONF_CONFLICT, "conflict:" + "+".join(sorted(picks))
 
 
+def _remake_called(replay, game_start: int) -> bool:
+    """Whether anyone in the game called for a remake after the battle began
+    (see _REMAKE_RE). Means little in a long game — a loser asking for a
+    rematch says the same — so storage.rejection_reason reads it only for a
+    short one."""
+    lobby = {p.name for team in replay.teams for p in team.players}
+    return any(
+        type(e).__name__ == "ChatEvent"
+        and e.second >= game_start
+        and getattr(e, "player", None) is not None
+        and e.player.name in lobby
+        and _REMAKE_RE.search(e.text.lower())
+        for e in replay.events
+    )
+
+
 def _game_seed(replay) -> int | None:
     return replay.raw_data["replay.initData"]["game_description"].get("random_value")
 
@@ -722,6 +743,7 @@ def parse_replay(path: str) -> MonobattleMatch:
         winner_method=method,
         comeback_deficit=comeback_deficit,
         lead_changes=lead_changes,
+        remake_called=_remake_called(replay, game_start),
     )
 
 

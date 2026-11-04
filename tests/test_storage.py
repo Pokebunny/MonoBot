@@ -875,11 +875,33 @@ def test_an_uneven_lobby_is_not_stored(store):
 
 
 def test_a_remake_is_not_stored_even_with_a_winner(store):
-    # 63s of picks + 100s of play: someone left during the draft.
+    # 63 game seconds of picks (45 real) + 1:58 of play.
     remake = _match(duration=163)
     result = store.ingest(remake, hash_replay(b"remake"))
     assert result.status == "rejected"
     assert "remake" in result.reason
+
+
+def test_a_short_game_with_a_remake_call_is_not_stored(store):
+    # 2:29 of play, and the lobby agreed in chat to remake it.
+    called = _match(duration=194).model_copy(update={"remake_called": True})
+    result = store.ingest(called, hash_replay(b"called"))
+    assert result.status == "rejected"
+    assert "called in chat" in result.reason
+
+
+def test_a_short_decided_game_without_a_call_is_stored(store):
+    # A cannon rush that ended in gg after 2:29 — the call is what tells the two apart.
+    rush = _match(duration=194).model_copy(update={"remake_called": False})
+    assert store.ingest(rush, hash_replay(b"rush")).status == "inserted"
+
+
+def test_a_remake_call_past_three_minutes_means_nothing(store):
+    # A loser's "rm?" after the gg of a 3:15 game.
+    played = _match(duration=240).model_copy(update={"remake_called": True})
+    result = store.ingest(played, hash_replay(b"played"))
+    assert result.status == "inserted"
+    assert store.get_match(result.match_id).remake_called is True
 
 
 def test_a_long_undecided_game_is_kept_for_confirmation(store):

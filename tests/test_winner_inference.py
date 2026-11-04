@@ -2,7 +2,7 @@
 
 import types
 
-from services.replay_parser import _infer_winner
+from services.replay_parser import _infer_winner, _remake_called
 
 ChatEvent = type("ChatEvent", (), {})
 PlayerLeaveEvent = type("PlayerLeaveEvent", (), {})
@@ -79,3 +79,28 @@ def test_single_late_leaver_confident():
     team, conf, method = _infer_winner(replay)
     assert team == 1
     assert conf >= 0.7
+
+
+# -- remake calls ----------------------------------------------------------
+
+
+def test_a_remake_call_after_the_picks_counts():
+    replay = _replay([_chat(100, "A0", "we got an afk, rm"), _leave(110, "A0")])
+    assert _remake_called(replay, game_start=63)
+
+
+def test_re_during_the_picks_means_repick():
+    replay = _replay([_chat(40, "A0", "should i re?")])
+    assert not _remake_called(replay, game_start=63)
+
+
+def test_re_inside_other_words_is_not_a_call():
+    for text in ("you're fine", "wher re roaches", "theya re hitting asap", "storm incoming", "re or no?"):
+        assert not _remake_called(_replay([_chat(100, "A0", text)]), game_start=63), text
+    for text in ("re?", "RE", "pls re", "can we remake", "want to restart?"):
+        assert _remake_called(_replay([_chat(100, "A0", text)]), game_start=63), text
+
+
+def test_an_observers_call_does_not_count():
+    replay = _replay([_chat(100, "Caster", "remake")])
+    assert not _remake_called(replay, game_start=63)

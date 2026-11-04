@@ -155,6 +155,12 @@ class MapVersion(BaseModel):
     author: str | None = None  # terrain's credited author, when given
 
 
+# Game seconds per real second at Faster, the speed every monobattle runs at.
+# A replay's events are stamped in game seconds; its length — and the in-game
+# timer, since LotV — runs in real ones.
+GAME_SECONDS_PER_SECOND = 1.4
+
+
 class MonobattleMatch(BaseModel):
     file_name: str
     map_name: str  # the arcade map's own name, identical for every game
@@ -164,16 +170,22 @@ class MonobattleMatch(BaseModel):
     # fresh for each game -- unlike played_at, which comes from the
     # recorder's own clock. None on games parsed before it was read.
     game_seed: int | None = None
-    duration_seconds: int
+    duration_seconds: int  # real seconds, the clock the in-game timer shows
     game_type: str  # e.g. "4v4", from real_type
     pick_mode: str  # "blind_random" | "single_draft" | "tier_draft"
-    pick_phase_seconds: int  # when the battle actually started
+    # When the battle actually started, in GAME seconds (the replay's event
+    # clock) — not the real seconds duration_seconds counts in. See
+    # GAME_SECONDS_PER_SECOND.
+    pick_phase_seconds: int
     players: list[MatchPlayer]
     winning_team: int | None  # None when no winner recorded or inferred
     winner_confidence: float  # 1.0 recorded, <1.0 inferred, 0.0 unknown
     winner_method: str  # "recorded" | "inferred:<signals>" | "unknown"
     comeback_deficit: int | None = None  # winner's worst deficit in value on the map
     lead_changes: int | None = None  # meaningful flips of the lead in value on the map
+    # Someone in the game called for a remake once the battle was on
+    # (replay_parser._REMAKE_RE). None on games parsed before it was read.
+    remake_called: bool | None = None
     # Kept although it breaks storage.rejection_reason's rules, because
     # someone vouched for it (a real game that happened to end early).
     approved: bool = False
@@ -185,11 +197,16 @@ class MonobattleMatch(BaseModel):
         draft is dead time on the clock, and it is a whole minute of a
         blind-random game and three to four minutes of a drafted one.
 
+        In real seconds, like the in-game timer: the pick phase is converted
+        off the event clock first. Subtracting it raw (as this once did)
+        shaved ~20s off a blind-random game and ~80s off a drafted one, and
+        turned real three-minute games away as remakes.
+
         Clamped at zero for the handful of games that ended before the picks
-        were even finished. NOTE that the rating gate, the achievement ledger
-        and MatchStore's queries all still measure duration_seconds; moving
-        those would change which games rate and who holds which badge."""
-        return max(0, self.duration_seconds - self.pick_phase_seconds)
+        were even finished. NOTE that the rating gate and MatchStore's queries
+        still measure duration_seconds; moving those would change which games
+        rate."""
+        return max(0, self.duration_seconds - round(self.pick_phase_seconds / GAME_SECONDS_PER_SECOND))
 
     def team(self, number: int) -> list[MatchPlayer]:
         return [p for p in self.players if p.team == number]

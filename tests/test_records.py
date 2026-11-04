@@ -17,10 +17,10 @@ def _match(day, battle, comeback=None, swings=None, winner=1, kills=(1000,) * 8)
         file_name=f"{day}.SC2Replay",
         map_name="Monobattle",
         played_at=BASE + datetime.timedelta(days=day),
-        duration_seconds=battle + 60,
+        duration_seconds=battle + 50,
         game_type="4v4",
         pick_mode="blind_random",
-        pick_phase_seconds=60,
+        pick_phase_seconds=70,  # game seconds: 50 real
         players=players,
         winning_team=winner,
         winner_confidence=1.0 if winner else 0.0,

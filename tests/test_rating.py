@@ -188,8 +188,16 @@ def test_rating_cache_follows_the_open_season(tmp_path):
 
 def test_battle_seconds_excludes_the_pick_phase():
     match = _match(1, duration=900)
-    match.pick_phase_seconds = 63  # a blind-random draft
-    assert match.battle_seconds == 837
+    match.pick_phase_seconds = 63  # a blind-random draft, in game seconds
+    assert match.battle_seconds == 855  # 63 game seconds are 45 real ones
+
+
+def test_battle_seconds_converts_the_pick_phase_to_real_time():
+    # A single-draft game from Nov 2026: a 6:35 replay whose draft ended 299
+    # game seconds in. The in-game timer showed 3:01 of play, not 1:36.
+    match = _match(1, duration=395)
+    match.pick_phase_seconds = 299
+    assert match.battle_seconds == 181
 
 
 def test_battle_seconds_never_goes_negative():
@@ -203,7 +211,7 @@ def test_match_summary_shows_battle_time_not_replay_length():
     from services.match_embeds import match_summary
 
     match = _match(1, duration=900)
-    match.pick_phase_seconds = 240  # a drafted game: four minutes of picking
+    match.pick_phase_seconds = 336  # a drafted game: four real minutes of picking
     assert "11:00" in match_summary(match).description
     assert "15:00" not in match_summary(match).description
 

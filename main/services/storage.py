@@ -44,12 +44,18 @@ class IngestResult(NamedTuple):
 
 # What a stored game must be. Monobattles here are 4v4s: a 3v3 or an uneven
 # lobby is a different game, never rated. And a game with under two minutes of
-# play after the picks is a remake: every one on record (16 by Oct 2026) says
-# "remake", "wrong team" or someone's AFK in its chat, while the shortest real
-# game ran 3.5 minutes. An undecided game that DID run long is kept: it goes to
-# winner confirmation instead.
+# play after the picks (real seconds, the in-game timer) is a remake. Over the
+# 241 short games in the owner's replay folder (Nov 2026), every one under
+# 2:00 either says so in its chat or never got going, while from 2:00 to 3:00
+# the two mix: cannon and spine rushes that end in "gg" from 2:05, and a 2:29
+# game the whole lobby agreed to remake. So up to REMAKE_CALL_SECONDS a call
+# for one (MonobattleMatch.remake_called) decides it; past that the call means
+# nothing — over 3:00 the ones on record are a loser's "rm?" after the gg or
+# talk of a game already played out. An undecided game that ran long is kept:
+# it goes to winner confirmation instead.
 TEAM_SIZE = 4
 MIN_BATTLE_SECONDS = 120
+REMAKE_CALL_SECONDS = 180
 
 
 def rejection_reason(match: MonobattleMatch) -> str | None:
@@ -62,6 +68,8 @@ def rejection_reason(match: MonobattleMatch) -> str | None:
         return f"it's a {match.game_type}, not a 4v4"
     if match.battle_seconds < MIN_BATTLE_SECONDS:
         return "it's a remake (under 2 minutes of play)"
+    if match.battle_seconds < REMAKE_CALL_SECONDS and match.remake_called:
+        return "it's a remake (called in chat, under 3 minutes in)"
     return None
 
 
@@ -97,7 +105,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -118,6 +126,7 @@ CREATE TABLE IF NOT EXISTS matches (
     winner_method TEXT NOT NULL,
     comeback_deficit INTEGER,
     lead_changes INTEGER,
+    remake_called INTEGER,
     approved INTEGER NOT NULL DEFAULT 0,
     uploaded_by TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -543,6 +552,13 @@ def _migration_19_drop_replay_channels(conn: sqlite3.Connection) -> None:
         conn.execute("DROP TABLE replay_channels")
 
 
+def _migration_20_remake_called(conn: sqlite3.Connection) -> None:
+    """MonobattleMatch.remake_called; NULL on games parsed before it was read."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(matches)")}
+    if "remake_called" not in cols:
+        conn.execute("ALTER TABLE matches ADD COLUMN remake_called INTEGER")
+
+
 _MIGRATIONS = {
     1: _migration_1_content_key,
     2: _migration_2_replay_channels,
@@ -563,6 +579,7 @@ _MIGRATIONS = {
     17: _migration_17_approved,
     18: _migration_18_merge_duplicate_recordings,
     19: _migration_19_drop_replay_channels,
+    20: _migration_20_remake_called,
 }
 
 
@@ -639,8 +656,9 @@ class MatchStore:
                 """INSERT INTO matches
                    (file_hash, content_key, file_name, map_name, map_hash, played_at, game_seed, duration_seconds,
                     game_type, pick_mode, pick_phase_seconds, winning_team,
-                    winner_confidence, winner_method, comeback_deficit, lead_changes, approved, uploaded_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    winner_confidence, winner_method, comeback_deficit, lead_changes, remake_called, approved,
+                    uploaded_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (file_hash, key, *self._match_columns(match), uploaded_by),
             )
         except sqlite3.IntegrityError:
@@ -711,6 +729,7 @@ class MatchStore:
             match.winner_method,
             match.comeback_deficit,
             match.lead_changes,
+            None if match.remake_called is None else int(match.remake_called),
             int(match.approved),
         )
 
@@ -759,7 +778,7 @@ class MatchStore:
                  file_hash = ?, content_key = ?, file_name = ?, map_name = ?, map_hash = ?, played_at = ?,
                  game_seed = ?, duration_seconds = ?, game_type = ?, pick_mode = ?, pick_phase_seconds = ?,
                  winning_team = ?, winner_confidence = ?, winner_method = ?,
-                 comeback_deficit = ?, lead_changes = ?, approved = ?, uploaded_by = ?
+                 comeback_deficit = ?, lead_changes = ?, remake_called = ?, approved = ?, uploaded_by = ?
                WHERE id = ?""",
             (file_hash, key, *self._match_columns(match), uploaded_by, match_id),
         )
@@ -1502,5 +1521,6 @@ class MatchStore:
             winner_method=row["winner_method"],
             comeback_deficit=row["comeback_deficit"],
             lead_changes=row["lead_changes"],
+            remake_called=None if row["remake_called"] is None else bool(row["remake_called"]),
             approved=bool(row["approved"]),
         )

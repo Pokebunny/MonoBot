@@ -576,20 +576,20 @@ def test_retired_spec_rows_are_kept_but_hidden(store):
 
 
 def test_duration_achievements_measure_battle_time_not_replay_length():
-    """A drafted game whose replay runs 20:30 is 16:30 of actual fighting, so
-    it must not award The Closer — a badge has to agree with the clock the
-    match summary shows."""
+    """A drafted game whose replay runs 20:30 is 17:39 of actual fighting
+    (240 game seconds of draft are 2:51 real), so it must not award The
+    Closer — a badge has to agree with the clock the match summary shows."""
     match = _match(duration=1230, pick_phase_seconds=240)
-    assert match.battle_seconds == 990  # under the 20-minute bar
+    assert match.battle_seconds == 1059  # under the 20-minute bar
     assert "the_closer" not in _keys(_book([match]), "A1")
     assert "the_closer" in _keys(_book([_match(duration=1230, pick_phase_seconds=0)]), "A1")
 
 
 def test_blitz_measures_battle_time_too():
     """The draft cuts the other way for speed: a 5:40 replay of a
-    blind-random game is a 4:37 win, which is a Blitz."""
+    blind-random game is a 4:55 win, which is a Blitz."""
     match = _match(duration=340, pick_phase_seconds=63)
-    assert match.battle_seconds == 277
+    assert match.battle_seconds == 295
     assert "blitz" in _keys(_book([match]), "A1")
     assert "blitz" not in _keys(_book([_match(duration=340, pick_phase_seconds=0)]), "A1")
 
@@ -599,7 +599,7 @@ def test_long_game_qualifiers_use_battle_time():
     losers = [_player(f"B{i}", 2, kills=9000) for i in range(1, 5)]
     winners = [_player("A1", 1, kills=10)] + [_player(f"A{i}", 1, kills=9000) for i in range(2, 5)]
     short = _match(duration=660, pick_phase_seconds=240, players=winners + losers)
-    assert short.battle_seconds == 420  # a 11:00 replay, but only 7:00 of game
+    assert short.battle_seconds == 489  # a 11:00 replay, but only 8:09 of game
     assert "along_for_the_ride" not in _keys(_book([short]), "A1")
 
 

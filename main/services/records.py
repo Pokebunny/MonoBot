@@ -3,8 +3,12 @@ performances in a community's history, one board per category.
 
 Pure functions over stored matches. Game records count only decided games
 (recap.is_decided — the gate every other stat uses), so an abandoned replay
-can't hold "fastest win". Durations are battle time, the clock every summary
-shows."""
+can't hold a record. Durations are battle time, the clock every summary
+shows.
+
+No fastest-wins board: with a two-minute minimum on rated games, the top of
+it was always games a team quit just past the cutoff (all ten on the
+Monobattle server's board fell between 2:00 and 2:19)."""
 
 import datetime
 from typing import Callable, NamedTuple
@@ -12,7 +16,6 @@ from typing import Callable, NamedTuple
 from models.replay import MatchPlayer, MonobattleMatch
 from services.awards import trade_efficiency
 from services.recap import is_decided
-from services.storage import MIN_BATTLE_SECONDS
 
 RECORDS_SHOWN = 10
 
@@ -46,10 +49,9 @@ def _game_board(
     matches: list[tuple[int, MonobattleMatch]],
     score: Callable[[MonobattleMatch], float | None],
     show: Callable[[MonobattleMatch], str],
-    lowest: bool = False,
 ) -> RecordBoard:
     scored = [(score(m), i, m) for i, m in matches if is_decided(m) and score(m) is not None]
-    scored.sort(key=lambda t: t[0] if lowest else -t[0])
+    scored.sort(key=lambda t: -t[0])
     rows = [RecordRow(show(m), _winners(m), i, m.played_at) for _, i, m in scored[:RECORDS_SHOWN]]
     return RecordBoard(key, emoji, title, rows)
 
@@ -91,16 +93,6 @@ def record_boards(matches: list[tuple[int, MonobattleMatch]]) -> list[RecordBoar
             lambda m: _duration(m.battle_seconds),
         ),
         _game_board(
-            "fastest",
-            "⚡",
-            "Fastest Wins",
-            matches,
-            # An approved short game counts but sets no speed record.
-            lambda m: m.battle_seconds if m.battle_seconds >= MIN_BATTLE_SECONDS else None,
-            lambda m: _duration(m.battle_seconds),
-            lowest=True,
-        ),
-        _game_board(
             "swings",
             "🎢",
             "Most Lead Changes",
@@ -120,7 +112,6 @@ def record_boards(matches: list[tuple[int, MonobattleMatch]]) -> list[RecordBoar
 RECORD_ALIASES = {
     "comebacks": ("comeback", "comebacks", "cb"),
     "longest": ("long", "longest", "length", "duration"),
-    "fastest": ("fast", "fastest", "short", "shortest", "quick", "quickest"),
     "swings": ("swing", "swings", "lead", "leads", "back-and-forth", "rollercoaster"),
     "kills": ("kill", "kills", "killed"),
     "trades": ("trade", "trades", "trader", "efficiency"),

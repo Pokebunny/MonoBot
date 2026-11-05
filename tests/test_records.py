@@ -41,13 +41,6 @@ def test_comebacks_rank_biggest_first_and_name_the_winners():
     assert rows[0].who == "p4, p5, p6, p7"
 
 
-def test_fastest_wins_skip_undecided_games():
-    matches = [(1, _match(1, 200, winner=None)), (2, _match(2, 300)), (3, _match(3, 900))]
-    rows = _board(records.record_boards(matches), "fastest").rows
-    assert [r.match_id for r in rows] == [2, 3]
-    assert rows[0].value == "5:00"
-
-
 def test_kills_rank_single_game_performances():
     matches = [(1, _match(1, 900, kills=(50000, *(1000,) * 7)))]
     top = _board(records.record_boards(matches), "kills").rows[0]

@@ -697,8 +697,8 @@ class Leaderboard(CommunityCog):
 
     @commands.hybrid_command(
         aliases=["record"],
-        description="all-time records: comebacks, longest/fastest games, lead changes, kills, trades",
-        help="all-time records, one page each: biggest comebacks, longest games, fastest wins, most lead "
+        description="all-time records: comebacks, longest games, lead changes, kills, trades",
+        help="all-time records, one page each: biggest comebacks, longest games, most lead "
         "changes, most kills in a game and best trades. Name one to open on it (!records longest)",
     )
     @commands.cooldown(1, 5, commands.BucketType.user)

@@ -9,7 +9,7 @@ from collections import Counter
 from typing import NamedTuple
 
 import discord
-from checks import is_admin
+from checks import is_admin, is_bot_admin
 from community import CommunityCog
 from discord.ext import commands
 from services import achievements, map_versions, match_embeds, replay_parser, replay_zip, storage
@@ -315,6 +315,40 @@ class ZipUploadView(ExpiringView):
         self.entries = []
 
 
+class DeleteMatchView(ExpiringView):
+    """Delete / Cancel under a match about to be removed, for the admin who asked."""
+
+    def __init__(self, cog: "Replays", match_id: int, admin_id: int):
+        super().__init__()
+        self.cog = cog  # bound to the asking server's community
+        self.match_id = match_id
+        self.admin_id = admin_id
+
+    async def _finish(self, interaction: discord.Interaction, footer: str) -> bool:
+        if interaction.user.id != self.admin_id:
+            await interaction.response.send_message("Only the admin who asked can decide this.", ephemeral=True)
+            return False
+        self.stop()
+        for child in self.children:
+            child.disabled = True
+        embed = interaction.message.embeds[0]
+        embed.set_footer(text=footer)
+        await interaction.response.edit_message(embed=embed, view=self)
+        return True
+
+    @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger)
+    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._finish(interaction, f"Deleted by {interaction.user.display_name}"):
+            return
+        sweep = self.cog.remove_match(self.match_id, interaction.user)
+        if sweep is not None:
+            await send_with_retry(interaction.channel, embed=sweep)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._finish(interaction, f"Kept · cancelled by {interaction.user.display_name}")
+
+
 class Replays(CommunityCog):
     def __init__(self, client):
         super().__init__(client)
@@ -597,6 +631,34 @@ class Replays(CommunityCog):
             view.message = await ctx.send(embed=embed, view=view)
         if len(pending) > 3:
             await ctx.send(f"...and {len(pending) - 3} more. Confirm these and run !pending again.")
+
+    @commands.hybrid_command(help="remove a stored match from this server's ladder (admins), e.g. a wrong upload")
+    @is_bot_admin()
+    async def deletematch(self, ctx, number: int):
+        self = self.at(ctx)
+        by_number = {n: match_id for match_id, n in self.store.match_numbers().items()}
+        match_id = by_number.get(number)
+        if match_id is None:
+            await ctx.send(f"There's no match #{number} on this server's ladder.")
+            return
+        match = self.store.get_match(match_id)
+        embed = match_embeds.match_summary(
+            match, number, map_label=map_versions.label(match, self.store.map_version_names())
+        )
+        embed.set_footer(text="Delete this match from this server only? Other servers keep their copy.")
+        view = DeleteMatchView(self, match_id, ctx.author.id)
+        view.message = await ctx.send(embed=embed, view=view)
+
+    def remove_match(self, match_id: int, admin: discord.abc.User):
+        """Delete a stored game from this community; returns the reconcile's
+        embed (badges it took away) or None."""
+        self.store.delete_matches([match_id])
+        granted, revoked = achievements.reconcile(self.store, self.achievements)
+        logger.info("Match %d deleted by %s: %d granted, %d revoked", match_id, admin.id, len(granted), len(revoked))
+        if not (granted or revoked):
+            return None
+        names = {h: (self.store.aliases_for_handles([h]) or [h])[0] for h, _ in list(granted) + list(revoked)}
+        return match_embeds.achievement_sweep(granted, names, revoked)
 
 
 async def setup(client):

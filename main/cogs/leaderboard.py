@@ -501,12 +501,12 @@ class Leaderboard(CommunityCog):
         async def show(interaction, person):
             resolved = self._resolve_person(person)
             if resolved is None:
-                await interaction.response.edit_message(
+                await interaction.edit_original_response(
                     content=f"**{person.sc2_name}** has no rated games yet.", view=None
                 )
                 return
             view = self._profile_view(ctx, resolved)
-            await interaction.response.edit_message(content=None, embed=view.profile, view=view)
+            await interaction.edit_original_response(content=None, embed=view.profile, view=view)
             view.message = interaction.message
 
         picked = await self._person_or_pick(ctx, player, show)
@@ -568,7 +568,7 @@ class Leaderboard(CommunityCog):
             async def picked(interaction, person):
                 pages = self._achievement_pages(ctx, list(person.handles), person.sc2_name, private)
                 view = _pager(pages)
-                await interaction.response.edit_message(content=None, embed=pages[0], view=view)
+                await interaction.edit_original_response(content=None, embed=pages[0], view=view)
                 if view is not None:
                     view.message = interaction.message
 
@@ -643,12 +643,12 @@ class Leaderboard(CommunityCog):
                     (i, m) for i, m in self.store.all_matches() if any(p.toon_handle in handles for p in m.players)
                 ]
                 if not theirs:
-                    await interaction.response.edit_message(
+                    await interaction.edit_original_response(
                         content=f"No games found for **{person.sc2_name}**.", view=None
                     )
                     return
                 browser = MatchBrowserView(theirs, numbers, self.store.map_version_names())
-                await interaction.response.edit_message(
+                await interaction.edit_original_response(
                     content=None, embed=browser.embed(), view=browser if len(theirs) > 1 else None
                 )
                 if len(theirs) > 1:
@@ -701,10 +701,10 @@ class Leaderboard(CommunityCog):
         # first is settled, so each prompt is about one name.
         async def first_picked(interaction, person):
             if player2 is None:
-                await interaction.response.edit_message(view=None, **self._h2h_reply(ctx, person, None))
+                await interaction.edit_original_response(view=None, **self._h2h_reply(ctx, person, None))
                 return
             shown = self._shown_name(ctx, list(person.handles), person.discord_name or person.sc2_name)
-            await interaction.response.edit_message(content=f"Head-to-head: **{shown}** vs…", view=None)
+            await interaction.edit_original_response(content=f"Head-to-head: **{shown}** vs…", view=None)
             await self._h2h_against(ctx, person, player2)
 
         chosen = await self._person_or_pick(ctx, player1, first_picked)
@@ -717,7 +717,7 @@ class Leaderboard(CommunityCog):
 
     async def _h2h_against(self, ctx, first, player2: str):
         async def picked(interaction, person):
-            await interaction.response.edit_message(view=None, **self._h2h_reply(ctx, first, person))
+            await interaction.edit_original_response(view=None, **self._h2h_reply(ctx, first, person))
 
         chosen = await self._person_or_pick(ctx, player2, picked)
         if chosen is not None:

@@ -727,12 +727,12 @@ class Lobby:
         async def picked(interaction, person):
             member = await self._member_of(ctx, person)
             if member is None:
-                await interaction.response.edit_message(
+                await interaction.edit_original_response(
                     content=f"**{person.sc2_name}** isn't in this server.", view=None
                 )
                 return
             outcome = act(member, person.sc2_name)
-            await interaction.response.edit_message(content=outcome.reply, view=None)
+            await interaction.edit_original_response(content=outcome.reply, view=None)
             await self._after_command(ctx, outcome)
 
         member = await self._member_for(ctx, player, picked)

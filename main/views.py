@@ -130,6 +130,9 @@ class _PersonSelect(discord.ui.Select):
             await interaction.response.send_message("Only the person who ran this command can choose.", ephemeral=True)
             return
         self.view.stop()
+        # Building the answer (a profile walks every match) can outlast Discord's
+        # 3 s reply window, so ack now; on_pick answers with edit_original_response.
+        await interaction.response.defer()
         await self.on_pick(interaction, self.people[self.values[0]])
 
 

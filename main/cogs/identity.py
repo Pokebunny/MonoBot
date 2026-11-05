@@ -332,7 +332,7 @@ class Identity(CommunityCog):
         # An SC2 name unlinks just that name; a member loses every account, or
         # only `sc2_name` if given.
         async def picked(interaction, person):
-            await interaction.response.edit_message(content=self._unlink(ctx, person, target, sc2_name), view=None)
+            await interaction.edit_original_response(content=self._unlink(ctx, person, target, sc2_name), view=None)
 
         people = await person_or_pick(ctx, self.store, target.strip(), picked)
         if people is not None:
@@ -401,7 +401,7 @@ class Identity(CommunityCog):
         self = self.at(ctx)
 
         async def picked(interaction, person):
-            await interaction.response.edit_message(view=None, **self._whois_reply(ctx, person, ""))
+            await interaction.edit_original_response(view=None, **self._whois_reply(ctx, person, ""))
 
         people = await person_or_pick(ctx, self.store, target.strip(), picked)
         if people is not None:

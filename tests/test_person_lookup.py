@@ -100,6 +100,26 @@ def test_a_shared_sc2_name_gets_the_picker(store):
     assert "which one?" in ctx.sent[0].content and ctx.sent[0].view is not None
 
 
+def test_picking_acks_discord_before_the_slow_answer(store):
+    _play(store, [("Twin", "h-one"), *_filler(5)], 0)
+    _play(store, [("Twin", "h-two"), *_filler(5)], 1)
+    ctx = _Ctx()
+    calls = []
+
+    async def on_pick(interaction, person):
+        calls.append("answer")
+
+    async def defer():
+        calls.append("ack")
+
+    _run(person_or_pick(ctx, store, "Twin", on_pick))
+    select = ctx.sent[0].view.children[0]
+    select._values = ["0"]
+    interaction = SimpleNamespace(user=SimpleNamespace(id=ctx.author.id), response=SimpleNamespace(defer=defer))
+    _run(select.callback(interaction))
+    assert calls == ["ack", "answer"]  # within Discord's 3 s window, whatever on_pick costs
+
+
 # -- !unlinkuser -----------------------------------------------------------
 
 

@@ -9,8 +9,7 @@ from services import replay_parser
 
 REPLAY_DIR = os.path.join(os.path.dirname(__file__), "..", "test_replays")
 REPLAYS = sorted(glob.glob(os.path.join(REPLAY_DIR, "*.SC2Replay")))
-
-pytestmark = pytest.mark.skipif(not REPLAYS, reason="no test replays available")
+assert REPLAYS, f"no test replays in {REPLAY_DIR}"
 
 
 @pytest.fixture(scope="module")

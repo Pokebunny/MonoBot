@@ -9,6 +9,5 @@ main/resources/config.json
 main/resources/replays/
 main/resources/guilds/
 /scratch/
-/test_replays/
 /.claude/settings.local.json
 main/resources/*.db.log

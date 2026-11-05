@@ -9,7 +9,7 @@ PlayerLeaveEvent = type("PlayerLeaveEvent", (), {})
 
 
 def _player(name):
-    return types.SimpleNamespace(name=name)
+    return types.SimpleNamespace(name=name, pid=name)
 
 
 def _chat(second, name, text):
@@ -35,6 +35,24 @@ def _replay(events, seconds=900):
         events=events,
         game_length=types.SimpleNamespace(seconds=seconds),
     )
+
+
+def test_players_sharing_a_name_are_told_apart():
+    # One "dup" per team; team 1's leaves early, team 2's stays. Keyed by name
+    # the departure was charged to whichever team listed "dup" last.
+    a, b = types.SimpleNamespace(name="dup", pid=1), types.SimpleNamespace(name="dup", pid=2)
+    leave = PlayerLeaveEvent()
+    leave.second, leave.player = 300, a
+    end = _chat(900, "B3", "...")
+    replay = types.SimpleNamespace(
+        winner=None,
+        teams=[types.SimpleNamespace(number=1, players=[a]), types.SimpleNamespace(number=2, players=[b])],
+        events=[leave, end],
+        game_length=types.SimpleNamespace(seconds=900),
+    )
+    team, _, method = _infer_winner(replay)
+    assert team == 2
+    assert "departures" in method
 
 
 def test_gg_concession_team1_loses():

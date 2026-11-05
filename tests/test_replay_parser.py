@@ -191,10 +191,10 @@ def test_own_kills_excludes_static_defense_and_workers(matches):
     assert checked, "no player in the sample got a kill with a cannon or a worker"
 
 
-def _stats(second, name, on_map, building=0, killed=0, bank=0):
+def _stats(second, name, on_map, building=0, killed=0, bank=0, pid=None):
     """A PlayerStatsEvent with just the fields _game_swings reads."""
     event = type("PlayerStatsEvent", (), {})()
-    event.second, event.player = second, types.SimpleNamespace(name=name)
+    event.second, event.player = second, types.SimpleNamespace(name=name, pid=pid or name)
     event.resources_used_current = on_map
     event.minerals_used_in_progress, event.vespene_used_in_progress = building, 0
     event.resources_killed, event.minerals_current = killed, bank
@@ -203,8 +203,8 @@ def _stats(second, name, on_map, building=0, killed=0, bank=0):
 
 def _swing_replay(events):
     teams = [
-        types.SimpleNamespace(number=1, players=[types.SimpleNamespace(name="a")]),
-        types.SimpleNamespace(number=2, players=[types.SimpleNamespace(name="b")]),
+        types.SimpleNamespace(number=1, players=[types.SimpleNamespace(name="a", pid="a")]),
+        types.SimpleNamespace(number=2, players=[types.SimpleNamespace(name="b", pid="b")]),
     ]
     return types.SimpleNamespace(teams=teams, events=events)
 
@@ -240,6 +240,20 @@ class TestGameSwings:
     def test_pick_phase_is_ignored(self):
         replay = _swing_replay([_stats(10, "a", 1000), _stats(10, "b", 9000), _stats(100, "b", 1000)])
         assert replay_parser._game_swings(replay, 1, game_start=50) == (0, 0)
+
+    def test_players_sharing_a_name_stay_on_their_own_teams(self):
+        # Two different players both called "dup", one per team (seen live:
+        # two "llllllllllll"s). Keyed by name, team 1's value landed on team 2
+        # and invented a comeback.
+        same = [types.SimpleNamespace(name="dup", pid=1), types.SimpleNamespace(name="dup", pid=2)]
+        replay = types.SimpleNamespace(
+            teams=[
+                types.SimpleNamespace(number=1, players=[same[0]]),
+                types.SimpleNamespace(number=2, players=[same[1]]),
+            ],
+            events=[_stats(100, "dup", 9000, pid=1), _stats(100, "dup", 1000, pid=2)],
+        )
+        assert replay_parser._game_swings(replay, 1, game_start=0) == (0, 0)
 
     def test_small_leads_are_not_lead_changes(self):
         replay = _swing_replay(

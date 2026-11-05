@@ -355,7 +355,7 @@ def _find_game_start(replay) -> int:
     return _DEFAULT_PICK_PHASE_SECONDS
 
 
-def _classify_pick_mode(tallies: dict[str, _PlayerTally], game_start: int) -> str:
+def _classify_pick_mode(tallies: dict[int, _PlayerTally], game_start: int) -> str:
     if game_start < _DRAFT_START_THRESHOLD:
         return "blind_random"
     first_previews = [t.preview_times[0] for t in tallies.values() if t.preview_times]
@@ -373,7 +373,7 @@ _REPICK_BUTTON_CONTROL_ID = 107
 _KEEP_BUTTON_CONTROL_ID = 108
 
 
-def _credit_kill(tallies: dict[str, "_PlayerTally"], event, game_start: int) -> None:
+def _credit_kill(tallies: dict[int, "_PlayerTally"], event, game_start: int) -> None:
     """Credit one death to the enemy unit type that killed it, by the victim's
     build cost. Skipped when the tracker records no killer (~11% of the value
     of all deaths, almost all of it non-combat: Drones morphing into buildings,
@@ -393,16 +393,16 @@ def _credit_kill(tallies: dict[str, "_PlayerTally"], event, game_start: int) -> 
         return  # morphs and self-destructs are not kills
     value = (getattr(victim, "minerals", 0) or 0) + (getattr(victim, "vespene", 0) or 0)
     if value > 0:
-        tallies[killing_player.name].kills_by_unit[_canonical_killer(killer.name)] += value
+        tallies[killing_player.pid].kills_by_unit[_canonical_killer(killer.name)] += value
 
 
-def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
-    tallies: dict[str, _PlayerTally] = defaultdict(_PlayerTally)
+def _tally_events(replay, game_start: int) -> dict[int, _PlayerTally]:
+    tallies: dict[int, _PlayerTally] = defaultdict(_PlayerTally)
     for event in replay.events:
         event_name = type(event).__name__
         if event_name == "PlayerStatsEvent":
             if getattr(event, "player", None) is not None:
-                tally = tallies[event.player.name]
+                tally = tallies[event.player.pid]
                 tally.resources_killed = event.resources_killed
                 tally.econ_killed = event.minerals_killed_economy + event.vespene_killed_economy
                 tally.tech_killed = event.minerals_killed_technology + event.vespene_killed_technology
@@ -421,7 +421,7 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
                 and event.second >= game_start
                 and getattr(event, "player", None) is not None
             ):
-                tallies[event.player.name].drop_commands += 1
+                tallies[event.player.pid].drop_commands += 1
             continue
         if event_name == "DialogControlEvent":
             if (
@@ -429,12 +429,12 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
                 and event.second < game_start
                 and getattr(event, "player", None) is not None
             ):
-                tallies[event.player.name].last_pick_dialog = event.control_id
+                tallies[event.player.pid].last_pick_dialog = event.control_id
             continue
         if event_name == "UnitDiedEvent":
             owner = event.unit.owner
             if owner is not None and event.unit.name in _TOWN_HALLS:
-                tally = tallies[owner.name]
+                tally = tallies[owner.pid]
                 tally.live_town_halls.discard(event.unit.id)
                 if not tally.live_town_halls and event.second >= game_start:
                     tally.lost_all_bases = True
@@ -445,9 +445,9 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
             owner = event.unit.owner
             if owner is not None and event.second >= game_start:
                 if event.unit.name == "PhotonCannon":
-                    tallies[owner.name].cannon_starts.append((event.second, event.x, event.y))
+                    tallies[owner.pid].cannon_starts.append((event.second, event.x, event.y))
                 elif event.unit.name in _RUSH_CRAWLERS:
-                    tallies[owner.name].crawler_starts.append((event.second, event.x, event.y))
+                    tallies[owner.pid].crawler_starts.append((event.second, event.x, event.y))
             continue
         # UnitBornEvent: instantly-created units. UnitDoneEvent: gradually
         # created ones (warp-ins, morph cocoons, archon merges, buildings).
@@ -459,7 +459,7 @@ def _tally_events(replay, game_start: int) -> dict[str, _PlayerTally]:
             continue
         if owner is None:
             continue
-        tally = tallies[owner.name]
+        tally = tallies[owner.pid]
         raw = event.unit.name
         if raw in _WORKER_RACE and event.second >= game_start:
             tally.worker_races[_WORKER_RACE[raw]] += 1
@@ -519,18 +519,18 @@ def _game_swings(replay, winning_team: int | None, game_start: int) -> tuple[int
     beaten team's unspendable money piles up after its army dies, so with the
     bank a quarter of big "comebacks" were stomps measured in their last minute
     (measured over 1,259 community games)."""
-    team_of = {p.name: t.number for t in replay.teams for p in t.players}
+    team_of = {p.pid: t.number for t in replay.teams for p in t.players}
     first_team = min(t.number for t in replay.teams)
-    latest: dict[str, tuple[int, int]] = {}  # player -> (team, value on the map)
+    latest: dict[int, tuple[int, int]] = {}  # player id -> (team, value on the map)
     diffs = []
     for event in replay.events:
         if type(event).__name__ != "PlayerStatsEvent" or getattr(event, "player", None) is None:
             continue
-        name = event.player.name
-        if name not in team_of:
+        pid = event.player.pid
+        if pid not in team_of:
             continue
         on_map = event.resources_used_current + event.minerals_used_in_progress + event.vespene_used_in_progress
-        latest[name] = (team_of[name], on_map)
+        latest[pid] = (team_of[pid], on_map)
         if event.second < game_start:
             continue  # the pick phase: starting bases only, nothing to lead in
         lead = sum(v for tm, v in latest.values() if tm == first_team) - sum(
@@ -557,18 +557,18 @@ def _infer_winner(replay) -> tuple[int | None, float, str]:
     if replay.winner is not None:
         return replay.winner.number, _CONF_RECORDED, "recorded"
 
-    team_of = {p.name: team.number for team in replay.teams for p in team.players}
+    team_of = {p.pid: team.number for team in replay.teams for p in team.players}
     team_numbers = [t.number for t in replay.teams]
 
     # Signal 1: final army value per team.
     last_stats = {}
     for e in replay.events:
         if type(e).__name__ == "PlayerStatsEvent" and getattr(e, "player", None) is not None:
-            last_stats[e.player.name] = e
+            last_stats[e.player.pid] = e
     army = dict.fromkeys(team_numbers, 0)
-    for name, e in last_stats.items():
-        if name in team_of:
-            army[team_of[name]] += e.minerals_used_active_forces + e.vespene_used_active_forces
+    for pid, e in last_stats.items():
+        if pid in team_of:
+            army[team_of[pid]] += e.minerals_used_active_forces + e.vespene_used_active_forces
     army_pick = None
     ranked = sorted(army, key=lambda t: army[t], reverse=True)
     if (
@@ -584,11 +584,11 @@ def _infer_winner(replay) -> tuple[int | None, float, str]:
     for e in replay.events:
         n = type(e).__name__
         if n == "ChatEvent" and getattr(e, "player", None) is not None:
-            if _GG_RE.search(e.text.lower()) and e.player.name in team_of:
-                gg_at[e.player.name] = e.second
+            if _GG_RE.search(e.text.lower()) and e.player.pid in team_of:
+                gg_at[e.player.pid] = e.second
         elif n == "PlayerLeaveEvent" and getattr(e, "player", None) is not None:
-            if e.player.name in team_of:
-                leaves.append((e.second, e.player.name, team_of[e.player.name]))
+            if e.player.pid in team_of:
+                leaves.append((e.second, e.player.pid, team_of[e.player.pid]))
     leaves.sort()
     # Recording end in EVENT time: event timestamps run on a different clock
     # than game_length (real time vs game time, ~1.4x on Faster), so the end
@@ -599,7 +599,7 @@ def _infer_winner(replay) -> tuple[int | None, float, str]:
 
     # Signal 2: gg-concession — a "gg" said shortly before leaving is an
     # explicit concession; a one-sided one names the loser.
-    gg_leave_teams = {team for sec, name, team in leaves if name in gg_at and sec - gg_at[name] <= _GG_WINDOW_SECONDS}
+    gg_leave_teams = {team for sec, pid, team in leaves if pid in gg_at and sec - gg_at[pid] <= _GG_WINDOW_SECONDS}
     if len(gg_leave_teams) == 1:
         gg_loser = gg_leave_teams.pop()
         picks["gg"] = next(t for t in team_numbers if t != gg_loser)
@@ -610,8 +610,8 @@ def _infer_winner(replay) -> tuple[int | None, float, str]:
     if leaves:
         counting = leaves[:-1] if end_second - leaves[-1][0] <= _RECORDER_LEAVE_WINDOW else leaves
         left: dict[int, set] = defaultdict(set)
-        for _, name, team in counting:
-            left[team].add(name)
+        for _, pid, team in counting:
+            left[team].add(pid)
         gone = sorted(team_numbers, key=lambda t: len(left[t]), reverse=True)
         if len(gone) >= 2 and len(left[gone[0]]) > len(left[gone[1]]):
             picks["departures"] = next(t for t in team_numbers if t != gone[0])
@@ -643,12 +643,12 @@ def _remake_called(replay, game_start: int) -> bool:
     (see _REMAKE_RE). Means little in a long game — a loser asking for a
     rematch says the same — so storage.rejection_reason reads it only for a
     short one."""
-    lobby = {p.name for team in replay.teams for p in team.players}
+    lobby = {p.pid for team in replay.teams for p in team.players}
     return any(
         type(e).__name__ == "ChatEvent"
         and e.second >= game_start
         and getattr(e, "player", None) is not None
-        and e.player.name in lobby
+        and e.player.pid in lobby
         and _REMAKE_RE.search(e.text.lower())
         for e in replay.events
     )
@@ -669,11 +669,11 @@ def parse_replay(path: str) -> MonobattleMatch:
     tallies = _tally_events(replay, game_start)
 
     pick_mode = _classify_pick_mode(tallies, game_start)
-    homes = {(team.number, p.name): tallies[p.name].home for team in replay.teams for p in team.players}
+    homes = {(team.number, p.pid): tallies[p.pid].home for team in replay.teams for p in team.players}
     players = []
     for team in replay.teams:
         for p in team.players:
-            tally = tallies[p.name]
+            tally = tallies[p.pid]
             race = tally.race(fallback=p.play_race)
             # Blind-random repick evidence, any of: a second preview unit; the
             # player's final repick/keep dialog action being "repick" (covers

@@ -1,4 +1,5 @@
 import datetime
+import sqlite3
 
 import pytest
 from models.replay import MatchPlayer, MonobattleMatch
@@ -335,6 +336,25 @@ def test_change_count_tracks_writes(store):
     # exact re-upload is not a write
     store.ingest(_match(), hash_replay(b"cc"))
     assert store.change_count == 2
+
+
+def test_outside_writes_refresh_the_games(store, tmp_path):
+    # A script (reparse_stored.py) rewriting a game in place from another
+    # connection: the bot's shared games and change_count must notice, or every
+    # screen keeps the old parse until a restart.
+    r = store.ingest(_match(), hash_replay(b"ow"))
+    assert store.all_matches()[0][1].comeback_deficit is None
+    before = store.change_count
+    other = sqlite3.connect(str(tmp_path / "test.db"))
+    with other:
+        other.execute("UPDATE matches SET comeback_deficit = 123 WHERE id = ?", (r.match_id,))
+    other.close()
+    assert store.change_count > before
+    assert store.all_matches()[0][1].comeback_deficit == 123
+    # Its own writes still count once, not twice.
+    settled = store.change_count
+    store.confirm_winner(r.match_id, 2)
+    assert store.change_count == settled + 1
 
 
 # -- schema migrations ---------------------------------------------------

@@ -646,16 +646,33 @@ class MatchStore:
         if not self._links.held_by(db_path):
             self._adopt_own_links()
         self._changes = 0
+        self._outside_version = self._data_version()
         # Every game, built once per change: (change number, games in play
         # order, id -> game). Shared by every reader instead of each one
         # rebuilding all of them (see all_matches).
         self._games: tuple[int, list[tuple[int, MonobattleMatch]], dict[int, MonobattleMatch]] | None = None
 
+    def _data_version(self) -> int:
+        return self._conn.execute("PRAGMA data_version").fetchone()[0]
+
+    def _note_outside_writes(self) -> None:
+        """Count a commit by ANOTHER connection to this file as a change. A
+        script run beside the bot (reparse_stored.py rewriting games in place)
+        otherwise left every cache serving the old games until a restart.
+        SQLite's data_version moves only on other connections' commits, so the
+        store's own writes aren't counted twice."""
+        version = self._data_version()
+        if version != self._outside_version:
+            self._outside_version = version
+            self._changes += 1
+
     @property
     def change_count(self) -> int:
         """Bumped on every write so callers (e.g. the leaderboard cog) can
         cache derived data like rating books and know when it's stale. Counts
-        link writes made through ANY store sharing these links."""
+        link writes made through ANY store sharing these links, and writes
+        another process made to this database."""
+        self._note_outside_writes()
         return self._changes + self._links.version
 
     def _adopt_own_links(self) -> None:
@@ -1405,6 +1422,7 @@ class MatchStore:
     def _all_games(
         self, force: bool = False
     ) -> tuple[int, list[tuple[int, MonobattleMatch]], dict[int, MonobattleMatch]]:
+        self._note_outside_writes()
         if force or self._games is None or self._games[0] != self._changes:
             players: dict[int, list[sqlite3.Row]] = {}
             for p in self._conn.execute("SELECT * FROM match_players ORDER BY match_id, team, name"):

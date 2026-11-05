@@ -282,6 +282,28 @@ def test_all_matches_chronological(store):
     assert [m.played_at for m in matches] == [_at(0), _at(120)]
 
 
+def test_all_matches_built_once_and_shared(store):
+    # Every reader shares one built copy of the games until the store
+    # changes: at thousands of games, one copy per cache cost hundreds of MB.
+    store.ingest(_match(played_at=_at(0)), hash_replay(b"one"))
+    first, second = store.all_matches(), store.all_matches()
+    assert first is not second  # each caller may reorder its own list...
+    assert first[0][1] is second[0][1]  # ...but the games themselves are shared
+    assert first[0][1] == store.get_match(first[0][0])  # same as a fresh build
+
+    r = store.ingest(
+        _match(winning_team=None, confidence=0.0, method="unknown", played_at=_at(120)), hash_replay(b"two")
+    )
+    assert len(store.all_matches()) == 2  # a write refreshes it
+    store.confirm_winner(r.match_id, 2)
+    assert store.all_matches()[-1][1].winning_team == 2
+
+    season = store.current_season()
+    window = store.season_matches(season)
+    assert [mid for mid, _ in window] == [mid for mid, _ in store.all_matches()]
+    assert window[0][1] is store.all_matches()[0][1]  # a season window shares them too
+
+
 def test_player_records_by(store):
     store.ingest(_match(winning_team=1, played_at=_at(0)), hash_replay(b"g1"))
     store.ingest(_match(winning_team=2, played_at=_at(20)), hash_replay(b"g2"))

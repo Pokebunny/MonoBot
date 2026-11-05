@@ -410,24 +410,33 @@ def _missing_summary(missing: list[str], limit: int = 8) -> str:
     return f"{shown} +{extra} more" if extra > 0 else shown
 
 
+# Discord rejects an embed whose title, description, field names and values
+# and footer total over 6,000 characters, or that has over 25 fields. Pages
+# are packed under a margin of that.
+EMBED_CHAR_BUDGET = 5800
+EMBED_MAX_FIELDS = 25
+
+
 def achievements_gallery(
     shown_name: str,
     earned: list[Earned],
     next_up: list[tuple[AchievementSpec, float, float, list[str]]],
     holder_counts: dict[str, int] | None = None,
     reveal_keys: set[str] | None = None,
-) -> discord.Embed:
+) -> list[discord.Embed]:
     """A player's earned achievements grouped by rarity (rarest first), plus
-    their closest locked ones. holder_counts (key -> players holding it) adds
-    a live-rarity note to Epic+ lines. `reveal_keys` are secrets the VIEWER
-    has earned, unmasked here only on an ephemeral render (same gate as the
-    catalog) — callers must not pass any on a public one."""
+    their closest locked ones, as one embed per page: usually one, more when
+    a long-time player's badges won't fit in one message. holder_counts
+    (key -> players holding it) adds a live-rarity note to Epic+ lines.
+    `reveal_keys` are secrets the VIEWER has earned, unmasked here only on
+    an ephemeral render (same gate as the catalog) — callers must not pass
+    any on a public one."""
     holder_counts = holder_counts or {}
     reveal_keys = reveal_keys or set()
     masked_any = False
-    embed = discord.Embed(title=f"{shown_name} — achievements", color=ACCENT)
-    if not earned:
-        embed.description = "*Nothing yet — go play some games!*"
+    # (name, value, name if it opens a page): an overflow field is unnamed
+    # under its rarity's heading, but gets the heading back on a new page.
+    fields: list[tuple[str, str, str]] = []
     for rarity in reversed(RARITIES):
         lines = []
         for e in earned:
@@ -452,31 +461,58 @@ def achievements_gallery(
             lines.append(line)
         if not lines:
             continue
-        # Discord caps a field value at 1024 chars; a well-stocked rarity
-        # group can exceed it, so overflow continues in unnamed fields.
-        chunks, current = [], ""
-        for line in lines:
-            if current and len(current) + 1 + len(line) > 1024:
-                chunks.append(current)
-                current = line
-            else:
-                current = f"{current}\n{line}" if current else line
-        chunks.append(current)
-        embed.add_field(name=f"{RARITY_EMOJI[rarity]} {rarity}", value=chunks[0], inline=False)
-        for chunk in chunks[1:]:
-            embed.add_field(name="​", value=chunk, inline=False)
+        heading = f"{RARITY_EMOJI[rarity]} {rarity}"
+        for i, chunk in enumerate(_field_chunks(lines)):
+            fields.append((heading, chunk, heading) if i == 0 else ("​", chunk, f"{heading} (cont.)"))
     if next_up:
         lines = []
         for spec, current, target, missing in next_up:
             lines.append(f"{spec.emoji} **{spec.name}** — {spec.description} ({current:,.0f}/{target:,.0f})")
             if missing:
                 lines.append(f"　↳ *still need:* {_missing_summary(missing)}")
-        embed.add_field(name="🔒 Next up", value="\n".join(lines), inline=False)
+        for i, chunk in enumerate(_field_chunks(lines)):
+            fields.append(("🔒 Next up", chunk, "🔒 Next up") if i == 0 else ("​", chunk, "🔒 Next up (cont.)"))
+    title = f"{shown_name} — achievements"
+    description = None if earned else "*Nothing yet — go play some games!*"
     footer = f"{len(earned)}/{len(ACHIEVEMENT_SPECS)} unlocked · run /gallery to browse them all"
     if masked_any:
         footer += " · /achievements (slash) reveals recipes for secrets you've earned"
-    embed.set_footer(text=footer)
-    return embed
+
+    # Room left for fields once the title, description and footer (with a
+    # page number, in case there turn out to be pages) are counted.
+    room = EMBED_CHAR_BUDGET - len(title) - len(description or "") - len(footer) - len(" · page 99/99")
+    pages: list[list[tuple[str, str]]] = [[]]
+    used = 0
+    for name, value, opening_name in fields:
+        if pages[-1] and (used + len(name) + len(value) > room or len(pages[-1]) >= EMBED_MAX_FIELDS):
+            pages.append([])
+            used = 0
+        if not pages[-1]:
+            name = opening_name
+        pages[-1].append((name, value))
+        used += len(name) + len(value)
+
+    embeds = []
+    for n, page in enumerate(pages, 1):
+        embed = discord.Embed(title=title, description=description, color=ACCENT)
+        for name, value in page:
+            embed.add_field(name=name, value=value, inline=False)
+        embed.set_footer(text=footer if len(pages) == 1 else f"{footer} · page {n}/{len(pages)}")
+        embeds.append(embed)
+    return embeds
+
+
+def _field_chunks(lines: list[str]) -> list[str]:
+    """Lines joined into field values under Discord's 1,024-character cap."""
+    chunks, current = [], ""
+    for line in lines:
+        if current and len(current) + 1 + len(line) > 1024:
+            chunks.append(current)
+            current = line
+        else:
+            current = f"{current}\n{line}" if current else line
+    chunks.append(current)
+    return chunks
 
 
 def achievement_catalog(

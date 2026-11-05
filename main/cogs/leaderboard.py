@@ -188,6 +188,13 @@ class CatalogView(ExpiringView):
         await self._show(interaction)
 
 
+def _pager(pages: list[discord.Embed]) -> PagedBoardView | None:
+    """◀ ▶ buttons over pre-rendered embeds, or None when there's one page."""
+    if len(pages) < 2:
+        return None
+    return PagedBoardView(lambda page: pages[page], len(pages))
+
+
 class MatchBrowserView(ExpiringView):
     """⏮ ◀ ▶ ⏭ browsing over a snapshot of match history (oldest→newest);
     opens on the newest game, ◀ steps back in time. `numbers` is
@@ -583,11 +590,11 @@ class Leaderboard(CommunityCog):
         else:
 
             async def picked(interaction, person):
-                await interaction.response.edit_message(
-                    content=None,
-                    embed=self._achievement_embed(ctx, list(person.handles), person.sc2_name, private),
-                    view=None,
-                )
+                pages = self._achievement_pages(ctx, list(person.handles), person.sc2_name, private)
+                view = _pager(pages)
+                await interaction.response.edit_message(content=None, embed=pages[0], view=view)
+                if view is not None:
+                    view.message = interaction.message
 
             chosen = await self._person_or_pick(ctx, player, picked)
             if chosen is None:
@@ -595,10 +602,14 @@ class Leaderboard(CommunityCog):
             person, _note = chosen
             group, name = list(person.handles), person.sc2_name
             shown = self._shown_name(ctx, group, name)
-        embed = self._achievement_embed(ctx, group, shown, private, author=ctx.author)
-        await ctx.send(embed=embed, ephemeral=private)
+        pages = self._achievement_pages(ctx, group, shown, private, author=ctx.author)
+        view = _pager(pages)
+        if view is None:
+            await ctx.send(embed=pages[0], ephemeral=private)
+        else:
+            view.message = await ctx.send(embed=pages[0], view=view, ephemeral=private)
 
-    def _achievement_embed(self, ctx, group: list[str], shown: str, private: bool, author=None):
+    def _achievement_pages(self, ctx, group: list[str], shown: str, private: bool, author=None):
         earned = achievements.ledger_for_group(self.store, group)
         next_up = self.achievements.book().next_up(group[0], ensure_detail=True)
         holders = achievements.ledger_holder_counts(self.store, self.store.merge_map())

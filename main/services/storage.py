@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import sqlite3
+import sys
 from collections import Counter
 from typing import NamedTuple
 
@@ -570,6 +571,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS {s}idx_player_links_name_nocase
 """
 
 
+def _interned_keys(d: dict) -> dict:
+    return {sys.intern(k): v for k, v in d.items()}
+
+
 class SharedLinks:
     """The DB file holding the Discord links, shared by every store that
     names it, and a counter of link writes made through any of them. Link
@@ -641,6 +646,10 @@ class MatchStore:
         if not self._links.held_by(db_path):
             self._adopt_own_links()
         self._changes = 0
+        # Every game, built once per change: (change number, games in play
+        # order, id -> game). Shared by every reader instead of each one
+        # rebuilding all of them (see all_matches).
+        self._games: tuple[int, list[tuple[int, MonobattleMatch]], dict[int, MonobattleMatch]] | None = None
 
     @property
     def change_count(self) -> int:
@@ -1366,7 +1375,16 @@ class MatchStore:
     def all_matches(self, since: str | None = None, until: str | None = None) -> list[tuple[int, MonobattleMatch]]:
         """Matches with their ids, oldest first (rating order). `since` and
         `until` bound played_at (inclusive / exclusive) to window a season;
-        unbounded by default, since only ratings are season-scoped."""
+        unbounded by default, since only ratings are season-scoped.
+
+        The games are built once per store change and SHARED: every caller
+        (each derived cache, every !last browser) gets the same objects in a
+        fresh list. At thousands of games one full build is ~200 MB and most
+        of a second, so rebuilding it per reader cost both. Callers may
+        reorder or filter the list they get, but must never modify a game."""
+        _, games, by_id = self._all_games()
+        if since is None and until is None:
+            return list(games)
         clauses, params = [], []
         if since is not None:
             clauses.append("played_at >= ?")
@@ -1375,8 +1393,26 @@ class MatchStore:
             clauses.append("played_at < ?")
             params.append(until)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        rows = self._conn.execute(f"SELECT * FROM matches {where} ORDER BY played_at, id", params).fetchall()
-        return [(row["id"], self._build_match(row)) for row in rows]
+        ids = [
+            row["id"] for row in self._conn.execute(f"SELECT id FROM matches {where} ORDER BY played_at, id", params)
+        ]
+        if any(i not in by_id for i in ids):
+            # Another process (a script run beside the bot) wrote games this
+            # store never counted as a change: rebuild rather than miss them.
+            _, _, by_id = self._all_games(force=True)
+        return [(i, by_id[i]) for i in ids]
+
+    def _all_games(
+        self, force: bool = False
+    ) -> tuple[int, list[tuple[int, MonobattleMatch]], dict[int, MonobattleMatch]]:
+        if force or self._games is None or self._games[0] != self._changes:
+            players: dict[int, list[sqlite3.Row]] = {}
+            for p in self._conn.execute("SELECT * FROM match_players ORDER BY match_id, team, name"):
+                players.setdefault(p["match_id"], []).append(p)
+            rows = self._conn.execute("SELECT * FROM matches ORDER BY played_at, id").fetchall()
+            games = [(row["id"], self._build_match(row, players.get(row["id"], []))) for row in rows]
+            self._games = (self._changes, games, dict(games))
+        return self._games
 
     def match_numbers(self) -> dict[int, int]:
         """Each match id's match number — the one every summary shows and
@@ -1582,17 +1618,25 @@ class MatchStore:
 
     # -- internals -------------------------------------------------------
 
-    def _build_match(self, row: sqlite3.Row) -> MonobattleMatch:
-        player_rows = self._conn.execute(
-            "SELECT * FROM match_players WHERE match_id = ? ORDER BY team, name", (row["id"],)
-        ).fetchall()
+    def _build_match(self, row: sqlite3.Row, player_rows: list[sqlite3.Row] | None = None) -> MonobattleMatch:
+        if player_rows is None:
+            player_rows = self._conn.execute(
+                "SELECT * FROM match_players WHERE match_id = ? ORDER BY team, name", (row["id"],)
+            ).fetchall()
+        # Built with model_construct: these rows were validated when stored,
+        # and validating again per read cost most of the time and memory of
+        # loading every game (pydantic copies each dict and records a
+        # per-instance set of the fields given, ~2 KB a player). Names,
+        # handles and unit names repeat across thousands of games; interning
+        # keeps one copy of each instead of one per game.
         players = [
-            MatchPlayer(
-                name=p["name"],
-                toon_handle=p["toon_handle"],
+            MatchPlayer.model_construct(
+                set(),
+                name=sys.intern(p["name"]),
+                toon_handle=sys.intern(p["toon_handle"]),
                 team=p["team"],
-                race=p["race"],
-                pick=p["pick"],
+                race=sys.intern(p["race"]) if p["race"] else p["race"],
+                pick=sys.intern(p["pick"]) if p["pick"] else p["pick"],
                 repick_used=None if p["repick_used"] is None else bool(p["repick_used"]),
                 repick_from=p["repick_from"],
                 resources_killed=p["resources_killed"],
@@ -1607,12 +1651,13 @@ class MatchStore:
                 lost_all_bases=None if p["lost_all_bases"] is None else bool(p["lost_all_bases"]),
                 cannon_rush=None if p["cannon_rush"] is None else bool(p["cannon_rush"]),
                 spine_rush=None if p["spine_rush"] is None else bool(p["spine_rush"]),
-                unit_counts=json.loads(p["unit_counts"]),
-                kills_by_unit=json.loads(p["kills_by_unit"]),
+                unit_counts=_interned_keys(json.loads(p["unit_counts"])),
+                kills_by_unit=_interned_keys(json.loads(p["kills_by_unit"])),
             )
             for p in player_rows
         ]
-        return MonobattleMatch(
+        return MonobattleMatch.model_construct(
+            set(),
             file_name=row["file_name"],
             map_name=row["map_name"],
             map_hash=row["map_hash"],

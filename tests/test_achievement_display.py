@@ -6,6 +6,7 @@
 import datetime
 
 from services import match_embeds
+from services.achievements import SPECS as ACHIEVEMENT_SPECS
 from services.achievements import SPECS_BY_KEY, Earned
 
 DT = datetime.datetime(2026, 1, 1)
@@ -87,7 +88,7 @@ def test_announcement_shows_open_recipe():
 
 
 def test_profile_masks_secret_recipe():
-    embed = match_embeds.achievements_gallery("Bob", [Earned(SECRET, DT), Earned(OPEN, DT)], next_up=[])
+    (embed,) = match_embeds.achievements_gallery("Bob", [Earned(SECRET, DT), Earned(OPEN, DT)], next_up=[])
     text = _text(embed)
     assert "One-Man Army" in text  # name shown
     assert SECRET_RECIPE not in text  # recipe never on a public profile
@@ -97,7 +98,7 @@ def test_profile_masks_secret_recipe():
 
 def test_profile_reveals_own_secret_on_private_render():
     # Gate 2 on the profile: the viewer earned it AND this render is ephemeral.
-    embed = match_embeds.achievements_gallery(
+    (embed,) = match_embeds.achievements_gallery(
         "Bob", [Earned(SECRET, DT), Earned(OPEN, DT)], next_up=[], reveal_keys={"one_man_army"}
     )
     text = _text(embed)
@@ -108,10 +109,26 @@ def test_profile_reveals_own_secret_on_private_render():
 
 def test_profile_keeps_masking_secrets_the_viewer_lacks():
     # Looking someone else up privately must not hand over their recipes.
-    embed = match_embeds.achievements_gallery(
+    (embed,) = match_embeds.achievements_gallery(
         "Bob", [Earned(SECRET, DT), Earned(OPEN, DT)], next_up=[], reveal_keys={"some_other_secret"}
     )
     assert SECRET_RECIPE not in _text(embed)
+
+
+def test_long_profile_splits_into_pages_under_discord_limits():
+    # A long-time player's badges once made one embed over 6,000 characters
+    # and Discord rejected the whole message. Every spec held three times
+    # over stands in for a profile well past one message.
+    earned = [Earned(spec, DT) for spec in ACHIEVEMENT_SPECS] * 3
+    pages = match_embeds.achievements_gallery("Bob", earned, next_up=[])
+    assert len(pages) > 1
+    for n, embed in enumerate(pages, 1):
+        assert len(embed) <= 6000 and len(embed.fields) <= 25
+        assert all(len(f.value) <= 1024 for f in embed.fields)
+        assert embed.footer.text.endswith(f"page {n}/{len(pages)}")
+        assert embed.fields[0].name.strip("​")  # a page never opens on an unnamed field
+    shown = "".join(f.value for embed in pages for f in embed.fields)
+    assert all(f"**{spec.name}**" in shown for spec in ACHIEVEMENT_SPECS)  # nothing dropped
 
 
 def test_catalog_tags_unlocked_secret_as_secret():

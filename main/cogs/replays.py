@@ -496,12 +496,6 @@ class Replays(CommunityCog):
             footer.append(f"uploaded in {from_guild}")
         if len(footer) > 1:
             embed.set_footer(text=" · ".join(footer))
-        # Grant before posting: the ledger write is the part that matters, and
-        # a Discord hiccup on the summary must not leave the match ungranted.
-        pre_discovered = self.store.discovered_keys()  # before grant, to spot community-first secrets
-        unlocks = achievements.grant_new_unlocks(self.store, self.achievements, match)
-        unlocks += self._chronicler_unlock(author, match)
-
         needs_confirmation = long_enough(match) and (
             match.winning_team is None or match.winner_confidence < MIN_WINNER_CONFIDENCE
         )
@@ -514,13 +508,25 @@ class Replays(CommunityCog):
         )
         if next_view is not None:
             embed = lobby.lineup_embed(embed)
-        if needs_confirmation:
-            view = ConfirmWinnerView(self.store, result.match_id, self.achievements, next_view, shared=self._sharing())
-            view.message = await send_with_retry(channel, embed=embed, view=view)
-        elif next_view is not None:
-            next_view.track(await send_with_retry(channel, embed=embed, view=next_view))
-        else:
-            await send_with_retry(channel, embed=embed)
+        # The summary goes out BEFORE badges are granted: granting rebuilds
+        # every player's achievements, seconds of work at thousands of games
+        # that would otherwise hold the summary back. The grant still runs in
+        # a finally — the ledger write is the part that matters, and a
+        # Discord failure on the summary must not leave the match ungranted.
+        try:
+            if needs_confirmation:
+                view = ConfirmWinnerView(
+                    self.store, result.match_id, self.achievements, next_view, shared=self._sharing()
+                )
+                view.message = await send_with_retry(channel, embed=embed, view=view)
+            elif next_view is not None:
+                next_view.track(await send_with_retry(channel, embed=embed, view=next_view))
+            else:
+                await send_with_retry(channel, embed=embed)
+        finally:
+            pre_discovered = self.store.discovered_keys()  # before grant, to spot community-first secrets
+            unlocks = achievements.grant_new_unlocks(self.store, self.achievements, match)
+            unlocks += self._chronicler_unlock(author, match)
         if unlocks:
             first = frozenset(
                 e.spec.key for _, e in unlocks if achievements.is_secret(e.spec) and e.spec.key not in pre_discovered

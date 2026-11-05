@@ -95,3 +95,40 @@ def test_a_confirmed_winner_settles_the_other_copy(setup):
     copy = other.store.get_match(other.store.find_game(unsure)["id"])
     assert copy.winning_team == 2
     assert copy.winner_method == "confirmed"
+
+
+def _unlock_count(store):
+    return store._conn.execute("SELECT COUNT(*) FROM achievement_unlocks").fetchone()[0]
+
+
+def test_the_summary_goes_out_before_badges_are_granted(setup):
+    # Granting rebuilds every player's achievements — seconds at thousands of
+    # games — so it must not hold the summary back.
+    client, home, _other, channels = setup
+    seen = []
+    channel = channels[10]
+    plain_send = channel.send
+
+    async def send(**kwargs):
+        seen.append(_unlock_count(home.store))
+        return await plain_send(**kwargs)
+
+    channel.send = send
+    _upload(client, home, channel, _match())
+    assert seen[0] == 0  # nothing granted yet when the summary went out
+    assert _unlock_count(home.store) > 0  # ...and granted right after
+    assert len(channel.sent) == 2  # summary, then the badges
+
+
+def test_badges_are_granted_even_if_the_summary_fails(setup):
+    client, home, _other, channels = setup
+    channel = channels[10]
+
+    async def broken(**kwargs):
+        raise RuntimeError("Discord said no")
+
+    channel.send = broken
+    with pytest.raises(RuntimeError):
+        _upload(client, home, channel, _match())
+    assert home.store.match_count() == 1
+    assert _unlock_count(home.store) > 0

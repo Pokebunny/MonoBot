@@ -2,10 +2,8 @@ import datetime
 
 from pydantic import BaseModel
 
-# Race of every unit that can appear as a player's army: unit -> race. Used by
-# the replay parser, where a preview unit whose race contradicts the race
-# actually played is a stale browse. This is NOT the pick pool — see
-# PICKABLE_UNITS below.
+# Race of every army unit (the parser drops previews of the wrong race). Not
+# the pick pool — see PICKABLE_UNITS.
 UNIT_RACE = {
     "Marine": "Terran",
     "Marauder": "Terran",
@@ -57,21 +55,15 @@ UNIT_RACE = {
     "Mothership": "Protoss",
 }
 
-# Units the map never offers as a pick: the four support units a player gets
-# alongside their real army, plus two the pool simply omits. Confirmed by the
-# match history — 42 distinct picks across every game on record, never these.
+# Never offered as picks: four support units plus two the pool omits
+# (confirmed: 42 distinct picks in all history).
 _NOT_IN_PICK_POOL = frozenset({"Medivac", "Observer", "WarpPrism", "Overseer", "Mothership", "Viper"})
 
-# The 42-unit pick pool. Roster-completion achievements (Royal Flush, Winning
-# Hand, Exterminator, the zoo set) count and name units from this set, so a
-# player is never told to go win with a unit the map cannot deal them.
 PICKABLE_UNITS = frozenset(UNIT_RACE) - _NOT_IN_PICK_POOL
 
 
-# Which killer unit types count as a pick's OWN damage. Most units kill under
-# their own name, so only the units whose damage is dealt by something else are
-# listed here -- measured over 300 replays (docs/kill-attribution.md), each of
-# these accounts for the bulk of that pick's credited value:
+# Killers that count as a pick's own damage, for picks that kill through
+# something else (share of credited value over 300 replays):
 #   Carrier 95% Interceptor · SwarmHost 92% Locust · Raven 70% AutoTurret ·
 #   BroodLord 70% broodlings · HighTemplar 59% (the rest are Archon merges)
 PICK_KILLERS = {
@@ -82,8 +74,7 @@ PICK_KILLERS = {
     "HighTemplar": frozenset({"HighTemplar", "Archon"}),
 }
 
-# Kills that are NOT the player's army: their base defending itself, and
-# workers pulled to fight. Kept separate so a feature can ask for either.
+# Kills that aren't the player's army.
 STATIC_DEFENSE_KILLERS = frozenset(
     {"PhotonCannon", "SpineCrawler", "SpineCrawlerUprooted", "SporeCrawler",
      "SporeCrawlerUprooted", "MissileTurret", "PlanetaryFortress", "Bunker"}
@@ -100,42 +91,28 @@ class MatchPlayer(BaseModel):
     repick_used: bool | None = None  # blind random only: player repicked their unit
     repick_from: str | None = None  # the unit they repicked away from, if known
     resources_killed: int | None = None  # enemy value destroyed (final stats snapshot)
-    econ_killed: int | None = None  # enemy economy value destroyed
-    tech_killed: int | None = None  # enemy tech/building value destroyed
-    resources_lost: int | None = None  # own value lost
+    econ_killed: int | None = None
+    tech_killed: int | None = None
+    resources_lost: int | None = None
     resources_floated: int | None = None  # median unspent bank over the game
-    drop_commands: int | None = None  # transport/Nydus unload commands issued
-    static_defense: int | None = None  # defensive structures completed
+    drop_commands: int | None = None
+    static_defense: int | None = None
     bases_before_unit: int | None = None  # town halls completed before first unit
-    orbitals: int | None = None  # Orbital Commands owned (Terran)
-    lost_all_bases: bool | None = None  # was ever wiped down to zero town halls
-    # Started a cannon nearer an enemy's starting base than their own, early
-    # (replay_parser._CANNON_RUSH_WINDOW_SECONDS). An extra the boards rate
-    # alongside the pick, never instead of it. None = not recorded (parsed
-    # before it existed) or no starting bases to measure from.
+    orbitals: int | None = None
+    lost_all_bases: bool | None = None  # ever down to zero town halls
+    # Early forward cannon / crawler (rules in replay_parser). None = not
+    # recorded or unmeasurable.
     cannon_rush: bool | None = None
-    # The Zerg version: a spine or spore crawler started early, well toward an
-    # enemy's base (replay_parser._CRAWLER_RUSH_WINDOW_SECONDS). Same rules.
     spine_rush: bool | None = None
     unit_counts: dict[str, int]  # normalized army-unit production counts
-    # Enemy value destroyed, keyed by which of this player's unit types killed
-    # it (their pick, but also cannons, workers, and spawned children like
-    # Interceptors or Locusts). Empty for games parsed before it was recorded.
-    # Its own metric, NOT a breakdown of resources_killed -- see
-    # docs/kill-attribution.md.
+    # Enemy value destroyed by killer unit type. Its own metric, not a breakdown
+    # of resources_killed — see docs/kill-attribution.md.
     kills_by_unit: dict[str, int] = {}
 
     @property
     def own_kills(self) -> int:
-        """Enemy value destroyed by this player's PICK, excluding their static
-        defense, their workers, and anything else that got a kill for them.
-
-        Every stored game has attribution (see docs/kill-attribution.md), so
-        zero means the pick was credited with nothing. A few picks deal their
-        damage through spells the tracker credits to nobody (Infestor ~34% of
-        its player's value, Sentry ~31%),
-        so this UNDERSTATES those specifically -- see docs/kill-attribution.md
-        before setting a threshold on one."""
+        """Value destroyed by the pick itself (through PICK_KILLERS). Understates
+        spell casters (Infestor, Sentry) — see docs/kill-attribution.md."""
         if not self.pick:
             return 0
         killers = PICK_KILLERS.get(self.pick, frozenset({self.pick}))
@@ -143,21 +120,15 @@ class MatchPlayer(BaseModel):
 
 
 class MapVersion(BaseModel):
-    """The terrain behind one published version of the arcade map. Every
-    monobattle is played on the same arcade map ("Monobattle LotV - Map
-    Rotation"), so map_name never varies; the rotation happens when the
-    author republishes with new terrain, which changes the map's hash. The
-    terrain's real name is only in the published map file — see
-    services.replay_parser.fetch_map_version."""
+    """The terrain behind one published version (hash) of the arcade map."""
 
     map_hash: str
     name: str  # e.g. "The Ashen Cradle"
     author: str | None = None  # terrain's credited author, when given
 
 
-# Game seconds per real second at Faster, the speed every monobattle runs at.
-# A replay's events are stamped in game seconds; its length — and the in-game
-# timer, since LotV — runs in real ones.
+# At Faster speed. Replay events are in game seconds; duration and the
+# in-game timer are real seconds.
 GAME_SECONDS_PER_SECOND = 1.4
 
 
@@ -166,56 +137,34 @@ class MonobattleMatch(BaseModel):
     map_name: str  # the arcade map's own name, identical for every game
     map_hash: str = ""  # published-version hash; resolves to the real terrain
     played_at: datetime.datetime  # UTC
-    # The game's random seed, shared by every player's recording of it and
-    # fresh for each game -- unlike played_at, which comes from the
-    # recorder's own clock. None on games parsed before it was read.
+    # Shared by every recording of one game (unlike played_at, the recorder's clock).
     game_seed: int | None = None
     duration_seconds: int  # real seconds, the clock the in-game timer shows
     game_type: str  # e.g. "4v4", from real_type
     pick_mode: str  # "blind_random" | "single_draft" | "tier_draft"
-    # When the battle actually started, in GAME seconds (the replay's event
-    # clock) — not the real seconds duration_seconds counts in. See
-    # GAME_SECONDS_PER_SECOND.
-    pick_phase_seconds: int
+    pick_phase_seconds: int  # GAME seconds, unlike duration_seconds
     players: list[MatchPlayer]
     winning_team: int | None  # None when no winner recorded or inferred
     winner_confidence: float  # 1.0 recorded, <1.0 inferred, 0.0 unknown
     winner_method: str  # "recorded" | "inferred:<signals>" | "unknown"
     comeback_deficit: int | None = None  # winner's worst deficit in value on the map
     lead_changes: int | None = None  # meaningful flips of the lead in value on the map
-    # Someone in the game called for a remake once the battle was on
-    # (replay_parser._REMAKE_RE). None on games parsed before it was read.
+    # Someone called for a remake after the battle began (replay_parser._REMAKE_RE).
     remake_called: bool | None = None
-    # Kept although it breaks storage.rejection_reason's rules, because
-    # someone vouched for it (a real game that happened to end early).
+    # Vouched for despite storage.rejection_reason (a real game that ended early).
     approved: bool = False
 
     @property
     def battle_seconds(self) -> int:
-        """How long the fighting actually lasted: the replay's length less the
-        pick phase. This is what people mean by how long a game was — the
-        draft is dead time on the clock, and it is a whole minute of a
-        blind-random game and three to four minutes of a drafted one.
-
-        In real seconds, like the in-game timer: the pick phase is converted
-        off the event clock first. Subtracting it raw (as this once did)
-        shaved ~20s off a blind-random game and ~80s off a drafted one, and
-        turned real three-minute games away as remakes.
-
-        Clamped at zero for the handful of games that ended before the picks
-        were even finished. NOTE that the rating gate and MatchStore's queries
-        still measure duration_seconds; moving those would change which games
-        rate."""
+        """Real seconds of fighting: duration less the pick phase (converted
+        from game seconds). The rating gate still uses duration_seconds."""
         return max(0, self.duration_seconds - round(self.pick_phase_seconds / GAME_SECONDS_PER_SECOND))
 
     def team(self, number: int) -> list[MatchPlayer]:
         return [p for p in self.players if p.team == number]
 
     def mvp(self) -> MatchPlayer | None:
-        """The player who destroyed the most enemy value, either team — a
-        dominant losing performance still earns it (community choice; the
-        lobby's top killer is on the losing team in ~24% of games). None when
-        there are no kill stats (pre-archive parses)."""
+        """Top killer on either team (a community choice), or None without stats."""
         scored = [p for p in self.players if p.resources_killed]
         if not scored:
             return None

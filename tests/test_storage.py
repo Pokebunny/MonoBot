@@ -2,7 +2,7 @@ import datetime
 import sqlite3
 
 import pytest
-from models.replay import MatchPlayer, MonobattleMatch
+from conftest import BASE, make_match, make_player
 from services.rating import MIN_DURATION_SECONDS, MIN_WINNER_CONFIDENCE, RatingBook
 from services.storage import (
     MatchStore,
@@ -10,8 +10,6 @@ from services.storage import (
     hash_replay,
     rejection_reason,
 )
-
-BASE = datetime.datetime(2026, 7, 17, 12, 0, tzinfo=datetime.timezone.utc)
 
 
 def _match(
@@ -25,29 +23,25 @@ def _match(
 ):
     names = roster or ["A0", "A1", "A2", "A3", "B0", "B1", "B2", "B3"]
     players = [
-        MatchPlayer(
-            name=n,
-            toon_handle=f"h-{n}",
-            team=(1 if i < 4 else 2),
-            race="Zerg",
+        make_player(
+            n,
+            1 if i < 4 else 2,
+            handle=f"h-{n}",
             pick="Zergling" if i < 4 else "Marine",
             repick_used=(i % 4 == 0),
             unit_counts={"Zergling": 100} if i < 4 else {"Marine": 80},
         )
         for i, n in enumerate(names)
     ]
-    return MonobattleMatch(
+    return make_match(
+        players,
+        winning_team=winning_team,
+        confidence=confidence,
+        method=method,
         file_name=file_name,
-        map_name="Monobattle LotV - Map Rotation",
         played_at=played_at or BASE,
         duration_seconds=duration,
-        game_type="4v4",
-        pick_mode="blind_random",
         pick_phase_seconds=63,
-        players=players,
-        winning_team=winning_team,
-        winner_confidence=confidence,
-        winner_method=method,
     )
 
 
@@ -57,26 +51,19 @@ def _at(minutes):
     return BASE + datetime.timedelta(minutes=20 * minutes)
 
 
-@pytest.fixture
-def store(tmp_path):
-    s = MatchStore(str(tmp_path / "test.db"))
-    yield s
-    s.close()
-
-
 def test_discovered_keys(store):
     assert store.discovered_keys() == set()
     store.record_unlocks([("A1", "one_man_army", "2026-01-01T00:00:00")])
-    store.record_unlocks([("A2", "one_man_army", "2026-01-02T00:00:00")])  # same key, another holder
+    store.record_unlocks([("A2", "one_man_army", "2026-01-02T00:00:00")])
     store.record_unlocks([("A1", "deja_vu", "2026-01-03T00:00:00")])
     assert store.discovered_keys() == {"one_man_army", "deja_vu"}
 
 
 def test_meta_get_set_roundtrip(store):
-    assert store.get_meta("queue_message") is None  # unset
+    assert store.get_meta("queue_message") is None
     store.set_meta("queue_message", "123:456")
     assert store.get_meta("queue_message") == "123:456"
-    store.set_meta("queue_message", "")  # cleared
+    store.set_meta("queue_message", "")
     assert store.get_meta("queue_message") == ""
 
 

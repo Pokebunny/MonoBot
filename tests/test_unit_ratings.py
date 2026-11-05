@@ -1,35 +1,21 @@
 import datetime
 
 from cogs.leaderboard import UNIT_MIN_GAMES, Leaderboard
-from models.replay import MatchPlayer, MonobattleMatch
+from conftest import TEAM1, TEAM2, make_match, make_player
 from services.match_embeds import unit_board
 from services.rating import unit_baseline, unit_ratings
 
 BASE = datetime.datetime(2026, 7, 17, tzinfo=datetime.timezone.utc)
 
 
-def _match(winning_team, team1=None, team2=None, picks1=None, picks2=None, minutes=0, confidence=1.0):
-    team1 = team1 or ["A1", "A2", "A3", "A4"]
-    team2 = team2 or ["B1", "B2", "B3", "B4"]
-    picks1 = picks1 or ["Zergling"] * 4
-    picks2 = picks2 or ["Roach"] * 4
-    players = [
-        MatchPlayer(name=n, toon_handle=n, team=t, race="Zerg", pick=pick, repick_used=False, unit_counts={})
-        for t, names, picks in ((1, team1, picks1), (2, team2, picks2))
-        for n, pick in zip(names, picks)
-    ]
-    return MonobattleMatch(
-        file_name="test.SC2Replay",
-        map_name="Monobattle LotV - Map Rotation",
-        played_at=BASE + datetime.timedelta(minutes=minutes),
-        duration_seconds=900,
-        game_type="4v4",
-        pick_mode="blind_random",
-        pick_phase_seconds=60,
-        players=players,
+def _match(winning_team, team1=TEAM1, team2=TEAM2, picks1=None, picks2=None, minutes=0, confidence=1.0):
+    sides = ((1, team1, picks1 or ["Zergling"] * 4), (2, team2, picks2 or ["Roach"] * 4))
+    players = [make_player(n, t, pick=pick) for t, names, picks in sides for n, pick in zip(names, picks)]
+    return make_match(
+        players,
         winning_team=winning_team,
-        winner_confidence=confidence,
-        winner_method="recorded",
+        confidence=confidence,
+        played_at=BASE + datetime.timedelta(minutes=minutes),
     )
 
 

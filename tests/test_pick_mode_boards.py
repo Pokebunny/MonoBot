@@ -4,40 +4,28 @@ import datetime
 
 import pytest
 from cogs.leaderboard import _find_mode
-from models.replay import MatchPlayer, MonobattleMatch
+from conftest import BASE, make_match, make_player
 from services import match_embeds
 from services.rating import pick_board, season_book
 from services.storage import MatchStore, hash_replay
 
-BASE = datetime.datetime(2026, 7, 17, 12, 0, tzinfo=datetime.timezone.utc)
-
 
 def _match(index, pick_mode, winning_team=1):
-    names = ["A0", "A1", "A2", "A3", "B0", "B1", "B2", "B3"]
-    players = [
-        MatchPlayer(
-            name=n,
-            toon_handle=f"h-{n}",
-            team=(1 if i < 4 else 2),
-            race="Zerg",
-            pick="Zergling",
-            unit_counts={"Zergling": 100},
-        )
-        for i, n in enumerate(names)
-    ]
-    return MonobattleMatch(
+    return make_match(
+        _roster(),
+        winning_team=winning_team,
         file_name=f"g{index}.SC2Replay",
-        map_name="Monobattle LotV - Map Rotation",
         played_at=BASE + datetime.timedelta(minutes=20 * index),
-        duration_seconds=900,
-        game_type="4v4",
         pick_mode=pick_mode,
         pick_phase_seconds=63 if pick_mode == "blind_random" else 200,
-        players=players,
-        winning_team=winning_team,
-        winner_confidence=1.0,
-        winner_method="recorded",
     )
+
+
+def _roster():
+    names = ["A0", "A1", "A2", "A3", "B0", "B1", "B2", "B3"]
+    return [
+        make_player(n, 1 if i < 4 else 2, handle=f"h-{n}", unit_counts={"Zergling": 100}) for i, n in enumerate(names)
+    ]
 
 
 @pytest.fixture

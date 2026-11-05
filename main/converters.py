@@ -1,15 +1,6 @@
-"""Argument converters shared by the cogs.
-
-discord.py matches a typed member name with `==`, so `!whois bob` missed a
-member whose nickname is "Bob". `MemberConverter` keeps the stock lookup (ids,
-mentions, exact names) and only falls back to ignoring case when that finds
-nobody — an exact-case match always wins. A name that fits several members
-ignoring case raises `AmbiguousMember`, which carries them so a command can
-put up the same player picker an ambiguous SC2 name gets.
-
-`install()` swaps it in for every `discord.Member` parameter, so commands
-annotate with plain `discord.Member` and slash commands keep Discord's native
-member picker (which never goes through a converter).
+"""A case-insensitive fallback for discord.py's exact-match member lookup.
+An exact-case match still wins; several case-insensitive matches raise
+`AmbiguousMember` so commands can offer a picker.
 """
 
 import discord
@@ -18,8 +9,7 @@ from discord.ext.commands import converter as _converter
 
 
 class AmbiguousMember(commands.MemberNotFound):
-    """Several members are called this, ignoring case. A MemberNotFound, so
-    commands that don't offer a picker (`!linkuser`) just report it."""
+    """A MemberNotFound, so commands without a picker just report it."""
 
     def __init__(self, argument: str, members: list[discord.Member]):
         self.argument = argument
@@ -41,9 +31,7 @@ class MemberConverter(commands.MemberConverter):
 
 
 def members_named_ignoring_case(guild: discord.Guild | None, name: str) -> list[discord.Member]:
-    """Members called `name` in any case. Usernames are unique, so a username
-    match is the answer on its own; display names and nicknames are not, so
-    those can return several."""
+    """A unique username match wins over (possibly shared) display names."""
     if guild is None:
         return []
     wanted = name.strip().casefold()

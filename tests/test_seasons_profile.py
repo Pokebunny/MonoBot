@@ -10,40 +10,23 @@ import types
 
 import pytest
 from cogs.leaderboard import Leaderboard
-from conftest import community_cog
+from conftest import BASE, community_cog, make_match, make_player
 from models.rating import PlayerRating
-from models.replay import MatchPlayer, MonobattleMatch
 from services import identity, match_embeds
 from services.storage import MatchStore, hash_replay
-
-BASE = datetime.datetime(2026, 7, 17, 12, 0, tzinfo=datetime.timezone.utc)
 
 
 def _match(index, winning_team=1, played_at=None):
     names = ["A0", "A1", "A2", "A3", "B0", "B1", "B2", "B3"]
     players = [
-        MatchPlayer(
-            name=n,
-            toon_handle=f"h-{n}",
-            team=(1 if i < 4 else 2),
-            race="Zerg",
-            pick="Zergling",
-            unit_counts={"Zergling": 100},
-        )
-        for i, n in enumerate(names)
+        make_player(n, 1 if i < 4 else 2, handle=f"h-{n}", unit_counts={"Zergling": 100}) for i, n in enumerate(names)
     ]
-    return MonobattleMatch(
-        file_name=f"g{index}.SC2Replay",
-        map_name="Monobattle LotV - Map Rotation",
-        played_at=played_at or BASE + datetime.timedelta(minutes=20 * index),
-        duration_seconds=900,
-        game_type="4v4",
-        pick_mode="blind_random",
-        pick_phase_seconds=63,
-        players=players,
+    return make_match(
+        players,
         winning_team=winning_team,
-        winner_confidence=1.0,
-        winner_method="recorded",
+        file_name=f"g{index}.SC2Replay",
+        played_at=played_at or BASE + datetime.timedelta(minutes=20 * index),
+        pick_phase_seconds=63,
     )
 
 
@@ -100,8 +83,8 @@ def test_season_rating_returns_once_they_play_again(cog):
     later = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5)
     cog.store.ingest(_match(100, played_at=later), hash_replay(b"new"))
     career, season, rank, total, _n = _resolve(cog, "A0")
-    assert career.games == 7  # career counts both seasons
-    assert season is not None and season.games == 1  # season counts only the new one
+    assert career.games == 7
+    assert season is not None and season.games == 1
     assert rank is None and total == 0  # 1 game is under MIN_RANKED_GAMES
 
 

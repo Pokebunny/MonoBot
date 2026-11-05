@@ -1,9 +1,4 @@
-"""Skill ratings for monobattle players.
-
-Uses openskill's Plackett-Luce model (TrueSkill-family Bayesian ratings,
-native team support). openskill is isolated behind this module the same way
-sc2reader is behind replay_parser.
-"""
+"""Skill ratings (openskill Plackett-Luce, isolated behind this module)."""
 
 import itertools
 import logging
@@ -14,64 +9,47 @@ from openskill.models import PlackettLuce
 
 logger = logging.getLogger(__name__)
 
-# Matches below these bars don't move ratings: the in-game counter ignores
-# games where someone leaves before ~2 minutes, and uncertain winners go to
-# manual confirmation instead of silently rating the wrong team.
+# Below these bars a match doesn't move ratings: the in-game counter ignores
+# sub-2-minute games, and uncertain winners go to manual confirmation.
 MIN_DURATION_SECONDS = 120
 MIN_WINNER_CONFIDENCE = 0.7
-# Only full 4v4s are rated: a 3v3 or an uneven lobby is a different game, and
-# scoring it on the same scale muddies the ladder.
-TEAM_SIZE = 4
+TEAM_SIZE = 4  # only full 4v4s are rated
 
-# Games needed to appear on the leaderboard and hold a rank; players below it
-# still have a rating, shown as unranked.
-MIN_RANKED_GAMES = 5
+MIN_RANKED_GAMES = 5  # below this a player is shown unranked
 
 _model = PlackettLuce()
 
-# Rating a brand-new/unlinked player starts with, from the model's prior.
 _default = _model.rating()
 DEFAULT_MU = _default.mu
 DEFAULT_SIGMA = _default.sigma
 
 
 def long_enough(match: MonobattleMatch) -> bool:
-    """Long enough to count: past MIN_DURATION_SECONDS, or approved on upload
-    (a real game that ended early — see MonobattleMatch.approved). Every
-    duration gate goes through this, or the SQL twins in MatchStore."""
+    """Past MIN_DURATION_SECONDS or approved on upload. Every duration gate
+    goes through this or its SQL twins in MatchStore."""
     return match.duration_seconds >= MIN_DURATION_SECONDS or match.approved
 
 
 def predict_win_probability(team1: list[tuple[float, float]], team2: list[tuple[float, float]]) -> float:
-    """Predicted probability that team1 beats team2, from (mu, sigma) pairs.
-    0.5 means an evenly matched game. Keeps openskill calls in this module."""
+    """P(team1 beats team2), from (mu, sigma) pairs."""
     t1 = [_model.create_rating([mu, sigma]) for mu, sigma in team1]
     t2 = [_model.create_rating([mu, sigma]) for mu, sigma in team2]
     return _model.predict_win([t1, t2])[0]
 
 
-# Display rating a player carries before their first rated game (the model's
-# prior, run through PlayerRating.display_rating).
 DEFAULT_DISPLAY = PlayerRating(handle="", name="", mu=DEFAULT_MU, sigma=DEFAULT_SIGMA).display_rating
 
-# A soft season reset seeds each player from their career rating at the
-# boundary: mu keeps SOFT_RESET_CARRYOVER of its distance from the prior, and
-# sigma goes back up to SOFT_RESET_SIGMA (never down — a player the career
-# book is still unsure of stays unsure). Chosen by
-# scripts/soft_reset_backtest.py: carrying skill over is what predicts the new
-# season (a hard reset was the worst setting tried), while resetting sigma all
-# the way costs next to nothing and leaves everyone free to move — wanted, so
-# a season still feels like a fresh climb.
+# Soft reset: mu keeps SOFT_RESET_CARRYOVER of its distance from the prior;
+# sigma rises to SOFT_RESET_SIGMA, never falls. Chosen by
+# scripts/soft_reset_backtest.py (a hard reset predicted worst; resetting sigma
+# fully costs almost nothing and keeps the season a fresh climb).
 SOFT_RESET_CARRYOVER = 0.7
 SOFT_RESET_SIGMA = DEFAULT_SIGMA
 
-# Where a player's first game starts, by the SC2 level they reported before
-# it (MatchStore.skill_level) — beginner below Diamond, mid Diamond-Master,
-# top Grandmaster. Only mu moves: sigma stays at the prior, so a wrong pick
-# washes out within a few games and the board (mu - 3 sigma) still starts
-# everyone near the bottom. The prior already sits at the established
-# players' median, which is about where Diamond-Master lands; beginner and
-# top are roughly that crowd's 15th and 90th percentiles.
+# First-game mu by reported level (beginner < Diamond, mid Diamond-Master, top
+# GM); sigma stays at the prior so a wrong pick washes out. The prior is the
+# established players' median (~Diamond-Master); beginner/top sit near their
+# 15th/90th percentiles.
 SKILL_LEVEL_MU = {"beginner": 21.0, "mid": DEFAULT_MU, "top": 30.0}
 
 
@@ -83,16 +61,10 @@ def level_mu(level: str | None) -> float:
 def match_rating_deltas(
     matches, match_id: int, merge_map: dict[str, str] | None = None, start: "RatingBook | None" = None
 ) -> dict[str, tuple[int, int]]:
-    """For the match with id `match_id`, each participant's (before, after)
-    display rating, computed at the match's true chronological position by
-    replaying history up to and through it. Keyed by the player's own
-    toon_handle (so callers can look up by MatchPlayer without a merge map).
-
-    Empty when the match didn't move ratings (unrateable — no winner, low
-    confidence, too short), which is exactly when callers should say so rather
-    than show a change. `matches` is an iterable of (id, match) pairs, e.g.
-    MatchStore.all_matches(). `start` is the book the walk begins from (a
-    soft-reset season's seeds, see season_start); it is consumed."""
+    """Each participant's (before, after) display rating for `match_id`, at its
+    chronological position, keyed by their own toon_handle. Empty when the match
+    was unrateable. `matches` is (id, match) pairs; `start` (e.g. a
+    season_start book) is consumed."""
     book = start if start is not None else RatingBook(merge_map)
     ordered = sorted(matches, key=lambda im: im[1].played_at)
     for mid, match in ordered:
@@ -112,17 +84,9 @@ def match_rating_deltas(
 
 
 def duo_records(matches, merge_map: dict[str, str] | None = None) -> dict[tuple[str, str], DuoRecord]:
-    """Every pair that has played on the same team, keyed by their two
-    canonical handles (sorted). `matches` is an iterable of MonobattleMatch,
-    e.g. (m for _, m in store.all_matches()).
-
-    Ratings are replayed chronologically so each game is scored against what
-    the model believed BEFORE it — the same walk RatingBook.from_matches does,
-    with one extra prediction per match to bank the pair's expected wins.
-    Unrateable games are skipped, so a pair's record here matches the one the
-    ladder counts.
-
-    Each pair also carries a rating of its own; see _rate_duo."""
+    """Every pair of teammates, keyed by sorted canonical handles. Each game is
+    scored against pre-match ratings; unrateable games are skipped, as on the
+    ladder. See CLAUDE.md "Pair stats" for what the numbers mean."""
     book = RatingBook(merge_map)
     records: dict[tuple[str, str], DuoRecord] = {}
     for match in sorted(matches, key=lambda m: m.played_at):
@@ -133,14 +97,10 @@ def duo_records(matches, merge_map: dict[str, str] | None = None) -> dict[tuple[
 
 
 def _tally_duos(book: "RatingBook", match: MonobattleMatch, records: dict[tuple[str, str], DuoRecord]) -> None:
-    """Credit one rateable match to every pair of teammates in it. Called
-    before the match is rated, so both the prediction and the individual
-    ratings used here are the pre-match ones."""
+    """Credit one rateable match to every teammate pair. Call before rating it."""
     team_numbers = sorted({p.team for p in match.players})
     sides = [match.team(n) for n in team_numbers]
     probability = predict_win_probability(*[[_prior(book, p) for p in side] for side in sides])
-    # By canonical handle: merged accounts are one person, so a pair is counted
-    # once however either of them was logged in.
     rosters = [{book.canonical(p.toon_handle): p.name for p in side} for side in sides]
     solo = {
         book.canonical(p.toon_handle): _model.create_rating(list(_prior(book, p)), name=book.canonical(p.toon_handle))
@@ -163,19 +123,8 @@ def _tally_duos(book: "RatingBook", match: MonobattleMatch, records: dict[tuple[
 
 
 def _rate_duo(record: DuoRecord, teammates: list, opponents: list, won: bool) -> None:
-    """Update the pair's own rating from one game.
-
-    The pair is rated as a single entity standing in for its two roster slots:
-    its side of the match is [the pair] + their other two teammates, against
-    the four opponents, everyone else entering at their individual rating of
-    the moment. So the number answers "how strong is this pair" — opponent-
-    adjusted the way raw win rate is not, and a level rather than a residual,
-    which is why it holds up across halves of history where wins-above-
-    expected does not.
-
-    It is mostly, but not only, the two players' individual skill: with the
-    combined skill regressed out, what is left still correlates across halves,
-    so a little of it is the pair itself."""
+    """Rate the pair as one entity filling its two slots, beside its other two
+    teammates and against the four opponents at their individual ratings."""
     entity = _model.create_rating([record.mu, record.sigma], name=str(record.handles))
     ranks = [0, 1] if won else [1, 0]
     updated = _model.rate([[entity] + teammates, opponents], ranks=ranks)[0][0]
@@ -183,45 +132,24 @@ def _rate_duo(record: DuoRecord, teammates: list, opponents: list, won: bool) ->
 
 
 def _prior(book: "RatingBook", player) -> tuple[float, float]:
-    """A player's (mu, sigma) going into a match — the model's prior for
-    anyone who hasn't played yet."""
+    """A player's pre-match (mu, sigma), or the prior."""
     rating = book.rating_for(player.toon_handle)
     return (rating.mu, rating.sigma) if rating is not None else (DEFAULT_MU, DEFAULT_SIGMA)
 
 
-# A unit starts far more certain than a new player: there are only ~45 picks,
-# each with hundreds of games, and a tight prior shrinks the rarely-picked
-# ones toward the average instead of letting a lucky 10 games top the board.
-# Of the priors tried against the live history (a half and a quarter of a
-# player's), a quarter predicted the later half of it best.
+# Tight, so rarely-picked units shrink toward the average. A quarter of a
+# player's sigma out-predicted a half on the live history.
 UNIT_PRIOR_SIGMA = DEFAULT_SIGMA / 4
 
 
 def unit_ratings(matches, merge_map: dict[str, str] | None = None, season=None) -> dict[str, UnitRating]:
-    """Every unit pick's rating, keyed by pick. `matches` is an iterable of
-    MonobattleMatch, e.g. (m for _, m in store.all_matches()).
+    """Every pick's rating. Each unit is an extra member of its picker's team;
+    players enter at their pre-match ladder rating and only units learn (see
+    CLAUDE.md "Unit ratings"). Games with an unknown pick are skipped.
 
-    Each unit is an extra member of its picker's team, so a side is its four
-    players plus their four picks and its strength is the sum of all eight.
-    The players enter at their ladder rating from before the game and are
-    never changed by this walk — only the units learn. So a unit's rating is
-    what the pick adds beyond the skill of whoever picked it, against the
-    players and picks it faced: the adjustment raw win rate can't make, where
-    a unit good players favour looks strong for their sake.
-
-    Measured on the live history this holds up the way the duo rating does:
-    a unit's rating in one half of the games correlates with the other half
-    (r ~ +0.6), and adding unit ratings to the ladder's win prediction helps
-    out of sample by more than merely padding each side with untrained slots
-    does. Letting players and units learn together was tried and predicted
-    slightly worse, besides moving the ladder — which this must not do.
-
-    Only games where every pick is known count; a side missing a unit would
-    be scored as if that slot were an average pick. Career-wide, unless
-    `season` is given: then only its games move the units, which start fresh
-    at its start. The players still walk all of `matches` and enter at their
-    career rating — a hard-reset season's ladder would have everyone at the
-    prior for its first games, and the units would soak up who picked them."""
+    With `season`, only its games move the units, but players still walk all
+    of `matches` at their career rating — a hard reset would put everyone at
+    the prior and the units would soak up who picked them."""
     book = RatingBook(merge_map)
     units: dict[str, UnitRating] = {}
     for match in sorted(matches, key=lambda m: m.played_at):
@@ -233,8 +161,7 @@ def unit_ratings(matches, merge_map: dict[str, str] | None = None, season=None) 
 
 
 def _rate_units(book: "RatingBook", match: MonobattleMatch, units: dict[str, UnitRating]) -> None:
-    """Update every pick in one match. Called before the match is rated, so
-    the players enter at their pre-match ratings."""
+    """Update every pick in one match. Call before rating it."""
     team_numbers = sorted({p.team for p in match.players})
     sides = [match.team(n) for n in team_numbers]
     for p in match.players:
@@ -247,12 +174,8 @@ def _rate_units(book: "RatingBook", match: MonobattleMatch, units: dict[str, Uni
     ]
     ranks = [0 if n == match.winning_team else 1 for n in team_numbers]
     rated = _model.rate(teams, ranks=ranks)
-    # Every slot is scored against the same pre-match unit rating, then the
-    # changes are pooled: a pick fielded twice in one game (or on both sides)
-    # gets both slots' mu moves, rather than the last slot overwriting the
-    # first. Sigma takes the tightest slot's: each update also adds the
-    # model's per-game drift (tau), which must count once per game, not once
-    # per slot.
+    # Pool the slots: a pick fielded twice sums both mu moves, and takes the
+    # tightest sigma so the per-game drift (tau) counts once, not per slot.
     moves: dict[str, list[float]] = {}  # pick -> [summed mu change, new sigma]
     for side, new, rank in zip(sides, rated, ranks):
         for p, after in zip(side, new[len(side) :]):
@@ -270,9 +193,8 @@ def _rate_units(book: "RatingBook", match: MonobattleMatch, units: dict[str, Uni
 
 
 def unit_baseline(units) -> float:
-    """The average pick's mu, weighted by how often each is fielded — the zero
-    a unit's bonus is shown against. Not the prior: the picks' ratings only
-    mean anything relative to each other, since every side fields four."""
+    """Games-weighted average pick mu: the zero unit bonuses are shown against.
+    Not the prior — unit ratings are only meaningful relative to each other."""
     units = list(units)
     games = sum(u.games for u in units)
     return sum(u.mu * u.games for u in units) / games if games else DEFAULT_MU
@@ -282,45 +204,27 @@ class RatingBook:
     """All player ratings, updated match by match (in chronological order)."""
 
     def __init__(self, merge_map: dict[str, str] | None = None, by_race: bool = False):
-        self.ratings: dict[str, PlayerRating] = {}
-        # handle -> canonical handle, so one person's linked accounts share a
-        # single rating (see MatchStore.merge_map).
-        self._merge = merge_map or {}
-        # by_race: each person holds a separate rating per race, and every game
-        # scores the race they played against the races their opponents
-        # played. One walk rates all three, so a race board's opponents enter
-        # at their rating on the race they were on, not their overall one.
-        # Entries are keyed "handle/race"; PlayerRating.handle stays the
-        # canonical handle so names and links resolve as on the main board.
+        self.ratings: dict[str, PlayerRating] = {}  # only players who have played
+        self._merge = merge_map or {}  # handle -> canonical handle
+        # by_race: one rating per person per race, keyed "handle/race"; opponents
+        # enter at their rating on the race they played.
         self._by_race = by_race
-        # Where a player starts if they play: a soft-reset season's seeds,
-        # keyed like `ratings`. Kept apart from `ratings` so that still means
-        # "has played in this book" — boards, profiles and season ranks list
-        # only players who have, and a seed only matters once it's played on.
-        self.seeds: dict[str, PlayerRating] = {}
-        # Canonical handle -> starting mu from a self-reported level
-        # (SKILL_LEVEL_MU), for players with no seed. Like a seed, it only
-        # matters once played on.
-        self.priors: dict[str, float] = {}
+        self.seeds: dict[str, PlayerRating] = {}  # soft-reset starting points
+        self.priors: dict[str, float] = {}  # canonical handle -> reported-level mu
         self.rated_matches = 0
         self.skipped_matches = 0
 
     @classmethod
     def from_matches(cls, matches, merge_map: dict[str, str] | None = None, by_race: bool = False) -> "RatingBook":
-        """Build a book by replaying matches in chronological order."""
         return cls(merge_map, by_race).replay(matches)
 
     def replay(self, matches) -> "RatingBook":
-        """Rate matches in chronological order on top of this book."""
         for match in sorted(matches, key=lambda m: m.played_at):
             self.rate_match(match)
         return self
 
     def seed(self, career: "RatingBook", carryover: float, sigma: float) -> None:
-        """Soft reset: start every player `career` knows at their career
-        rating pulled toward the prior (see SOFT_RESET_CARRYOVER), with no
-        games on record. `career` must be built in the same mode (by_race or
-        not) so its keys line up."""
+        """Soft reset from `career` (built in the same by_race mode)."""
         for key, r in career.ratings.items():
             self.seeds[key] = PlayerRating(
                 handle=r.handle,
@@ -334,16 +238,12 @@ class RatingBook:
         return self._merge.get(handle, handle)
 
     def rating_for(self, handle: str) -> PlayerRating | None:
-        """Rating for an account, following any account merge. None until
-        they've played in this book, even if they hold a seed."""
+        """None until they've played in this book, even with a seed."""
         return self.ratings.get(self.canonical(handle))
 
     def standing_for(self, handle: str) -> PlayerRating | None:
-        """Where an account stands going into its next game: its rating, else
-        its seed, else its reported level's starting point, else None (the
-        model's prior). What matchmaking and before/after deltas want; boards
-        and ranks want rating_for. Overall books only — a by-race book's keys
-        carry the race."""
+        """Rating, else seed, else reported level, else None (the prior). For
+        matchmaking and deltas; boards use rating_for. Overall books only."""
         key = self.canonical(handle)
         standing = self.ratings.get(key) or self.seeds.get(key)
         if standing is None and key in self.priors:
@@ -351,9 +251,7 @@ class RatingBook:
         return standing
 
     def _get(self, player) -> PlayerRating:
-        """Rating for a match participant's (canonical) account — on the race
-        they played, in a by-race book. The display name is refreshed to the
-        latest one seen (players can rename)."""
+        """A participant's entry, created on first sight; refreshes the name."""
         handle = self.canonical(player.toon_handle)
         race = player.race if self._by_race else None
         key = f"{handle}/{race}" if race else handle
@@ -375,7 +273,7 @@ class RatingBook:
         )
 
     def rate_match(self, match: MonobattleMatch) -> bool:
-        """Update ratings from one match; returns False if it was skipped."""
+        """False if the match was skipped."""
         if not self.is_rateable(match):
             self.skipped_matches += 1
             return False
@@ -383,7 +281,6 @@ class RatingBook:
         team_numbers = sorted({p.team for p in match.players})
         teams = [[self._get(p) for p in match.team(n)] for n in team_numbers]
         os_teams = [[_model.create_rating([r.mu, r.sigma], name=r.handle) for r in team] for team in teams]
-        # ranks: lower is better; winner gets 0.
         ranks = [0 if n == match.winning_team else 1 for n in team_numbers]
 
         rated = _model.rate(os_teams, ranks=ranks)
@@ -406,21 +303,14 @@ class RatingBook:
 
 
 def _in_mode(matches, mode: str | None):
-    """(id, match) rows narrowed to one pick mode ("blind_random",
-    "single_draft", ...); None keeps every game."""
+    """Matches from (id, match) rows in one pick mode; None keeps all."""
     return (m for _, m in matches if mode is None or m.pick_mode == mode)
 
 
 def season_start(store, season, by_race: bool = False, mode: str | None = None) -> RatingBook:
-    """The book a season's walk starts from: empty after a hard reset (and
-    for the career walk, season=None), seeded from career ratings at the
-    season's start after a soft one. Derived, like everything else here: the
-    season row holds only the reset's parameters, so a late-uploaded replay
-    from before the boundary moves the seeds too. Self-reported levels
-    (SKILL_LEVEL_MU) set where a player's first game starts, in both the
-    career walk and the season's, so a soft reset carries them over too.
-    `mode` keeps only that pick mode's games, seeds included, so a mode
-    board is that mode's ladder alone, as a race board is that race's."""
+    """The book a season's walk starts from: empty (hard reset, or career when
+    season is None) or seeded from career ratings at its start (soft reset).
+    Reported levels apply in both walks. `mode` filters the seeds' games too."""
     merge_map = store.merge_map()
     priors = level_priors(store, merge_map)
     book = RatingBook(merge_map, by_race)
@@ -435,24 +325,20 @@ def season_start(store, season, by_race: bool = False, mode: str | None = None) 
 
 
 def level_priors(store, merge_map: dict[str, str]) -> dict[str, float]:
-    """Starting mu by canonical handle, from each owner's reported level.
-    Stores without levels (test fakes) give none."""
+    """Reported-level mu by canonical handle."""
     if not hasattr(store, "skill_levels_by_handle"):
         return {}
     return {merge_map.get(h, h): level_mu(level) for h, level in store.skill_levels_by_handle().items()}
 
 
-# The boards rushes are rated on, beside the rusher's own pick (see
-# MatchPlayer.cannon_rush/spine_rush). Spelled like picks so they're typed and
-# shown like one.
+# Rush boards, named like picks so they're typed and shown like one.
 CANNON_RUSH = "CannonRush"
 SPINE_RUSH = "SpineRush"
 RUSH_BOARDS = (CANNON_RUSH, SPINE_RUSH)
 
 
 def boards_of(player) -> list[str]:
-    """The unit boards one player's game counts on: their pick, plus a rush
-    board for each rush. A rush is extra, never a replacement."""
+    """Their pick plus a board per rush — a rush adds, never replaces."""
     boards = [player.pick] if player.pick else []
     if player.cannon_rush:
         boards.append(CANNON_RUSH)
@@ -462,20 +348,10 @@ def boards_of(player) -> list[str]:
 
 
 def pick_ratings(book: RatingBook, matches, picks: set[str] | None = None) -> dict[str, list[PlayerRating]]:
-    """Everyone's rating on each unit, best first: how each player does when
-    they field it. Keyed by pick (and the RUSH_BOARDS, see boards_of); `picks` limits the walk to those units
-    (None = every unit). `book` is the overall walk to replay `matches` on
-    top of (an empty book, or a season_start).
-
-    Unlike a race board, only the focal player's entry is on the unit: their
-    teammates and opponents enter at their overall rating going into the
-    game. Most players have a handful of games on any one unit, so rating
-    them against each other's unit entries — mostly fresh priors — would
-    leave little more than a raw win rate; the overall ratings are what the
-    game was actually played against. The overall walk is never changed by
-    it. One slot at a time, so two players on the same unit in one game each
-    get scored against the real lineup. Entries are keyed on the canonical
-    handle, so a person's linked accounts share one entry per unit."""
+    """Per-unit player boards, best first, keyed by board (boards_of); `picks`
+    limits which. `book` is the overall walk to replay on (empty or a
+    season_start). Only the focal player's slot is a per-unit entry; the other
+    seven enter at their overall standing (see CLAUDE.md)."""
     entries: dict[str, dict[str, PlayerRating]] = {}
     for match in sorted(matches, key=lambda m: m.played_at):
         if book.is_rateable(match):
@@ -487,8 +363,7 @@ def pick_ratings(book: RatingBook, matches, picks: set[str] | None = None) -> di
 def _rate_picks(
     book: RatingBook, match: MonobattleMatch, picks: set[str] | None, entries: dict[str, dict[str, PlayerRating]]
 ) -> None:
-    """Score each player on each of their boards in one match. Called before the match
-    is rated, so everyone else enters at their pre-match standing."""
+    """Score each player on each of their boards. Call before rating the match."""
     team_numbers = sorted({p.team for p in match.players})
     ranks = [0 if n == match.winning_team else 1 for n in team_numbers]
     for focal, board in ((p, b) for p in match.players for b in boards_of(p)):
@@ -520,9 +395,7 @@ def _rate_picks(
 
 
 def pick_board(store, season, pick: str, mode: str | None = None) -> list[PlayerRating]:
-    """One unit's player board over a season (career, all history, when
-    season is None), starting from the same book season_book would. The
-    career boards of every unit are cached in PickCache."""
+    """One unit's player board over a season (None = career)."""
     matches = store.all_matches() if season is None else store.season_matches(season)
     return pick_ratings(season_start(store, season, mode=mode), _in_mode(matches, mode), {pick}).get(pick, [])
 
@@ -530,9 +403,8 @@ def pick_board(store, season, pick: str, mode: str | None = None) -> list[Player
 def unit_kings(
     boards: dict[str, list[PlayerRating]], min_games: int
 ) -> list[tuple[str, list[tuple[str, PlayerRating]]]]:
-    """Who is #1 on each unit's board (among players with `min_games` on it),
-    grouped by person: [(canonical handle, [(pick, their entry)] best first)],
-    most #1s first. Ties on count go to the higher best rating."""
+    """#1 on each board (with `min_games`), grouped by person, most #1s first:
+    [(canonical handle, [(pick, entry)] best first)]."""
     held: dict[str, list[tuple[str, PlayerRating]]] = {}
     for pick, board in boards.items():
         top = next((r for r in board if r.games >= min_games), None)
@@ -544,27 +416,15 @@ def unit_kings(
 
 
 def season_book(store, season, by_race: bool = False, mode: str | None = None) -> RatingBook:
-    """A season's ratings (career, all history, when season is None), over
-    one pick mode's games when `mode` is set. The one way to build a season
-    board — every caller must start from season_start or a soft reset shows
-    up on some screens and not others."""
+    """A season's ratings (None = career). The only way to build a season board,
+    so soft resets show everywhere alike."""
     matches = store.all_matches() if season is None else store.season_matches(season)
     return season_start(store, season, by_race, mode).replay(_in_mode(matches, mode))
 
 
 class RatingCache:
-    """A RatingBook derived from a match store, rebuilt only when the store
-    changes. Shared by the cogs that read ratings (leaderboard, matchmaking).
-
-    Ratings are season-scoped: the book replays only matches inside the open
-    season's window, starting from that season's seeds (season_start), so a
-    reset deletes nothing. `career=True` ignores season bounds.
-    Match history, profile stats and achievements are NOT season-scoped and
-    read the store directly.
-
-    `store` is duck-typed (needs `.all_matches()`, `.merge_map()` and
-    `.change_count`; `.current_season()` to window by season) so this
-    module keeps its one-way dependency on models only."""
+    """The current season's RatingBook (or career's), rebuilt when the store
+    changes or the season turns over."""
 
     def __init__(self, store, career: bool = False):
         self._store = store
@@ -581,8 +441,6 @@ class RatingCache:
     def book(self) -> RatingBook:
         season = self._season()
         season_id = season.id if season else None
-        # Season turnover changes the window without necessarily changing the
-        # matches, so it invalidates the book independently of change_count.
         if self._book is None or self._version != self._store.change_count or self._season_id != season_id:
             self._book = season_book(self._store, season)
             self._version = self._store.change_count
@@ -591,13 +449,8 @@ class RatingCache:
 
 
 class DuoCache:
-    """duo_records for a store, rebuilt only when the store changes.
-
-    Career-wide and not season-scoped, for the same reason MVP rate isn't: a
-    pair needs a lot of games together before their record says anything, and
-    one season never holds enough of them. Cached because the walk rates every
-    pair in every game — twelve model updates per match, an order more work
-    than the ladder's own book — and both !duos and !h2h read it."""
+    """Career-wide duo_records (a season holds too few games per pair), rebuilt
+    when the store changes."""
 
     def __init__(self, store):
         self._store = store
@@ -613,10 +466,8 @@ class DuoCache:
 
 
 class PickCache:
-    """Every unit's career player board (pick_ratings), rebuilt only when the
-    store changes — links included, so an alt linked later merges into its
-    owner's entries on the next read. One walk does a model update per
-    player per match, too slow to repeat for every !leaderboard kings."""
+    """Every unit's career player board, rebuilt when the store (or a link)
+    changes."""
 
     def __init__(self, store):
         self._store = store
@@ -632,9 +483,7 @@ class PickCache:
 
 
 class UnitCache:
-    """unit_ratings for a store, rebuilt only when the store changes. Career-
-    wide like the duo board: most picks get a few dozen games a season, too
-    few to rate them on."""
+    """Career-wide unit_ratings, rebuilt when the store changes."""
 
     def __init__(self, store):
         self._store = store

@@ -33,24 +33,13 @@ def test_equal_players_balanced():
 
 
 def test_strong_players_split_across_teams():
-    # 4 strong, 4 weak: the fair split is 2 strong + 2 weak per side.
     strong = [_p(f"s{i}", mu=40, sigma=2) for i in range(4)]
     weak = [_p(f"w{i}", mu=15, sigma=2) for i in range(4)]
     match = balance_teams(strong + weak)
     strong_names = {p.display_name for p in strong}
     t1_strong = sum(p.display_name in strong_names for p in match.team1)
-    assert t1_strong == 2  # not 4v0 stacked
+    assert t1_strong == 2
     assert match.team1_win_probability == pytest.approx(0.5, abs=0.05)
-
-
-def test_balancer_beats_naive_stacking():
-    # Balancer's split must be at least as close to 50/50 as stacking all the
-    # strong players on one team.
-    strong = [_p(f"s{i}", mu=38, sigma=2) for i in range(4)]
-    weak = [_p(f"w{i}", mu=18, sigma=2) for i in range(4)]
-    match = balance_teams(strong + weak)
-    stacked = predict_win_probability([(p.mu, p.sigma) for p in strong], [(p.mu, p.sigma) for p in weak])
-    assert abs(0.5 - match.team1_win_probability) < abs(0.5 - stacked)
     assert match.fairness == pytest.approx(1.0 - 2 * abs(0.5 - match.team1_win_probability))
 
 
@@ -69,7 +58,6 @@ def test_team1_holds_the_strongest_player():
 def test_teams_list_strongest_first_by_mu():
     # By mu, not the board's mu - 3*sigma: an uncertain newcomer the balancer
     # rates highly still tops their team.
-    # Here "new" has the top mu but the board would rank them last.
     players = [_p("new", mu=40, sigma=8), *(_p(f"p{i}", mu=20 + 2 * i, sigma=2) for i in range(7))]
     for option in ranked_matches(players):
         assert option.team1[0].display_name == "new"
@@ -83,36 +71,30 @@ def test_three_v_three():
     assert len(match.team1) == 3 and len(match.team2) == 3
 
 
-def test_odd_count_rejected():
+@pytest.mark.parametrize("count", [0, 7])
+def test_odd_or_empty_roster_rejected(count):
     with pytest.raises(ValueError):
-        balance_teams([_p(f"p{i}") for i in range(7)])
-
-
-def test_empty_rejected():
-    with pytest.raises(ValueError):
-        balance_teams([])
+        balance_teams([_p(f"p{i}") for i in range(count)])
 
 
 def test_ranked_matches_are_all_distinct_splits_best_first():
     options = ranked_matches([_p(f"p{i}") for i in range(8)])
     assert len(options) == 35  # C(7, 3): every split, mirror-deduped
     gaps = [abs(0.5 - o.team1_win_probability) for o in options]
-    assert gaps == sorted(gaps)  # most balanced first
-    # The top option matches what balance_teams picks alone.
+    assert gaps == sorted(gaps)
     assert balance_teams([_p(f"p{i}") for i in range(8)]).team1_win_probability == options[0].team1_win_probability
 
 
 def test_ranked_matches_limit_caps_the_list():
     options = ranked_matches([_p(f"p{i}") for i in range(8)], limit=8)
     assert len(options) == 8
-    # Kept the 8 most balanced, dropped the rest.
     full = ranked_matches([_p(f"p{i}") for i in range(8)])
     assert [o.team1_win_probability for o in options] == [o.team1_win_probability for o in full[:8]]
 
 
 def test_ranked_matches_single_split_for_a_pair():
     options = ranked_matches([_p("a"), _p("b")])
-    assert len(options) == 1  # nothing to shuffle through
+    assert len(options) == 1
 
 
 _T0 = dt.datetime(2026, 9, 27, 20, 0, tzinfo=dt.UTC)
@@ -290,7 +272,7 @@ class TestQueue:
         interaction = _Interaction(1, message=_Message(2))
         run(lobby.handle_join(interaction))
         assert interaction.response.message == "You're in the queue."
-        assert lobby.message.edits  # the queue message shows them
+        assert lobby.message.edits
 
     def test_unlinked_players_are_told_to_link(self):
         store = _Store()

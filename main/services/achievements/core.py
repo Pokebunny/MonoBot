@@ -1,9 +1,5 @@
-"""Achievement primitives: the per-player `Tally` that accumulates stats from
-match history, the `AchievementSpec` type, and the `_spec` builder factories.
-
-The declarative catalogue of specs lives in `specs`; the detector/ledger engine
-in `engine`. Both build on what's here. Nothing in this module imports the other
-two, so the package's dependency flow stays one-way (core <- specs <- engine)."""
+"""Achievement primitives: `Tally`, `AchievementSpec` and spec builders.
+Dependencies run one way: core <- specs <- engine."""
 
 import datetime
 from dataclasses import dataclass, field
@@ -46,30 +42,17 @@ DROP_PLAY_COMMANDS = 5
 # BroodLord 33%, Archon 37%, Queen 37%). Revisit if the meta shifts.
 UNDERDOG_UNITS = ("BroodLord", "Archon", "Queen")
 
-# Overqualified pulls unit win rates LIVE from match history (never hardcoded),
-# so the badge tracks the community meta with no upkeep. A unit needs this many
-# decided games before it can be named the lobby's worst — an unlucky game or
-# two shouldn't crown an under-sampled unit. No win-rate floor: being the MVP on
-# the lobby's lowest-win-rate unit means everyone else drew a better one, so it
-# reads as a real feat even when that unit isn't bad in absolute terms.
+# Decided games a unit needs before Overqualified can call it the lobby's worst.
 MIN_UNIT_GAMES_FOR_RANKING = 10
 
-# Long enough that surviving on nothing, or without anti-air, is a real feat.
-# Measured in BATTLE time (see MonobattleMatch.battle_seconds): every duration
-# an achievement reads is fighting time, never the replay's length, so a badge
-# always agrees with the clock shown on the match summary.
+# Battle time, like every duration an achievement reads.
 _LONG_GAME_SECONDS = 600
 
-# Untouchable: a long win in which almost nothing of yours died. 500 sits
-# under the 10th percentile of value lost in a player-game (275), and over
-# the community's 703 games it lands on ~5% of players.
+# Untouchable: under the 10th percentile of value lost (275); ~5% of players.
 UNTOUCHED_LOST_MAX = 500
 
-# Cartographer counts distinct TERRAIN NAMES, never map hashes — the same
-# terrain comes back under a new hash every time the author republishes, so
-# hashes would hand it out for one map played twice. A fixed target rather
-# than "every map in rotation": the rotation grows, and an all-maps badge
-# would revoke itself the moment a new terrain appeared.
+# Cartographer counts terrain names, not hashes. A fixed target, since an
+# all-maps badge would revoke itself whenever a new terrain appeared.
 CARTOGRAPHER_MAPS = 5
 
 # A civil war needs a full-ish lobby to mean anything — 3v3s happen, and
@@ -94,9 +77,7 @@ def is_countable(match: MonobattleMatch) -> bool:
 
 @dataclass
 class _MatchContext:
-    """Per-match facts shared by every player's tally update. The first
-    block is derived from the match alone; the second is filled in by the
-    book, which knows identity merges and everyone's prior history."""
+    """Per-match facts shared by every player's tally update."""
 
     match: MonobattleMatch
     mvp: MatchPlayer | None
@@ -376,18 +357,12 @@ class Tally:
             self.max_lost_in_win = max(self.max_lost_in_win, player.resources_lost)
         if won and player.drop_commands is not None and player.drop_commands >= DROP_PLAY_COMMANDS:
             self.delivery_wins += 1
-        # Queens don't stop the "first unit" clock (they're inject
-        # infrastructure), so all races face comparable odds and no race
-        # split is needed. 3 is archive-common only because of pub-lobby
-        # nonsense; in community games it's genuinely rare.
+        # Queens don't stop the clock, so no race split is needed.
         if won and player.bases_before_unit is not None and player.bases_before_unit >= 3:
             self.greed_wins += 1
         if player.orbitals is not None:
             self.max_orbitals = max(self.max_orbitals, player.orbitals)
-        # No duration or dwell gate: across 527 community games every player
-        # who won after losing their last town hall had been baseless for at
-        # least 40s (median ~2.5 min), so there is no last-second false
-        # positive to filter out — winning from nothing takes time by nature.
+        # No dwell gate needed: over 527 games every such winner was baseless 40s+.
         if won and player.lost_all_bases:
             self.baseless_wins += 1
         if player.static_defense is not None:
@@ -433,18 +408,11 @@ class AchievementSpec(NamedTuple):
     # (current, target) toward unlocking, for the "next up" display; None for
     # achievements with no meaningful progress bar.
     progress: Callable[[PlayerHistory], tuple[float, float]] | None = None
-    # Hidden until unlocked: not shown in the gallery or progress display,
-    # only teased as a count. For Easter eggs and true surprises only — a
-    # tier extension of a visible family is never secret.
+    # Hidden until unlocked. True surprises only, never a tier of a visible family.
     secret: bool = False
-    # The specific things still missing, for achievements whose progress is a
-    # set drawn from a known universe ("win with all 42 units" can say WHICH
-    # units are left). None where a count says it all ("play 47 more games").
+    # Names what's still missing for set-based specs (which units are left).
     detail: Callable[[PlayerHistory], list[str]] | None = None
-    # Granted from outside the match history (Chronicler counts uploads), so
-    # `check` can never see it. The reconciler must never revoke one of these:
-    # "the engine wouldn't grant it" means "the engine cannot tell", not "the
-    # holder no longer qualifies". See engine.reconcile.
+    # Granted from outside match history (Chronicler), so never revoked.
     grant_only: bool = False
 
 
@@ -477,9 +445,8 @@ def _career_len(attr: str, target: int) -> tuple[Callable, Callable]:
 
 
 def _career_set(attr: str, universe, target: int) -> tuple[Callable, Callable, Callable]:
-    """Like _career_len, but also able to name what's still missing. `target`
-    can be below len(universe) (a 25-of-42 rung), in which case any remaining
-    unit counts toward it — the list is what's left of the whole universe."""
+    """_career_len that also names what's missing. `target` may be below
+    len(universe) (a 25-of-42 rung)."""
     return (
         lambda h: len(getattr(h.career, attr)) >= target,
         lambda h: (len(getattr(h.career, attr)), target),

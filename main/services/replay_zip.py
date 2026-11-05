@@ -1,12 +1,5 @@
-"""Read the replays out of an uploaded .zip, defensively.
-
-Anyone can post a zip in a replay channel, so everything about it is
-untrusted: it is read in memory (nothing is extracted, so member paths never
-touch the disk), only .SC2Replay members are taken, and a zip that claims or
-turns out to hold too much is refused before any of it is parsed. The limits
-are far above a real upload — Discord caps a free account's attachment at
-10 MB, about 45 replays — and exist only to stop a zip bomb.
-"""
+"""Read replays out of an untrusted .zip: in memory only, .SC2Replay members
+only, with size limits far above a real upload to stop zip bombs."""
 
 import io
 import os

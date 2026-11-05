@@ -3,7 +3,7 @@ the one award whose value can't be read straight off a stat line."""
 
 import datetime
 
-from models.replay import MatchPlayer, MonobattleMatch
+from conftest import make_match, make_player
 from services.awards import match_awards
 
 BASE = datetime.datetime(2026, 8, 30, 3, 0, tzinfo=datetime.timezone.utc)
@@ -12,31 +12,17 @@ BASE = datetime.datetime(2026, 8, 30, 3, 0, tzinfo=datetime.timezone.utc)
 def _match(lines):
     """lines: (name, killed, lost) per player, team 1 then team 2."""
     players = [
-        MatchPlayer(
-            name=name,
-            toon_handle=f"h-{name}",
-            team=(1 if i < len(lines) // 2 else 2),
-            race="Zerg",
-            pick="Zergling",
+        make_player(
+            name,
+            1 if i < len(lines) // 2 else 2,
+            handle=f"h-{name}",
             resources_killed=killed,
             resources_lost=lost,
             unit_counts={"Zergling": 50},
         )
         for i, (name, killed, lost) in enumerate(lines)
     ]
-    return MonobattleMatch(
-        file_name="test.SC2Replay",
-        map_name="Monobattle LotV - Map Rotation",
-        played_at=BASE,
-        duration_seconds=900,
-        game_type="4v4",
-        pick_mode="blind_random",
-        pick_phase_seconds=63,
-        players=players,
-        winning_team=1,
-        winner_confidence=1.0,
-        winner_method="recorded",
-    )
+    return make_match(players, played_at=BASE, pick_phase_seconds=63)
 
 
 def _trader(match):

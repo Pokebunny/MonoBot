@@ -1,34 +1,10 @@
-"""Resolving a typed name to a PERSON.
+"""Resolving a typed SC2 name to a person (a whole merge group).
 
-Every command that takes a player name — `!rank`, `!profile`, `!h2h`,
-`!achievements`, `!add` — asks this module, so they all agree on who "rudy"
-means. What they get back is a person: a whole account-merge group, the
-Discord user it belongs to, and how the name matched.
-
-Names are not identities. An SC2 account can rename freely, two accounts can
-share a display name, and one person can own several accounts. Matching on
-`match_players.name` alone therefore answers the wrong question — it finds
-every account that has EVER been called this, which is how searching "ARudy"
-used to return Avery's stats (Avery renamed an account to "Arudy" for 73 games
-in 2025, more than ARudy himself had played under that exact spelling).
-
-The fix is a precedence order, strongest evidence first:
-
-1. CLAIM   — someone linked this name to their Discord account. A human said
-             "this is me", which beats anything inferred from history.
-2. CURRENT — an account is called this NOW, in its most recent game. Renaming
-             away from a name gives up your hold on it; renaming into one
-             takes it.
-3. FORMER  — an account used to be called this. Last resort, so an abandoned
-             name still finds its old owner when nothing better matches.
-
-A name can also mean a Discord member (`for_discord`). Commands try those only
-after every SC2 tier comes up empty, and several members sharing a name get
-the same picker as several accounts sharing one.
-
-Within a tier, more games wins. A tie INSIDE the best tier is genuine
-ambiguity — two live accounts really do share the name — and callers should
-ask rather than guess (see `ambiguous`).
+Names aren't identities — accounts rename and share names — so matches rank by
+evidence: CLAIM (linked to a Discord account) > CURRENT (the account's latest
+name) > FORMER (a name it used to have). Discord members (`for_discord`) are
+tried only after all three. Within a tier more games wins; a tie in the best
+tier is genuine ambiguity, so callers ask (`ambiguous`).
 """
 
 from dataclasses import dataclass
@@ -66,16 +42,12 @@ class Person:
 
 
 def clean_name(text: str | None) -> str:
-    """A typed SC2 name without angle brackets. SC2 names can't contain them,
-    but the usage text writes `!link <your SC2 name>` and people copy the
-    brackets in."""
+    """Strip angle brackets people copy from `!link <your SC2 name>`."""
     return (text or "").replace("<", "").replace(">", "").strip()
 
 
 def resolve(store, query: str) -> list[Person]:
-    """People matching a typed name, best match first. Empty if nothing
-    matches. Several results mean the name is shared; check `ambiguous` before
-    assuming the first one is right."""
+    """People matching a name, best first; check `ambiguous` before taking [0]."""
     query = (query or "").strip()
     if not query:
         return []
@@ -91,10 +63,7 @@ def resolve(store, query: str) -> list[Person]:
 
     discord_id = store.discord_id_for(query)
     if discord_id is not None:
-        # A claim only outranks history once it is BOUND to an account. An
-        # unbound claim (the name was ambiguous when they linked, or they have
-        # never played) names a Discord user but no games, so it must not
-        # displace an account that is actually called this today.
+        # Only a claim bound to an account outranks history.
         handles = store.handles_for(discord_id)
         if handles:
             offer(handles[0], CLAIM)  # any handle expands to the whole group
@@ -103,8 +72,7 @@ def resolve(store, query: str) -> list[Person]:
     for handle in store.handles_for_name(query):
         offer(handle, FORMER)
     if not found and discord_id is not None:
-        # Linked but never seen in a game: still a person, and still the right
-        # answer for the queue, which can add them before their first match.
+        # Linked but never played: the queue can still add them.
         found[("discord", discord_id)] = (CLAIM, Person((), discord_id, query, 0, CLAIM))
 
     people = [person for _, person in found.values()]
@@ -112,8 +80,7 @@ def resolve(store, query: str) -> list[Person]:
 
 
 def for_discord(store, discord_id: str, discord_name: str) -> Person:
-    """The person behind a Discord member: every SC2 account they've linked,
-    or none if they never have."""
+    """The person behind a Discord member, with no accounts if never linked."""
     handles = store.handles_for(discord_id)
     if not handles:
         return Person((), discord_id, discord_name, 0, DISCORD, discord_name)
@@ -135,17 +102,12 @@ def _person(store, group: list[str], via: str) -> Person:
 
 
 def ambiguous(people: list[Person]) -> bool:
-    """True when the name is genuinely shared: two or more people match on the
-    SAME strength of evidence. A weaker match behind a stronger one is not
-    ambiguity — a claimed name beats an account that merely used to have it,
-    and asking the caller to choose there would be noise."""
+    """Two or more people match on the same tier."""
     return len(people) > 1 and people[0].via == people[1].via
 
 
 def others_note(people: list[Person]) -> str:
-    """A line for the weaker matches, so a player whose old name someone else
-    now uses can still see where their stats went. Empty when nothing else
-    matched."""
+    """A line naming the weaker matches, or empty."""
     rest = [p for p in people[1:]]
     if not rest:
         return ""

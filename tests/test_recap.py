@@ -1,7 +1,7 @@
 import datetime
 import zoneinfo
 
-from models.replay import MatchPlayer, MonobattleMatch
+from conftest import TEAM1, TEAM2, make_match, make_player
 from services import match_embeds
 from services.rating import match_rating_deltas
 from services.recap import SESSION_GAP, build_recap, latest_session, split_sessions
@@ -10,30 +10,17 @@ from services.storage import MatchStore
 BASE = datetime.datetime(2026, 9, 30, 23, 0, tzinfo=datetime.UTC)
 
 
-def _match(winning_team, minutes=0, team1=None, team2=None, kills=None, duration=900):
-    team1 = team1 or ["A1", "A2", "A3", "A4"]
-    team2 = team2 or ["B1", "B2", "B3", "B4"]
+def _match(winning_team, minutes=0, team1=TEAM1, team2=TEAM2, kills=None, duration=900):
     kills = kills or {}
     players = [
-        MatchPlayer(
-            name=n, toon_handle=n, team=t, race="Zerg", pick="Zergling", unit_counts={},
-            resources_killed=kills.get(n, 100),
-        )
-        for t, names in ((1, team1), (2, team2))
-        for n in names
-    ]  # fmt: skip
-    return MonobattleMatch(
+        make_player(n, t, resources_killed=kills.get(n, 100)) for t, names in ((1, team1), (2, team2)) for n in names
+    ]
+    return make_match(
+        players,
+        winning_team=winning_team,
         file_name=f"{minutes}.SC2Replay",
-        map_name="Monobattle LotV - Map Rotation",
         played_at=BASE + datetime.timedelta(minutes=minutes),
         duration_seconds=duration,
-        game_type="4v4",
-        pick_mode="blind_random",
-        pick_phase_seconds=60,
-        players=players,
-        winning_team=winning_team,
-        winner_confidence=1.0,
-        winner_method="recorded",
     )
 
 

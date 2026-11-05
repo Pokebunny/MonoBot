@@ -1,33 +1,14 @@
 import datetime
 
+from conftest import TEAM1, TEAM2, make_match
 from models.rating import PlayerRating
-from models.replay import MatchPlayer, MonobattleMatch
 from services.match_embeds import page_count
 from services.rating import RatingBook, match_rating_deltas
 
 
-def _match(winning_team, confidence=1.0, duration=900, team1=None, team2=None):
-    team1 = team1 or ["A1", "A2", "A3", "A4"]
-    team2 = team2 or ["B1", "B2", "B3", "B4"]
-    # toon_handle = name here so tests can key book.ratings on the name; the
-    # name/handle distinction is exercised in test_identity.
-    players = [
-        MatchPlayer(name=n, toon_handle=n, team=t, race="Zerg", pick="Zergling", repick_used=False, unit_counts={})
-        for t, names in ((1, team1), (2, team2))
-        for n in names
-    ]
-    return MonobattleMatch(
-        file_name="test.SC2Replay",
-        map_name="Monobattle LotV - Map Rotation",
-        played_at=datetime.datetime(2026, 7, 17, tzinfo=datetime.timezone.utc),
-        duration_seconds=duration,
-        game_type="4v4",
-        pick_mode="blind_random",
-        pick_phase_seconds=60,
-        players=players,
-        winning_team=winning_team,
-        winner_confidence=confidence,
-        winner_method="recorded",
+def _match(winning_team, confidence=1.0, duration=900, team1=TEAM1, team2=TEAM2):
+    return make_match(
+        team1=team1, team2=team2, winning_team=winning_team, confidence=confidence, duration_seconds=duration
     )
 
 
@@ -97,7 +78,7 @@ def test_ratings_depend_on_play_order_not_input_order():
 
 def test_display_rating_and_provisional():
     fresh = PlayerRating(handle="h", name="n", mu=25.0, sigma=25 / 3)
-    assert fresh.provisional  # high sigma = still calibrating
+    assert fresh.provisional
     assert fresh.display_rating == round(fresh.ordinal * 40 + 1000)
     settled = PlayerRating(handle="h", name="n", mu=30.0, sigma=4.0, wins=20, losses=5)
     assert not settled.provisional
@@ -115,9 +96,9 @@ def test_match_rating_deltas_winners_up_losers_down():
     assert set(deltas) == {"A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4"}
     for h, (before, after) in deltas.items():
         if h.startswith("A"):
-            assert after > before  # winners gain
+            assert after > before
         else:
-            assert after < before  # losers drop
+            assert after < before
 
 
 def test_match_rating_deltas_empty_for_unrateable_game():

@@ -1,7 +1,7 @@
 import datetime
 
-import pytest
-from models.replay import PICKABLE_UNITS, UNIT_RACE, MatchPlayer, MonobattleMatch
+from conftest import make_match, make_player
+from models.replay import PICKABLE_UNITS, UNIT_RACE
 from services.achievements import (
     SPECS,
     SPECS_BY_KEY,
@@ -27,33 +27,20 @@ AFTER_EPOCH = EPOCH + datetime.timedelta(days=1)
 
 
 def _player(name, team, pick="Zergling", kills=None, **kwargs):
-    return MatchPlayer(
-        name=name,
-        toon_handle=name,
-        team=team,
-        race=kwargs.pop("race", "Zerg"),
-        pick=pick,
-        repick_used=kwargs.pop("repick_used", False),
-        resources_killed=kills,
-        unit_counts=kwargs.pop("unit_counts", {}),
-        **kwargs,
-    )
+    kwargs.setdefault("repick_used", False)
+    return make_player(name, team, pick=pick, resources_killed=kills, **kwargs)
 
 
 def _match(winning_team=1, played_at=None, duration=900, players=None, pick_phase_seconds=60, **kwargs):
     players = players or [_player(f"A{i}", 1) for i in range(1, 5)] + [_player(f"B{i}", 2) for i in range(1, 5)]
-    return MonobattleMatch(
-        file_name="test.SC2Replay",
-        map_name="Monobattle LotV - Map Rotation",
+    return make_match(
+        players,
+        winning_team=winning_team,
+        confidence=1.0,
+        method="recorded",
         played_at=played_at or AFTER_EPOCH,
         duration_seconds=duration,
-        game_type="4v4",
-        pick_mode="blind_random",
         pick_phase_seconds=pick_phase_seconds,
-        players=players,
-        winning_team=winning_team,
-        winner_confidence=1.0,
-        winner_method="recorded",
         **kwargs,
     )
 
@@ -489,13 +476,6 @@ def test_cache_rebuilds_on_store_change():
 # -- the unlock ledger ---------------------------------------------------
 
 
-@pytest.fixture
-def store(tmp_path):
-    s = MatchStore(str(tmp_path / "test.db"))
-    yield s
-    s.close()
-
-
 def _ingest(store, match, tag):
     assert store.ingest(match, hash_replay(tag.encode())).status == "inserted"
 
@@ -520,7 +500,7 @@ def test_seed_grants_career_but_not_moments(store):
     keys = {k for k, _ in store.unlocks_for(["A1"])}
     assert {"first_game", "first_win"} <= keys  # career: backfilled
     assert "heating_up" not in keys  # moment: 3-streak was pre-epoch
-    assert ensure_seeded(store, cache) == 0  # one-time only
+    assert ensure_seeded(store, cache) == 0
 
 
 def test_seed_skips_empty_database(store):
@@ -540,7 +520,7 @@ def test_grants_announce_once_and_persist(store):
         unlocks = grant_new_unlocks(store, cache, m)
         keys = {e.spec.key for _, e in unlocks}
         assert ("heating_up" in keys) == (i == 2)
-    assert grant_new_unlocks(store, cache, live[-1]) == []  # idempotent
+    assert grant_new_unlocks(store, cache, live[-1]) == []
 
     # The ledger is what reads see, and it survives derived-state changes.
     held = {e.spec.key for e in ledger_for_group(store, ["A1"])}

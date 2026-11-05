@@ -1,11 +1,4 @@
-"""Shared discord.ui view behavior.
-
-Interactive components fall into two camps here: the queue's Join/Leave view
-is persistent (fixed custom_ids, registered with client.add_view, survives
-restarts), and everything else expires. ExpiringView is the base for the
-latter: buttons stay clickable for 12 hours, then grey out so stale messages
-don't show clickable-but-dead components.
-"""
+"""Shared discord.ui views. Everything but the persistent lobby view expires."""
 
 import logging
 
@@ -21,10 +14,8 @@ VIEW_TIMEOUT_SECONDS = 12 * 60 * 60  # each live view pins its data in memory un
 
 
 class ExpiringView(discord.ui.View):
-    """A view whose components are disabled in place when it times out.
-    Callers must assign .message after sending (or leave it None for a view
-    that was never attached to a message). Completion paths that edit the
-    view away should call stop() so the timeout edit never fires."""
+    """Greys out its components on timeout. Set .message after sending; call
+    stop() when editing the view away."""
 
     def __init__(self, timeout: float = VIEW_TIMEOUT_SECONDS):
         super().__init__(timeout=timeout)
@@ -42,13 +33,8 @@ class ExpiringView(discord.ui.View):
 
 
 class PagedBoardView(ExpiringView):
-    """⏮ ◀ ▶ ⏭ pagination for any board embed.
-
-    `render(page)` returns the embed for that page and closes over the board
-    data, so the ranking is snapshotted at send time and paging stays
-    consistent even if a game is uploaded mid-browse. Any board that can
-    render a page — ratings, MVP rate, session recaps — pages the same way
-    through this. `start` is the page it opens on."""
+    """⏮ ◀ ▶ ⏭ paging. `render(page)` closes over a snapshot of the board, so
+    paging stays consistent if a game lands mid-browse."""
 
     def __init__(self, render, pages: int, start: int = 0):
         super().__init__()
@@ -96,14 +82,8 @@ class PagedBoardView(ExpiringView):
 
 
 class PersonPickView(ExpiringView):
-    """Ask which player was meant, when a name is genuinely shared.
-
-    Only shown for real ambiguity — two accounts matching on the SAME strength
-    of evidence (see services.identity.ambiguous). A claimed name that also
-    happens to be some other account's old alias is NOT ambiguous, and asking
-    there would be noise.
-
-    `on_pick(interaction, person)` continues whatever the caller was doing."""
+    """Asks which person a shared name meant; `on_pick(interaction, person)`
+    resumes the command."""
 
     def __init__(self, people: list[Person], invoker_id: str, on_pick):
         super().__init__()
@@ -111,14 +91,9 @@ class PersonPickView(ExpiringView):
 
 
 async def person_or_pick(ctx, store, query: str, on_pick) -> list[Person] | None:
-    """Who a typed name means — the one way every command asks. SC2 names
-    first (claim > current > former, see services.identity), then a Discord
-    member's name, mention or id. Returns everyone matched, best first:
-    people[0] is the answer, the rest are for identity.others_note.
-
-    None when the caller has been answered already: nothing matched, or the
-    name is shared (by accounts or by members) and a picker went out.
-    `on_pick(interaction, person)` resumes the command once they choose."""
+    """Who a typed name means: SC2 names, then Discord members. Returns
+    everyone matched, best first, or None when already answered (no match, or
+    a picker went out and `on_pick` will resume)."""
     people = identity.resolve(store, query)
     if identity.ambiguous(people):
         await _ask(ctx, people, f"More than one player has played as **{query}** — which one?", on_pick)
@@ -159,9 +134,7 @@ class _PersonSelect(discord.ui.Select):
 
 
 def _option(p: Person) -> dict:
-    """Label and description for one choice. A member found by Discord name is
-    labelled by that name, since that's what was typed; an SC2 account by its
-    in-game name, tagged with the end of its handle to tell twins apart."""
+    """Labelled by whichever name was typed; handles tell SC2 twins apart."""
     if p.discord_name is not None:
         played = f"plays as {p.sc2_name} · {p.games} games" if p.handles else "no SC2 account linked"
         return {"label": p.discord_name[:100], "description": played[:100]}

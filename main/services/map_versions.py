@@ -1,14 +1,5 @@
-"""Resolving the real map behind a monobattle.
-
-Most games are played on one arcade map, "Monobattle LotV - Map Rotation".
-The rotation happens out-of-band: the author republishes it with new terrain,
-which changes its hash. The terrain's real name is only inside the published
-map file, so it is fetched once per hash (network) and cached in the DB — see
-replay_parser.fetch_map_version and MatchStore.record_map_version.
-
-Other monobattle arcade maps (EU plays "Monobattle LotV - Kimeran Refuge" a
-lot) are one fixed terrain each, with no "Current Map:" line to read: their
-arcade name IS the map, so they are named from it directly.
+"""The real map behind a game (see CLAUDE.md "map"). Single-terrain arcade
+maps (e.g. "Monobattle LotV - Kimeran Refuge") are named from the arcade name.
 """
 
 import asyncio
@@ -25,21 +16,13 @@ _ARCADE_PREFIXES = ("Monobattle LotV - ", "Monobattle - ")
 
 
 def resolve_pending(store) -> list[MapVersion]:
-    """Look up every map version seen in history that has never been fetched,
-    caching each result (including failures). Returns the ones that named a
-    map. A version is fetched exactly once, and an unreachable depot just
-    leaves it unresolved for next time.
-
-    Blocking, for scripts. The bot must use resolve_pending_async instead:
-    this touches the store, and a MatchStore's sqlite connection belongs to
-    the thread that created it, so this cannot be run via asyncio.to_thread."""
+    """Fetch and cache every unfetched map version (failures too); returns the
+    ones that named a map. Blocking, for scripts — the bot uses
+    resolve_pending_async (sqlite connections are thread-bound)."""
     resolved = []
     for map_hash in store.unresolved_map_hashes():
         version = replay_parser.fetch_map_version(map_hash)
         if version is None:
-            # Depot failures and mute headers both cache as "no name"; the
-            # only cost of a wrong guess here is a match labelled with the
-            # arcade name, which is what it showed before anyway.
             store.record_map_version(map_hash, None)
             continue
         store.record_map_version(map_hash, version)
@@ -49,17 +32,12 @@ def resolve_pending(store) -> list[MapVersion]:
 
 
 def label(match: MonobattleMatch, names: dict[str, str]) -> str:
-    """What to call this game's map on screen: the terrain when known, else
-    the arcade map's own name (which is all older, un-backfilled matches
-    have)."""
+    """The terrain when known, else the arcade name."""
     return named(match, names) or match.map_name
 
 
 async def resolve_pending_async(store) -> list[MapVersion]:
-    """resolve_pending for the bot: only the depot download goes to a worker
-    thread. The DB calls stay on the event-loop thread, because that is where
-    the store's sqlite connection was created and sqlite refuses to be used
-    from any other one."""
+    """resolve_pending with only the download off the event-loop thread."""
     resolved = []
     for map_hash in store.unresolved_map_hashes():
         version = await asyncio.to_thread(replay_parser.fetch_map_version, map_hash)
@@ -71,28 +49,21 @@ async def resolve_pending_async(store) -> list[MapVersion]:
 
 
 def canonical(name: str) -> str:
-    """The one spelling a map is displayed and grouped under. The author
-    republishes the same terrain under a new hash from time to time, and the
-    names have always matched exactly, so this is identity today — it exists
-    so that grouping goes through a single place if a version ever spells a
-    map differently (an alias table would slot in here, not at every caller).
-    """
+    """The spelling a map is grouped under. Identity today; the single place
+    an alias table would go."""
     return name
 
 
 def named(match: MonobattleMatch, names: dict[str, str]) -> str | None:
-    """The map this game was played on, or None when it isn't known — the
-    version was never resolved, or the game predates map hashes. Stats group
-    on this; the arcade name is a placeholder, not a map, so it never becomes
-    a bucket of its own."""
+    """The map played on, or None when unknown (never the rotation's arcade
+    name)."""
     name = names.get(match.map_hash) or fixed_map(match.map_name)
     return canonical(name) if name else None
 
 
 def fixed_map(arcade_name: str) -> str | None:
-    """The terrain of a single-terrain arcade map: its own name, minus the
-    "Monobattle LotV - " every one of them starts with. None for the rotation
-    map, whose terrain changes under one name and must come from its version."""
+    """A single-terrain arcade map's name minus its prefix; None for the
+    rotation map."""
     if not arcade_name or arcade_name == ROTATION_MAP:
         return None
     for prefix in _ARCADE_PREFIXES:
@@ -102,11 +73,7 @@ def fixed_map(arcade_name: str) -> str | None:
 
 
 def group_by_map(matches: Iterable[MonobattleMatch], names: dict[str, str]) -> dict[str, list[MonobattleMatch]]:
-    """Games bucketed by the map they were played on, newest map first, for
-    per-map stats. Games on an unidentified map are left out entirely (count
-    them as the shortfall against the input if a caller needs to say so) —
-    two versions of one map land in the same bucket, since they resolve to
-    the same name."""
+    """Games by map name, newest map first; unknown maps are left out."""
     groups: dict[str, list[MonobattleMatch]] = {}
     for match in matches:
         name = named(match, names)

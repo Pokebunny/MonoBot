@@ -1,10 +1,5 @@
-"""The achievement detector and the unlock ledger glue.
-
-`AchievementBook` DERIVES every player's achievement state from match history in
-one chronological pass (a pure function, like ratings). What a player HOLDS is
-the append-only `achievement_unlocks` ledger in storage — the book only supplies
-candidate state and the diff that decides what to grant and announce. See `core`
-for the `Tally`/spec primitives and `specs` for the catalogue."""
+"""The achievement detector (`AchievementBook`, one chronological pass) and
+the glue to the reconciled unlock ledger."""
 
 import datetime
 import logging
@@ -29,9 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def _unit_win_rates(matches) -> dict[str, tuple[float, int]]:
-    """pick -> (win rate, games) over countable matches. A unit's record, not
-    a player's, so account merges don't matter. Pulled live so Overqualified
-    never carries a hardcoded win-rate table."""
+    """pick -> (win rate, games) over countable matches."""
     counts: dict[str, list[int]] = {}  # pick -> [wins, games]
     for match in matches:
         if not is_countable(match):
@@ -61,14 +54,8 @@ def _match_context(match: MonobattleMatch, map_name: str | None = None) -> _Matc
 
 
 class AchievementBook:
-    """Every player's DERIVED achievement state, built in one chronological
-    pass. Handles are canonical (post-merge); look up through `for_handle`.
-    This is the detector — what players actually hold is the unlock ledger
-    (see `ledger_for_group` / `grant_new_unlocks`).
-
-    `epoch` is the deployment's achievement launch time (matches played
-    before it feed only the career tally). None means every match counts as
-    live — only sensible for tests or throwaway analysis."""
+    """Every player's derived state, by canonical handle (use `for_handle`).
+    Matches before `epoch` feed only career tallies; None counts all as live."""
 
     def __init__(
         self,
@@ -78,20 +65,14 @@ class AchievementBook:
     ):
         self._merge = merge_map or {}
         self._epoch = epoch
-        # map_hash -> terrain name (MatchStore.map_version_names). Cartographer
-        # counts terrains, and only resolved ones — an unresolved hash means
-        # "we don't know yet", which withholds the badge rather than granting
-        # it on a hash. Callers must pass the same table every rebuild, or a
-        # reconciling ledger would revoke what a previous build granted.
+        # map_hash -> terrain name. Must be the same table every rebuild, or
+        # reconcile would revoke Cartographers.
         self._map_names = map_names or {}
         self.histories: dict[str, PlayerHistory] = {}
         self.earned: dict[str, dict[str, Earned]] = {}  # handle -> key -> Earned
         self._last_countable_at: datetime.datetime | None = None
-        # Running unit record (pick -> [wins, games]) for Overqualified's
-        # lobby-worst check, advanced match by match. NOT a table over all of
-        # history: scoring a July lobby with September's win rates lets a game
-        # someone else plays today decide who was the underdog back then, so
-        # the badge would appear and disappear under a reconciling ledger.
+        # pick -> [wins, games] so far in the walk — never all of history, or
+        # today's games would change July's underdog (see CLAUDE.md).
         self._unit_counts: dict[str, list[int]] = {}
 
     @classmethod
@@ -123,16 +104,11 @@ class AchievementBook:
                 c[0] += 1
 
     def _rankable_winrates(self) -> dict[str, float]:
-        """Win rate for each unit with enough games to rank, as of now in the
-        walk. Units below the bar simply aren't rankable yet, which is why
-        Overqualified cannot be earned in the community's first weeks."""
+        """Win rate of each unit with enough games so far."""
         return {pick: w / g for pick, (w, g) in self._unit_counts.items() if g >= MIN_UNIT_GAMES_FOR_RANKING}
 
     def _lobby_worst_picks(self, match: MonobattleMatch) -> set[str]:
-        """The lobby's lowest-win-rate pick(s) among rankable units, judged on
-        the record BEFORE this match. Being the MVP on one of these means
-        everyone else drew a better unit — a real feat regardless of the
-        unit's absolute win rate, so there's no floor."""
+        """The lobby's lowest-win-rate rankable pick(s), before this match."""
         rates = self._rankable_winrates()
         rated = {p.pick for p in match.players if p.pick in rates}
         if not rated:
@@ -179,15 +155,9 @@ class AchievementBook:
     def next_up(
         self, handle: str, limit: int = 3, ensure_detail: bool = False
     ) -> list[tuple[AchievementSpec, float, float, list[str]]]:
-        """The closest not-yet-earned achievements with measurable progress, as
-        (spec, current, target, missing), most complete first. `missing` names
-        what's left for set-based specs ("win with all 42 units" lists the
-        units still owed) and is empty where a count says it all.
-
-        Roster-completion badges are long hauls, so they rarely rank in a
-        proximity-sorted top 3 — and they are exactly the ones players ask
-        "what do I still need?" about. `ensure_detail` appends the closest one
-        that can answer that when none made the cut."""
+        """Closest unearned achievements as (spec, current, target, missing),
+        most complete first. `ensure_detail` adds a set-based one if none made
+        the cut, since those answer "what do I still need?"."""
         history = self.histories.get(self.canonical(handle))
         if history is None:
             return []
@@ -266,12 +236,8 @@ def ledger_holder_counts(store, merge_map: dict[str, str] | None = None) -> dict
 
 
 def ensure_seeded(store, cache: AchievementCache) -> int:
-    """One-time launch grant: when a deployment first turns achievements on
-    over an existing match history, write everything currently derivable into
-    the ledger silently (career backfill per design; moment achievements are
-    empty because the epoch was just stamped). No-op once any unlock exists,
-    and on an empty database — a brand-new community starts announcing from
-    its very first game. Returns the number of rows seeded."""
+    """Silently seed the ledger with everything derivable, once, on a DB with
+    history but no unlocks. Returns rows seeded."""
     if store.unlock_count() or not store.match_count():
         return 0
     book = cache.book()
@@ -296,32 +262,15 @@ def grant_direct(store, handle: str, key: str, earned_at: datetime.datetime) -> 
 
 
 def sweep_grants(store, cache: AchievementCache) -> int:
-    """Grant every derived-but-unrecorded achievement across ALL players,
-    silently — used after bulk writes (channel backfills, re-parses) where
-    per-match announcements would be a wall of stale badges. Returns how many
-    rows were granted."""
+    """Silently grant everything derived but unrecorded (after bulk writes).
+    Returns rows granted."""
     return len(sweep_new_unlocks(store, cache))
 
 
 def reconcile(store, cache: AchievementCache) -> tuple[list[tuple[str, Earned]], list[tuple[str, AchievementSpec]]]:
-    """Bring the ledger in line with what the rules now say, both directions.
-    Returns (granted, revoked) for announcement.
-
-    Revoking is safe here for exactly two reasons, and both are load-bearing:
-
-    1. Grant-only specs are excluded. Chronicler comes from upload counts and
-       its check is `lambda h: False`, so "not derived" means "not visible",
-       not "not earned" — reconciling it would strip people who are well over
-       the bar.
-    2. The engine is reproducible. Every context a spec reads is computed from
-       the matches BEFORE the one being scored, so replaying the same history
-       twice gives the same answer. This was not true while Overqualified's
-       unit win-rate table spanned all of history (a game played today could
-       change who the underdog was in July), and that badge duly flickered on
-       and off; see AchievementBook._advance_unit_record.
-
-    Anything that breaks either property turns this from a correction into a
-    badge that randomly disappears, so weigh a new spec against both."""
+    """Grant and revoke to match the rules; returns (granted, revoked). Safe
+    only while grant-only specs are skipped and every spec reads only earlier
+    matches — see CLAUDE.md "Achievements" before adding a spec."""
     book = cache.book()
     granted = sweep_new_unlocks(store, cache)
     revoked: list[tuple[str, AchievementSpec]] = []
@@ -340,13 +289,8 @@ def reconcile(store, cache: AchievementCache) -> tuple[list[tuple[str, Earned]],
 
 
 def sweep_new_unlocks(store, cache: AchievementCache) -> list[tuple[str, Earned]]:
-    """sweep_grants, but returning what it granted as (canonical handle,
-    Earned) so a caller can announce it.
-
-    The normal sweep grants nothing: everyone's badges are already in the
-    ledger. It only returns rows when the RULES moved — a threshold re-based,
-    a new achievement added — which is exactly the change worth telling the
-    channel about, and why the deploy announcement hangs off this."""
+    """sweep_grants returning (canonical handle, Earned) — non-empty only when
+    the rules changed, which is what the deploy announcement reports."""
     book = cache.book()
     rows, granted = [], []
     for handle, unlocked in book.earned.items():
@@ -361,10 +305,8 @@ def sweep_new_unlocks(store, cache: AchievementCache) -> list[tuple[str, Earned]
 
 
 def grant_new_unlocks(store, cache: AchievementCache, match: MonobattleMatch) -> list[tuple[str, Earned]]:
-    """After a store write touching `match`, grant this match's players any
-    derived achievements the ledger doesn't record yet, and return them for
-    announcement as (player name, Earned), rarest first. Idempotent: what's
-    already in the ledger is never returned again."""
+    """Grant `match`'s players their new achievements; returns (name, Earned),
+    rarest first. Idempotent."""
     book = cache.book()
     rows, out, seen = [], [], set()
     for player in match.players:

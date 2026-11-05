@@ -7,11 +7,10 @@ import datetime
 from types import SimpleNamespace
 
 import pytest
-from conftest import community_cog
+from conftest import community_cog, make_match, make_player, padded_roster
 from discord.ext import commands
-from models.replay import MatchPlayer, MonobattleMatch
 from services import identity
-from services.storage import MatchStore, hash_replay
+from services.storage import hash_replay
 from views import person_or_pick
 
 BASE = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
@@ -20,37 +19,11 @@ BASE = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
 def _play(store, roster, days):
     """roster: (display name, handle) for team 1 then team 2."""
     at = BASE + datetime.timedelta(days=days)
-    # Each side is topped up to four with bystanders, since only 4v4s are stored.
-    half = len(roster) // 2
-    sides = (roster[:half], roster[half:])
-    roster = [
-        *sides[0], *((f"Pad1{j}", f"h-pad1{j}") for j in range(4 - len(sides[0]))),
-        *sides[1], *((f"Pad2{j}", f"h-pad2{j}") for j in range(4 - len(sides[1]))),
-    ]  # fmt: skip
     players = [
-        MatchPlayer(
-            name=name,
-            toon_handle=handle,
-            team=1 if i < 4 else 2,
-            race="Zerg",
-            pick="Zergling",
-            unit_counts={"Zergling": 10},
-        )
-        for i, (name, handle) in enumerate(roster)
+        make_player(name, 1 if i < 4 else 2, handle=handle, unit_counts={"Zergling": 10})
+        for i, (name, handle) in enumerate(padded_roster(roster))
     ]
-    match = MonobattleMatch(
-        file_name=f"{at.isoformat()}.SC2Replay",
-        map_name="Monobattle LotV - Map Rotation",
-        played_at=at,
-        duration_seconds=900,
-        game_type="4v4",
-        pick_mode="blind_random",
-        pick_phase_seconds=60,
-        players=players,
-        winning_team=1,
-        winner_confidence=1.0,
-        winner_method="recorded",
-    )
+    match = make_match(players, file_name=f"{at.isoformat()}.SC2Replay", played_at=at)
     store.ingest(match, hash_replay(str(at).encode()))
 
 
@@ -90,13 +63,6 @@ def no_stock_member_lookup(monkeypatch):
         raise commands.MemberNotFound(argument)
 
     monkeypatch.setattr(commands.MemberConverter, "convert", stock)
-
-
-@pytest.fixture
-def store(tmp_path):
-    s = MatchStore(str(tmp_path / "t.db"))
-    yield s
-    s.close()
 
 
 def _run(coro):

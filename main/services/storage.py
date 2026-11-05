@@ -1,18 +1,8 @@
-"""SQLite persistence for parsed matches.
+"""SQLite persistence for parsed matches (the source of truth; everything
+else is derived).
 
-The `matches` + `match_players` tables are the source of truth; ratings are
-derived by replaying stored matches through RatingBook (see services.rating),
-so parser/rating improvements can always be re-applied to history without
-re-parsing replay files.
-
-Schema changes: bump SCHEMA_VERSION, add a numbered function to _MIGRATIONS,
-and update _SCHEMA to match (fresh DBs are created at the latest version and
-stamped; existing DBs replay only the missing migrations). Never change the
-schema by rebuilding the DB — player_links rows are written by users, not
-derivable from replays, and a rebuild loses them.
-
-sqlite3 is synchronous — call MatchStore from the bot via asyncio.to_thread
-if a call ever shows up in profiling (at monobattle volumes it won't).
+Schema changes: bump SCHEMA_VERSION, add to _MIGRATIONS and update _SCHEMA to
+match. Never rebuild the DB — player_links rows are user-written.
 """
 
 import datetime
@@ -31,29 +21,19 @@ logger = logging.getLogger(__name__)
 
 
 class IngestResult(NamedTuple):
-    # "inserted" = new game; "updated" = same game, a more complete recording
-    # replaced the stored one; "duplicate" = same-or-worse recording, ignored;
-    # "rejected" = not a game worth keeping (see rejection_reason).
+    # inserted | updated (a better recording replaced it) | duplicate | rejected
     status: str
     match_id: int | None
     reason: str | None = None
-    # The recording this ingest left out of the store, when it's the weaker
-    # of two of one game: the incoming file ("duplicate") or the one it
-    # replaced ("updated"). Its archived copy can go (cogs.replays).
+    # The weaker recording this ingest left out (incoming or replaced), whose
+    # archived file can go.
     dropped_hash: str | None = None
 
 
-# What a stored game must be. Monobattles here are 4v4s: a 3v3 or an uneven
-# lobby is a different game, never rated. And a game with under two minutes of
-# play after the picks (real seconds, the in-game timer) is a remake. Over the
-# 241 short games in the owner's replay folder (Nov 2026), every one under
-# 2:00 either says so in its chat or never got going, while from 2:00 to 3:00
-# the two mix: cannon and spine rushes that end in "gg" from 2:05, and a 2:29
-# game the whole lobby agreed to remake. So up to REMAKE_CALL_SECONDS a call
-# for one (MonobattleMatch.remake_called) decides it; past that the call means
-# nothing — over 3:00 the ones on record are a loser's "rm?" after the gg or
-# talk of a game already played out. An undecided game that ran long is kept:
-# it goes to winner confirmation instead.
+# A stored game is a 4v4 with 2+ minutes of battle. From 2:00 to
+# REMAKE_CALL_SECONDS a remake call in chat rejects it (rushes end in "gg" from
+# 2:05; past 3:00 an "rm?" is post-game chatter). Checked over 241 short games
+# (Nov 2026).
 TEAM_SIZE = 4
 MIN_BATTLE_SECONDS = 120
 REMAKE_CALL_SECONDS = 180
@@ -75,9 +55,7 @@ def rejection_reason(match: MonobattleMatch) -> str | None:
 
 
 class LinkResult(NamedTuple):
-    # "linked" = claimed (handle bound if the name was found unambiguously in
-    # match history); "taken" = another user owns the name; "ambiguous" = the
-    # name maps to several accounts in history, so it can't be auto-bound.
+    # linked (handle bound if unambiguous) | taken | ambiguous (several accounts)
     status: str
     owner: str | None = None
     handle: str | None = None
@@ -243,12 +221,8 @@ def hash_replay(data: bytes) -> str:
 
 
 def content_key(match: MonobattleMatch) -> str:
-    """Identity of the actual game, invariant across who recorded it. Two
-    players' recordings of the same game differ in bytes and length (they may
-    leave at different times) but share the game's random seed and full
-    roster. Games parsed before the seed was read fall back to the start
-    minute, which misses recordings whose clocks straddle a minute boundary
-    -- ingest's same-game check catches those (see _same_game)."""
+    """The game's identity across recordings: its seed, else roster + start
+    minute (straddled minutes are caught by _same_game)."""
     names = [p.name for p in match.players]
     if match.game_seed is not None:
         return hashlib.sha256(f"seed:{match.game_seed}|{'|'.join(sorted(names))}".encode()).hexdigest()
@@ -271,14 +245,8 @@ class _Recording(NamedTuple):
 
 
 def _same_game(a: _Recording, b: _Recording) -> bool:
-    """Whether two recordings are of one game. With both seeds known that's
-    settled outright. Without, it takes the same lineup -- same accounts, same
-    teams, same picks -- starting less than either recording's length apart.
-    played_at is the recorder's own clock, which runs anywhere from seconds
-    to minutes off another's, so the start times can't be required to agree;
-    but a real rematch can't start before the game it follows has ended, and
-    seldom repeats all eight picks besides (the picks are what tell a remake
-    from the game that replaced it when a clock is minutes out)."""
+    """Same seed when both are known; else the same accounts, teams and picks
+    starting less than a game-length apart (recorders' clocks disagree)."""
     if {h for h, _, _ in a.lineup} != {h for h, _, _ in b.lineup}:
         return False
     if a.seed is not None and b.seed is not None:
@@ -311,9 +279,8 @@ def _migration_2_replay_channels(conn: sqlite3.Connection) -> None:
     )
 
 
-# version -> function upgrading a DB from version-1 to version. Each runs in
-# its own transaction and must leave the DB identical to a fresh _SCHEMA
-# creation at that version.
+# version -> upgrade from version-1. Each must leave the DB identical to a
+# fresh _SCHEMA at that version.
 def _migration_3_repick_from(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(match_players)")}
     if "repick_from" not in cols:
@@ -350,11 +317,8 @@ def _migration_7_drop_account_merges(conn: sqlite3.Connection) -> None:
 
 
 def _migration_8_achievements(conn: sqlite3.Connection) -> None:
-    """Everything the achievements feature added, in one step: the unlock
-    ledger, the meta table (see _SCHEMA — the epoch stamp itself is in
-    _SCHEMA's INSERT OR IGNORE, which runs on every open, so a DB migrated
-    here gets stamped the same way a fresh one does), and the two per-player
-    replay stats that feed Special Delivery and Great Wall."""
+    """Achievements: the unlock ledger, the meta table (the epoch is stamped
+    by _SCHEMA on open) and two per-player stats."""
     conn.execute(
         """CREATE TABLE IF NOT EXISTS achievement_unlocks (
                handle TEXT NOT NULL,
@@ -372,9 +336,7 @@ def _migration_8_achievements(conn: sqlite3.Connection) -> None:
 
 
 def _migration_9_lost_all_bases(conn: sqlite3.Connection) -> None:
-    """Per-player replay stat behind Nomad: was the player ever wiped down to
-    zero town halls. NULL on rows parsed before this existed — Nomad is a
-    live/moment achievement, so history is never asked."""
+    """lost_all_bases (Nomad)."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(match_players)")}
     if "lost_all_bases" not in cols:
         conn.execute("ALTER TABLE match_players ADD COLUMN lost_all_bases INTEGER")
@@ -400,10 +362,7 @@ def _migration_10_seasons(conn: sqlite3.Connection) -> None:
 
 
 def _migration_11_map_versions(conn: sqlite3.Connection) -> None:
-    """Record which published version of the arcade map each game was played
-    on, and cache the terrain name behind each version. Existing rows keep an
-    empty hash (they were parsed before it was read) until filled in from the
-    replay archive (done for every game by Oct 2026)."""
+    """map_hash per game, and the map_versions name cache."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(matches)")}
     if "map_hash" not in cols:
         conn.execute("ALTER TABLE matches ADD COLUMN map_hash TEXT NOT NULL DEFAULT ''")
@@ -418,19 +377,14 @@ def _migration_11_map_versions(conn: sqlite3.Connection) -> None:
 
 
 def _migration_12_kills_by_unit(conn: sqlite3.Connection) -> None:
-    """Record which of a player's unit types got each kill (JSON, like
-    unit_counts). Existing rows keep '{}' until scripts/reparse_stored.py
-    re-reads their replay -- the column is additive, so a game with no
-    attribution simply has none rather than a wrong zero."""
+    """kills_by_unit (JSON)."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(match_players)")}
     if "kills_by_unit" not in cols:
         conn.execute("ALTER TABLE match_players ADD COLUMN kills_by_unit TEXT NOT NULL DEFAULT '{}'")
 
 
 def _migration_13_soft_season_reset(conn: sqlite3.Connection) -> None:
-    """Let a season start from carried-over career ratings instead of the
-    prior. Existing seasons keep NULL — they were hard resets, and their
-    boards must rebuild exactly as they were."""
+    """Soft-reset parameters; existing seasons stay NULL (hard resets)."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(seasons)")}
     for col in ("carryover", "seed_sigma"):
         if col not in cols:
@@ -438,9 +392,7 @@ def _migration_13_soft_season_reset(conn: sqlite3.Connection) -> None:
 
 
 def _migration_14_cannon_rush(conn: sqlite3.Connection) -> None:
-    """Per-player replay stat: did they cannon rush. NULL on rows parsed
-    before it existed until scripts/reparse_stored.py re-reads their replay,
-    and NULL means "not recorded", never "didn't rush"."""
+    """cannon_rush; NULL means not recorded, never "didn't rush"."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(match_players)")}
     if "cannon_rush" not in cols:
         conn.execute("ALTER TABLE match_players ADD COLUMN cannon_rush INTEGER")
@@ -473,12 +425,8 @@ def _migration_17_approved(conn: sqlite3.Connection) -> None:
 
 
 def _migration_18_merge_duplicate_recordings(conn: sqlite3.Connection) -> None:
-    """Add game_seed, and merge the games stored twice because two players'
-    recordings started on either side of a minute boundary by their own
-    clocks, so the minute-based content_key told them apart. Of each set the
-    recording ingest would have kept stays (a confirmed winner, else the
-    higher winner confidence, else the longer); an approval carries over to
-    it. Stored rows have no seed yet, so this uses _same_game's lineup test."""
+    """Add game_seed and merge games stored twice under minute-based keys,
+    keeping the recording ingest would (approvals carry over)."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(matches)")}
     if "game_seed" not in cols:
         conn.execute("ALTER TABLE matches ADD COLUMN game_seed INTEGER")
@@ -539,13 +487,9 @@ def _migration_20_remake_called(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE matches ADD COLUMN remake_called INTEGER")
 
 
-# Discord links are GLOBAL: one table for every community, since a Discord
-# user is the same person on every server and claims the same SC2 accounts.
-# It lives in the home DB (so sync_live_db's pull carries every link); other
-# communities' stores ATTACH it as LINKS_SCHEMA and read it unqualified, which
-# SQLite resolves to the attached table because their own DB has none.
-# "{s}" is the schema prefix: "" in the DB that holds the links, "links."
-# when attached.
+# Global Discord links, in the home DB. Other stores ATTACH it as LINKS_SCHEMA
+# and read it unqualified (their own DB has no such table). "{s}" is the
+# schema prefix: "" in the home DB, "links." when attached.
 LINKS_SCHEMA = "links"
 _LINKS_SCHEMA = """
 -- Maps a Discord user to the SC2 name(s) they claim. sc2_name is the display
@@ -576,10 +520,8 @@ def _interned_keys(d: dict) -> dict:
 
 
 class SharedLinks:
-    """The DB file holding the Discord links, shared by every store that
-    names it, and a counter of link writes made through any of them. Link
-    writes change merge_map, so they must invalidate EVERY community's
-    caches, not just the writer's: each store's change_count includes it."""
+    """The links DB plus a write counter every sharing store's change_count
+    includes, so a link invalidates every community's caches."""
 
     def __init__(self, db_path: str = DEFAULT_DB_PATH):
         self.db_path = db_path
@@ -619,9 +561,7 @@ _MIGRATIONS = {
 
 class MatchStore:
     def __init__(self, db_path: str = DEFAULT_DB_PATH, links: SharedLinks | None = None):
-        """`links` names the DB holding the Discord links when they're shared
-        between communities; without it (scripts, tests) the store keeps its
-        own, in its own file."""
+        """Without `links` (scripts, tests) the store keeps its own links."""
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self._db_path = db_path
         self._links = links or SharedLinks(db_path)
@@ -647,20 +587,15 @@ class MatchStore:
             self._adopt_own_links()
         self._changes = 0
         self._outside_version = self._data_version()
-        # Every game, built once per change: (change number, games in play
-        # order, id -> game). Shared by every reader instead of each one
-        # rebuilding all of them (see all_matches).
+        # (change number, games in play order, id -> game); see all_matches.
         self._games: tuple[int, list[tuple[int, MonobattleMatch]], dict[int, MonobattleMatch]] | None = None
 
     def _data_version(self) -> int:
         return self._conn.execute("PRAGMA data_version").fetchone()[0]
 
     def _note_outside_writes(self) -> None:
-        """Count a commit by ANOTHER connection to this file as a change. A
-        script run beside the bot (reparse_stored.py rewriting games in place)
-        otherwise left every cache serving the old games until a restart.
-        SQLite's data_version moves only on other connections' commits, so the
-        store's own writes aren't counted twice."""
+        """Count other connections' commits (e.g. reparse_stored.py) as changes.
+        data_version ignores this connection's own."""
         version = self._data_version()
         if version != self._outside_version:
             self._outside_version = version
@@ -668,21 +603,15 @@ class MatchStore:
 
     @property
     def change_count(self) -> int:
-        """Bumped on every write so callers (e.g. the leaderboard cog) can
-        cache derived data like rating books and know when it's stale. Counts
-        link writes made through ANY store sharing these links, and writes
-        another process made to this database."""
+        """Moves on any write — ours, a shared link, or another process's — so
+        caches know they're stale."""
         self._note_outside_writes()
         return self._changes + self._links.version
 
     def _adopt_own_links(self) -> None:
-        """Move links this DB kept for itself (from before links were global,
-        or written by a script that opened it standalone) into the shared
-        table, then set its own table aside: while it exists, SQLite would
-        resolve every unqualified player_links to it instead of the shared
-        one. A row that clashes with a shared link (the name or account is
-        already someone else's) is not copied; it stays in
-        player_links_premerge and is logged."""
+        """Move this DB's own links into the shared table and rename its table
+        aside (it would shadow the attached one). Clashing rows stay in
+        player_links_premerge and are logged."""
         own = self._conn.execute("SELECT 1 FROM main.sqlite_master WHERE type = 'table' AND name = 'player_links'")
         if own.fetchone() is None:
             return
@@ -739,12 +668,9 @@ class MatchStore:
     # -- writes ----------------------------------------------------------
 
     def ingest(self, match: MonobattleMatch, file_hash: str, uploaded_by: str | None = None) -> IngestResult:
-        """Store a parsed match. If the same game (by content_key, or else
-        _same_game) is already stored, keep whichever recording is more complete — a higher winner
-        confidence, or a longer duration at equal confidence — so a teammate
-        who stayed to the end can supply a winner the early-leaver's replay
-        lacked. Manually confirmed results are never overwritten. Games
-        that fail rejection_reason are never stored."""
+        """Store a match; for a game already stored keep the better recording
+        (higher confidence, then longer). Confirmed winners are never
+        overwritten."""
         reason = rejection_reason(match)
         if reason is not None:
             return IngestResult("rejected", None, reason)
@@ -794,9 +720,7 @@ class MatchStore:
         return existing if existing is not None else self._find_same_game(match)
 
     def ingest_preview(self, match: MonobattleMatch) -> str:
-        """What ingest would do with an acceptable game, without doing it:
-        "new", "better" (replaces a weaker stored recording of it) or
-        "stored" (a recording at least as good is already kept)."""
+        """Dry-run ingest: "new", "better" or "stored"."""
         existing = self.find_game(match)
         if existing is None:
             return "new"
@@ -917,10 +841,7 @@ class MatchStore:
         self._conn.commit()
 
     def delete_matches(self, match_ids: list[int]) -> int:
-        """Remove matches outright (their players go with them, by cascade).
-        Everything else is derived from matches, so nothing else needs
-        touching; achievements a deletion takes away are revoked, and
-        announced, by the next reconcile."""
+        """Delete matches (players cascade); the next reconcile revokes badges."""
         cur = self._conn.executemany("DELETE FROM matches WHERE id = ?", [(i,) for i in match_ids])
         self._conn.commit()
         self._changes += 1
@@ -932,10 +853,8 @@ class MatchStore:
         return {row[0] for row in self._conn.execute("SELECT file_hash FROM matches")}
 
     def refresh_parse(self, match: MonobattleMatch, file_hash: str) -> bool:
-        """Overwrite a stored game with a fresh parse of the SAME replay file
-        (after parser improvements), keeping a manually confirmed winner and
-        the original uploader, and an approval. False if this exact file isn't
-        stored."""
+        """Replace a stored game with a reparse of the same file, keeping a
+        confirmed winner, uploader and approval. False if not stored."""
         row = self._conn.execute(
             "SELECT id, content_key, winning_team, winner_method, approved, uploaded_by FROM matches WHERE file_hash = ?",
             (file_hash,),
@@ -955,9 +874,7 @@ class MatchStore:
     # -- map versions ----------------------------------------------------
 
     def record_map_version(self, map_hash: str, version: MapVersion | None) -> None:
-        """Cache what the published map behind map_hash calls its terrain.
-        None records the lookup itself (name NULL) so a version whose header
-        names no map isn't fetched again on every upload."""
+        """None caches a failed lookup so it isn't retried."""
         self._conn.execute(
             """INSERT INTO map_versions (map_hash, name, author, checked_at)
                VALUES (?, ?, ?, datetime('now'))
@@ -984,10 +901,7 @@ class MatchStore:
         return {r["map_hash"]: r["name"] for r in rows}
 
     def set_game_seeds(self, seeds: dict[str, int]) -> int:
-        """Backfill game_seed, by file hash, on games stored before it was
-        read, touching nothing else -- unlike refresh_parse, which would also
-        land every other parser change since each game was stored. Returns
-        how many stored games got one. See scripts/backfill_seeds.py."""
+        """Set game_seed by file hash, touching nothing else; returns how many."""
         cur = self._conn.executemany(
             "UPDATE matches SET game_seed = ? WHERE file_hash = ? AND game_seed IS NULL",
             [(seed, file_hash) for file_hash, seed in seeds.items()],
@@ -1005,9 +919,7 @@ class MatchStore:
         return [(r["played_at"], r["map_hash"]) for r in rows]
 
     def link_player(self, discord_id: str, sc2_name: str) -> LinkResult:
-        """Claim an SC2 display name and bind its account handle if the name
-        maps unambiguously to one account in match history. Names with no
-        history bind later, the first time they're seen in an uploaded game."""
+        """Claim a name, binding its account if unambiguous (or on first game)."""
         owner = self.discord_id_for(sc2_name)
         if owner is not None and owner != discord_id:
             return LinkResult("taken", owner=owner)
@@ -1076,10 +988,8 @@ class MatchStore:
         return True
 
     def add_account(self, discord_id: str, handle: str) -> bool:
-        """Bind an ADDITIONAL account (by handle) to a user, e.g. a cross-region
-        copy that shares a display name with one they've already linked. Uses
-        the handle as a placeholder claim name to avoid the one-row-per-name
-        constraint. False if the account is already linked to someone else."""
+        """Bind another account by handle (stored as its own claim name). False
+        if someone else holds it."""
         rows = self._conn.execute("SELECT discord_id FROM player_links WHERE toon_handle = ?", (handle,)).fetchall()
         if rows:
             return all(r["discord_id"] == discord_id for r in rows)
@@ -1107,11 +1017,7 @@ class MatchStore:
         return [r["name"] for r in rows]
 
     def handles_by_current_name(self, sc2_name: str) -> list[str]:
-        """Accounts whose CURRENT display name is this one — the name they were
-        called in their most recent game. Distinct from handles_for_name, which
-        also matches names an account has since abandoned: someone who renamed
-        away from a name has no claim on it any more, and someone who renamed
-        INTO it does. Ordered most-played first."""
+        """Accounts called this in their latest game, most-played first."""
         rows = self._conn.execute(
             """SELECT mp.toon_handle AS h, COUNT(*) AS games,
                       (SELECT mp2.name FROM match_players mp2 JOIN matches m2 ON m2.id = mp2.match_id
@@ -1153,9 +1059,7 @@ class MatchStore:
             pass  # handle already bound to another claimed name; leave as-is
 
     def unlink_player(self, discord_id: str, sc2_name: str) -> bool:
-        """Release one of the user's links by name; returns False if none
-        matched. Falls back to matching their bound accounts by in-game alias
-        (second-account claim rows store the handle, not the display name)."""
+        """Release a link by claim name or a bound account's alias."""
         cur = self._conn.execute(
             "DELETE FROM player_links WHERE sc2_name = ? COLLATE NOCASE AND discord_id = ?",
             (sc2_name, discord_id),
@@ -1175,9 +1079,7 @@ class MatchStore:
         return False
 
     def record_unlocks(self, rows: list[tuple[str, str, str]]) -> None:
-        """Append (handle, key, earned_at_iso) rows to the unlock ledger.
-        Idempotent: re-granting an already-held badge is a no-op. Deleting is
-        a separate, deliberate call — see revoke_unlocks."""
+        """Idempotent insert of (handle, key, earned_at_iso)."""
         self._conn.executemany(
             "INSERT OR IGNORE INTO achievement_unlocks (handle, key, earned_at) VALUES (?, ?, ?)",
             rows,
@@ -1185,13 +1087,8 @@ class MatchStore:
         self._conn.commit()
 
     def revoke_unlocks(self, rows: list[tuple[str, str]]) -> int:
-        """Delete specific (handle, key) unlocks. Returns rows removed.
-
-        Deliberately takes an explicit list rather than a rule: the derived
-        engine is NOT the authority on what is held (Chronicler is granted
-        from upload counts and can never be re-derived), so "delete whatever
-        the engine wouldn't grant" would strip valid badges. The caller works
-        out the list — see engine.reconcile, which excludes grant-only specs."""
+        """Delete exactly these (handle, key) unlocks; returns rows removed. An
+        explicit list, never a rule — see engine.reconcile."""
         if not rows:
             return 0
         cur = self._conn.executemany("DELETE FROM achievement_unlocks WHERE handle = ? AND key = ?", rows)
@@ -1213,10 +1110,8 @@ class MatchStore:
         return [(r["key"], r["earned_at"]) for r in rows]
 
     def unlocks_between(self, since: datetime.datetime, until: datetime.datetime) -> list[tuple[str, str]]:
-        """(handle, key) for unlocks whose unlocking game was played in
-        [since, until] — earned_at is that game's played_at, so a badge
-        granted late (a reconcile, a slow upload) still lands on the night it
-        was earned. Bounds are UTC; earned_at is stored naive."""
+        """Unlocks whose game was played in [since, until] (UTC; earned_at is
+        stored naive)."""
         bounds = [b.astimezone(datetime.UTC).replace(tzinfo=None).isoformat() for b in (since, until)]
         rows = self._conn.execute(
             "SELECT handle, key FROM achievement_unlocks WHERE earned_at >= ? AND earned_at <= ?", bounds
@@ -1233,28 +1128,20 @@ class MatchStore:
         return self._conn.execute("SELECT COUNT(*) FROM achievement_unlocks").fetchone()[0]
 
     def discovered_keys(self) -> set[str]:
-        """Every achievement key at least one player holds. Gates a secret's
-        community reveal: its NAME becomes visible to everyone once anyone has
-        earned it (the how stays hidden until a viewer earns it themselves)."""
+        """Keys anyone holds (a secret's name shows once discovered)."""
         return {r["key"] for r in self._conn.execute("SELECT DISTINCT key FROM achievement_unlocks")}
 
     def upload_count(self, uploader: str) -> int:
-        """Matches this uploader contributed. New ingests store the Discord
-        user ID; historic rows hold display strings, which never match an id
-        — so counts effectively start when achievements launched."""
+        """By Discord id; old rows hold display names, so counts start at launch."""
         return self._conn.execute("SELECT COUNT(*) FROM matches WHERE uploaded_by = ?", (uploader,)).fetchone()[0]
 
     def achievement_epoch(self) -> datetime.datetime:
-        """When achievements launched for THIS database (stamped on first
-        open by achievement-aware code). Moment achievements only count games
-        played after it."""
+        """When achievements launched here; moment specs count only later games."""
         row = self._conn.execute("SELECT value FROM meta WHERE key = 'achievement_epoch'").fetchone()
         return datetime.datetime.fromisoformat(row["value"])
 
     def get_meta(self, key: str) -> str | None:
-        """Read a deployment fact from the meta key/value table (None if
-        unset). For small runtime state that outlives a restart but isn't
-        match data — e.g. the live queue message pointer."""
+        """Small runtime state that outlives a restart; None if unset."""
         row = self._conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
         return row["value"] if row else None
 
@@ -1320,11 +1207,8 @@ class MatchStore:
         return [r["toon_handle"] for r in rows]
 
     def merge_map(self) -> dict[str, str]:
-        """A person's multiple accounts collapse to one canonical handle (the
-        smallest in the group) so they share a single rating. The Discord
-        account is the source of truth: groups are exactly the handles linked
-        to the same Discord user. Solo accounts are omitted (they map to
-        themselves)."""
+        """handle -> canonical handle (smallest of the Discord user's handles).
+        Solo accounts are omitted."""
         groups: dict[str, list[str]] = {}
         for r in self._conn.execute("SELECT discord_id, toon_handle FROM player_links WHERE toon_handle IS NOT NULL"):
             groups.setdefault(r["discord_id"], []).append(r["toon_handle"])
@@ -1337,9 +1221,7 @@ class MatchStore:
         return mapping
 
     def merged_handles(self, handle: str) -> list[str]:
-        """Every handle in this handle's account-merge group (itself included).
-        Stats queries must cover the whole group, not just the canonical
-        handle, since match_players rows keep each game's real account."""
+        """The whole merge group, itself included."""
         merge_map = self.merge_map()
         root = merge_map.get(handle, handle)
         group = sorted(h for h, r in merge_map.items() if r == root)
@@ -1390,15 +1272,9 @@ class MatchStore:
         return self._build_match(row)
 
     def all_matches(self, since: str | None = None, until: str | None = None) -> list[tuple[int, MonobattleMatch]]:
-        """Matches with their ids, oldest first (rating order). `since` and
-        `until` bound played_at (inclusive / exclusive) to window a season;
-        unbounded by default, since only ratings are season-scoped.
-
-        The games are built once per store change and SHARED: every caller
-        (each derived cache, every !last browser) gets the same objects in a
-        fresh list. At thousands of games one full build is ~200 MB and most
-        of a second, so rebuilding it per reader cost both. Callers may
-        reorder or filter the list they get, but must never modify a game."""
+        """(id, match) oldest first; `since`/`until` bound played_at [inclusive,
+        exclusive). The games are built once per change and shared between
+        callers (~200 MB at thousands): never modify one."""
         _, games, by_id = self._all_games()
         if since is None and until is None:
             return list(games)
@@ -1433,11 +1309,8 @@ class MatchStore:
         return self._games
 
     def match_numbers(self) -> dict[int, int]:
-        """Each match id's match number — the one every summary shows and
-        !last takes: its place in play order, from #1, so all_matches()[n - 1]
-        is game #n. Derived, not stored: a late-uploaded old replay slots in
-        where it was played and shifts the later numbers up by one, accepted
-        because uploads are almost always in order."""
+        """id -> game number (place in play order, from #1). A late old upload
+        shifts later numbers."""
         rows = self._conn.execute("SELECT id FROM matches ORDER BY played_at, id")
         return {row["id"]: n for n, row in enumerate(rows, 1)}
 
@@ -1445,9 +1318,7 @@ class MatchStore:
         return self.all_matches(since=season.started_at, until=season.ended_at)
 
     def find_season(self, query: str) -> Season | None:
-        """Resolve a user-typed season reference. Accepts the full name
-        ("Season 1"), a bare or prefixed number ("1", "s1", "#1"), and matches
-        case-insensitively — nobody types the exact stored name."""
+        """ "Season 1", "1", "s1" or "#1", any case."""
         q = query.strip().lower()
         if not q:
             return None
@@ -1472,9 +1343,7 @@ class MatchStore:
         return Season.from_row(row)
 
     def season_containing(self, played_at: str) -> Season | None:
-        """The season whose window holds this played_at. Used so a match's
-        rating delta is computed against its own season, not whichever one
-        happens to be open when the replay is uploaded."""
+        """The season whose window holds this played_at."""
         return next((s for s in self.seasons() if s.contains(played_at)), None)
 
     def seasons(self) -> list[Season]:
@@ -1483,16 +1352,11 @@ class MatchStore:
         return [Season.from_row(r) for r in rows]
 
     def start_season(self, name: str, carryover: float | None = None, seed_sigma: float | None = None) -> Season:
-        """Close the open season as of now and open a new one. The boundary is
-        shared (previous ended_at == new started_at) so no match can fall
-        between two seasons, and none is counted by both. `carryover` and
-        `seed_sigma` make it a soft reset (both or neither); omitted, it is a
-        hard one."""
+        """Close the open season and start one at the same instant. `carryover`
+        and `seed_sigma` (both or neither) make it a soft reset."""
         if (carryover is None) != (seed_sigma is None):
             raise ValueError("a soft reset needs both carryover and seed_sigma")
-        # UTC-aware, matching how played_at is stored: season windows are
-        # compared as strings in SQL, so a naive local boundary would sit hours
-        # off from the timestamps it is filtering whenever the host isn't UTC.
+        # UTC like played_at: windows are compared as strings in SQL.
         now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
         with self._conn:
             self._conn.execute("UPDATE seasons SET ended_at = ? WHERE ended_at IS NULL", (now,))
@@ -1557,10 +1421,7 @@ class MatchStore:
     def mvp_counts(
         self, confidence_gate: float, min_duration: int, merge_map: dict[str, str] | None = None
     ) -> dict[str, int]:
-        """MVPs per player over decided games, keyed by canonical handle so a
-        merged account group tallies as one person. Unlike unit_records this
-        can't be a GROUP BY: the MVP is whoever destroyed the most value, which
-        MonobattleMatch.mvp() decides in Python."""
+        """MVPs over decided games by canonical handle (computed in Python)."""
         merge = merge_map or {}
         counts: dict[str, int] = {}
         for _match_id, match in self.all_matches():
@@ -1641,12 +1502,8 @@ class MatchStore:
             player_rows = self._conn.execute(
                 "SELECT * FROM match_players WHERE match_id = ? ORDER BY team, name", (row["id"],)
             ).fetchall()
-        # Built with model_construct: these rows were validated when stored,
-        # and validating again per read cost most of the time and memory of
-        # loading every game (pydantic copies each dict and records a
-        # per-instance set of the fields given, ~2 KB a player). Names,
-        # handles and unit names repeat across thousands of games; interning
-        # keeps one copy of each instead of one per game.
+        # model_construct: validated when stored, and revalidating dominated load
+        # time and memory. Interning shares the heavily repeated strings.
         players = [
             MatchPlayer.model_construct(
                 set(),

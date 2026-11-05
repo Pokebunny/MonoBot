@@ -57,7 +57,7 @@ def test_catalog_reveals_recipe_only_when_earned_and_private():
 def test_catalog_lists_open_achievements_plainly():
     embed = match_embeds.achievement_catalog(OPEN_TIER, earned_keys={"first_game"}, discovered_keys=set())
     text = _text(embed)
-    assert OPEN.description in text  # non-secret recipe always visible
+    assert OPEN.description in text
     assert "✅" in text  # earned marker
 
 
@@ -92,7 +92,7 @@ def test_profile_masks_secret_recipe():
     text = _text(embed)
     assert "One-Man Army" in text  # name shown
     assert SECRET_RECIPE not in text  # recipe never on a public profile
-    assert OPEN.description in text  # non-secret recipe fine
+    assert OPEN.description in text
     assert "reveals recipes" in (embed.footer.text or "")  # points at the private render
 
 

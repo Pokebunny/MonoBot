@@ -13,7 +13,7 @@ from cogs.replays import Replays, classify_zip
 from community import Community
 from models.config import GuildConfig
 from services import replay_zip
-from services.storage import MatchStore, hash_replay
+from services.storage import hash_replay
 from test_storage import BASE, _match
 
 
@@ -70,13 +70,6 @@ def test_judges_size_by_what_unpacks_not_what_the_zip_claims(monkeypatch):
 
 
 # -- the preview ----------------------------------------------------------
-
-
-@pytest.fixture
-def store(tmp_path):
-    s = MatchStore(str(tmp_path / "t.db"))
-    yield s
-    s.close()
 
 
 def _later(minutes):

@@ -1,10 +1,4 @@
-"""Form the most balanced teams from a queue of rated players.
-
-A monobattle is 2k players split into two teams of k. The number of distinct
-splits is small (35 for 4v4, 10 for 3v3), so we enumerate them all and pick
-the one whose predicted win probability is closest to 50/50. Team-strength
-prediction goes through services.rating so openskill stays isolated there.
-"""
+"""Balanced team splits: few enough (35 for 4v4) to enumerate them all."""
 
 import datetime as dt
 import itertools
@@ -21,10 +15,8 @@ def _win_probability(team1: list[QueuedPlayer], team2: list[QueuedPlayer]) -> fl
 
 
 def _as_shown(team1: list[QueuedPlayer], team2: list[QueuedPlayer], p1: float) -> ProposedMatch:
-    """A split the way players see it: each team strongest first, and the
-    strongest player's team as Team 1. Strength is mu, the balancer's own
-    read of skill -- not the board's mu - 3*sigma, which sinks anyone with
-    few games however good they are."""
+    """Each team strongest first, the strongest player's team as Team 1. By mu,
+    not the board's mu - 3*sigma, which sinks anyone with few games."""
 
     def by_skill(team: list[QueuedPlayer]) -> list[QueuedPlayer]:
         return sorted(team, key=lambda p: p.mu, reverse=True)
@@ -36,14 +28,8 @@ def _as_shown(team1: list[QueuedPlayer], team2: list[QueuedPlayer], p1: float) -
 
 
 def ranked_matches(players: list[QueuedPlayer], limit: int | None = None) -> list[ProposedMatch]:
-    """Every distinct split of an even roster into two teams, most balanced
-    first (predicted win probability closest to 50/50). `limit` keeps only the
-    top N — enough for players to shuffle through fair alternatives without
-    wandering into lopsided splits.
-
-    Fixing the first player on one side dedupes mirror-image splits (team1/
-    team2 swaps), so 8 players yield 35 candidates rather than 70. Which side
-    is shown as Team 1 is decided after, by _as_shown."""
+    """Every distinct split of an even roster, most balanced first. Anchoring
+    the first player dedupes mirror images (35 splits for 8, not 70)."""
     n = len(players)
     if n < 2 or n % 2 != 0:
         raise ValueError(f"need an even number of players (>=2), got {n}")
@@ -60,7 +46,6 @@ def ranked_matches(players: list[QueuedPlayer], limit: int | None = None) -> lis
 
 
 def balance_teams(players: list[QueuedPlayer]) -> ProposedMatch:
-    """The single most balanced split of an even roster."""
     return ranked_matches(players, limit=1)[0]
 
 
@@ -70,13 +55,8 @@ def expired(joined_at: dict[str, dt.datetime], now: dt.datetime, timeout: dt.tim
 
 
 def next_roster(roster: list[str], sitting_out: list[str], waitlist: list[str]) -> tuple[list[str], list[str], int]:
-    """The roster for the next game once sit-outs hand their spots over.
-
-    Everyone not sitting out keeps their spot — that's the point: a player who
-    wants another game never has to race anyone for it. Each vacated spot goes
-    to the waitlist in the order people joined it. Returns (new roster, the
-    waitlisters promoted into it, spots still unfilled); a nonzero shortfall
-    means the swap can't happen yet."""
+    """Everyone not sitting out keeps their spot; vacated spots go to the
+    waitlist in join order. Returns (roster, promoted, spots still unfilled)."""
     kept = [uid for uid in roster if uid not in sitting_out]
     promoted = [uid for uid in waitlist if uid not in roster][: len(roster) - len(kept)]
     return kept + promoted, promoted, len(roster) - len(kept) - len(promoted)

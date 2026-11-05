@@ -1,6 +1,6 @@
 import datetime
 
-from models.replay import MatchPlayer, MonobattleMatch
+from conftest import make_match, make_player
 from services import match_embeds, records
 from services.storage import MatchStore
 
@@ -9,22 +9,17 @@ BASE = datetime.datetime(2026, 9, 1, tzinfo=datetime.timezone.utc)
 
 def _match(day, battle, comeback=None, swings=None, winner=1, kills=(1000,) * 8):
     players = [
-        MatchPlayer(name=f"p{i}", toon_handle=f"h{i}", team=1 if i < 4 else 2, race="Zerg", pick="Zergling",
-                    resources_killed=kills[i], resources_lost=1000, unit_counts={})
+        make_player(f"p{i}", 1 if i < 4 else 2, handle=f"h{i}", resources_killed=kills[i], resources_lost=1000)
         for i in range(8)
-    ]  # fmt: skip
-    return MonobattleMatch(
+    ]
+    return make_match(
+        players,
+        winning_team=winner,
         file_name=f"{day}.SC2Replay",
         map_name="Monobattle",
         played_at=BASE + datetime.timedelta(days=day),
         duration_seconds=battle + 50,
-        game_type="4v4",
-        pick_mode="blind_random",
         pick_phase_seconds=70,  # game seconds: 50 real
-        players=players,
-        winning_team=winner,
-        winner_confidence=1.0 if winner else 0.0,
-        winner_method="recorded" if winner else "unknown",
         comeback_deficit=comeback,
         lead_changes=swings,
     )

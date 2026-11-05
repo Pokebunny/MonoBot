@@ -20,7 +20,7 @@ Two layers here:
 import datetime
 
 import pytest
-from models.replay import MatchPlayer, MonobattleMatch
+from conftest import make_match, make_player
 from services import awards
 from services.achievements import SPECS_BY_KEY
 from services.achievements.core import Tally, _MatchContext
@@ -30,34 +30,11 @@ AWARDS = {s.key: s for s in awards.SPECS}
 
 
 def _player(killed=None, lost=None, econ=None, tech=None):
-    return MatchPlayer(
-        name="A1",
-        toon_handle="A1",
-        team=1,
-        race="Zerg",
-        pick="Zergling",
-        resources_killed=killed,
-        resources_lost=lost,
-        econ_killed=econ,
-        tech_killed=tech,
-        unit_counts={},
-    )
+    return make_player("A1", 1, resources_killed=killed, resources_lost=lost, econ_killed=econ, tech_killed=tech)
 
 
 def _match(players):
-    return MonobattleMatch(
-        file_name="t.SC2Replay",
-        map_name="Monobattle LotV - Map Rotation",
-        played_at=datetime.datetime(2026, 8, 1, tzinfo=datetime.timezone.utc),
-        duration_seconds=900,
-        game_type="4v4",
-        pick_mode="blind_random",
-        pick_phase_seconds=60,
-        players=players,
-        winning_team=1,
-        winner_confidence=1.0,
-        winner_method="recorded",
-    )
+    return make_match(players, played_at=datetime.datetime(2026, 8, 1, tzinfo=datetime.UTC))
 
 
 def test_trade_efficiency_has_one_implementation():

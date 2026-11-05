@@ -1,9 +1,5 @@
-"""Link Discord users to the SC2 name(s) they play under.
-
-Winner confirmation (in the replays cog) is restricted to players who were in
-the match, and that check runs through these links: a member can only confirm
-a game if one of their linked SC2 names is in it.
-"""
+"""Link Discord users to their SC2 accounts (also what gates winner
+confirmation to a game's players)."""
 
 import logging
 
@@ -20,9 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 class _AccountSelect(discord.ui.Select):
-    """Dropdown to pick which account a shared name belongs to. In add_mode it
-    attaches an ADDITIONAL account (multi-account player). operator_id is who
-    may click — the person themself, or the admin running !linkuser."""
+    """Pick which account a shared name means. add_mode attaches another
+    account; operator_id is who may click."""
 
     def __init__(
         self,
@@ -334,9 +329,8 @@ class Identity(CommunityCog):
     async def unlinkuser(self, ctx, target: str, *, sc2_name: str | None = None):
         self = self.at(ctx)
 
-        # The target resolves like any other name (views.person_or_pick). An
-        # SC2 name unlinks just that name from whoever it means; a Discord
-        # member alone loses every account, or only `sc2_name` if given.
+        # An SC2 name unlinks just that name; a member loses every account, or
+        # only `sc2_name` if given.
         async def picked(interaction, person):
             await interaction.response.edit_message(content=self._unlink(ctx, person, target, sc2_name), view=None)
 

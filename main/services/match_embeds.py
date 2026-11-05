@@ -33,9 +33,7 @@ def _duration(seconds: int) -> str:
 
 
 def _rating_tag(deltas: dict[str, tuple[int, int]] | None, player: MatchPlayer) -> str:
-    """A small ' `+23`' / ' `-18`' after a player's name showing how the game
-    moved their rating. Empty when the game didn't rate (no deltas) or the
-    player has no entry."""
+    """' `+23`' after a name, or empty when there's no delta."""
     d = (deltas or {}).get(player.toon_handle)
     if d is None:
         return ""
@@ -68,9 +66,7 @@ def match_summary(
     rating_deltas: dict[str, tuple[int, int]] | None = None,
     map_label: str | None = None,
 ) -> discord.Embed:
-    """map_label is the terrain the game was actually played on (see
-    services.map_versions); without it the title falls back to the arcade
-    map's name, which is the same for every monobattle."""
+    """map_label is the terrain (services.map_versions), else the arcade name."""
     if match.winning_team is not None and match.winner_confidence >= 1.0:
         color = ACCENT
     elif match.winning_team is not None:
@@ -147,10 +143,8 @@ def parse_failure(file_name: str, error: str) -> discord.Embed:
 
 
 def zip_preview(file_name: str, outcomes: Counter, reasons: Counter, uploader: str, waiting: bool) -> discord.Embed:
-    """What adding a zip of replays would do, before anything is stored.
-    `outcomes` counts new / better / stored / in_zip / rejected / failed;
-    `reasons` counts the rejected ones by why. `waiting`: there is something
-    to add, so the message carries Add / Discard for an admin."""
+    """A zip's preview. `outcomes` counts new / better / stored / in_zip /
+    rejected / failed; `waiting` means Add / Discard buttons are shown."""
     addable = outcomes["new"] + outcomes["better"]
     lines = [f"**{_count(outcomes['new'], 'new game')}**"]
     if outcomes["better"]:
@@ -230,13 +224,9 @@ def leaderboard(
     pick: str | None = None,
     mode: str | None = None,
 ) -> discord.Embed:
-    """display_names maps handle -> shown name (the linked member's Discord
-    name); unmapped handles fall back to the account's SC2 name. `season`
-    names the window these ratings cover, shown so a reset ladder is never
-    mistaken for lost history; `final` marks a season that has already ended.
-    `race` titles a race board, whose ratings count only games on that race;
-    `pick` a unit board (rating.pick_ratings); `mode` a board rated on one
-    pick mode's games only."""
+    """display_names: handle -> Discord name (else the SC2 name). `season` is
+    shown so a reset ladder never looks like lost history; `race`, `pick` and
+    `mode` title the narrower boards."""
     display_names = display_names or {}
     pages = page_count(ratings)
     page = max(0, min(page, pages - 1))
@@ -283,9 +273,7 @@ def kings_board(
     display_names: dict[str, str] | None = None,
     contested: int = 0,
 ) -> discord.Embed:
-    """`kings` from rating.unit_kings: each person with the units they're #1
-    on, best rating first. `contested` is how many unit boards have anyone
-    with `min_games` on them, i.e. how many #1s there are to hold."""
+    """`kings` from rating.unit_kings; `contested` is how many #1s exist."""
     display_names = display_names or {}
     pages = page_count(kings)
     page = max(0, min(page, pages - 1))
@@ -348,12 +336,8 @@ def player_profile(
     season_rating: PlayerRating | None = None,
     season_name: str | None = None,
 ) -> discord.Embed:
-    """`rating` is the player's career rating — always present, so a profile
-    exists for anyone who has ever played. `season_rating` is their standing in
-    the open season and is None until they play in it; the Rating/Rank fields
-    show the season so this agrees with the leaderboard, with career alongside.
-    `race_ratings` and `unit_ratings` are the player's career entries on each
-    race board and one-unit board (rating.pick_ratings), keyed by race/pick."""
+    """`rating` is career (always present); `season_rating` is None until they
+    play this season, and leads so the profile agrees with the leaderboard."""
     shown = display_name or rating.name
     embed = discord.Embed(title=f"{shown} — profile", color=ACCENT)
     current = season_rating or rating
@@ -392,9 +376,7 @@ def player_profile(
 
 
 def player_units(shown_name: str, unit_ratings: dict[str, PlayerRating]) -> discord.Embed:
-    """Every unit a player has a career rating on, highest rated first — the
-    profile only has room for the top ten. Fits one description: there are
-    only ~45 picks, at ~45 characters a line."""
+    """Every unit a player has a career rating on, best first (~45 lines max)."""
     embed = discord.Embed(title=f"{shown_name} — units", color=ACCENT)
     embed.description = _rated_lines(unit_ratings, None)
     games = sum(r.games for r in unit_ratings.values())
@@ -410,9 +392,7 @@ def _missing_summary(missing: list[str], limit: int = 8) -> str:
     return f"{shown} +{extra} more" if extra > 0 else shown
 
 
-# Discord rejects an embed whose title, description, field names and values
-# and footer total over 6,000 characters, or that has over 25 fields. Pages
-# are packed under a margin of that.
+# Discord's per-embed limits (6,000 characters, 25 fields), with margin.
 EMBED_CHAR_BUDGET = 5800
 EMBED_MAX_FIELDS = 25
 
@@ -424,13 +404,9 @@ def achievements_gallery(
     holder_counts: dict[str, int] | None = None,
     reveal_keys: set[str] | None = None,
 ) -> list[discord.Embed]:
-    """A player's earned achievements grouped by rarity (rarest first), plus
-    their closest locked ones, as one embed per page: usually one, more when
-    a long-time player's badges won't fit in one message. holder_counts
-    (key -> players holding it) adds a live-rarity note to Epic+ lines.
-    `reveal_keys` are secrets the VIEWER has earned, unmasked here only on
-    an ephemeral render (same gate as the catalog) — callers must not pass
-    any on a public one."""
+    """Earned achievements by rarity plus the closest locked ones, paged.
+    `reveal_keys` (secrets the viewer earned) must only be passed for an
+    ephemeral render."""
     holder_counts = holder_counts or {}
     reveal_keys = reveal_keys or set()
     masked_any = False
@@ -442,11 +418,7 @@ def achievements_gallery(
         for e in earned:
             if e.spec.rarity != rarity:
                 continue
-            # On a public profile a secret's how is never printed (the name
-            # is fine — earning it means it's already community-discovered).
-            # An ephemeral render unmasks the ones the viewer has earned. The
-            # 🔒 tag stays either way, so an unlocked secret still reads as
-            # one rather than looking like any other badge.
+            # A secret's recipe shows only in reveal_keys; the 🔒 tag always stays.
             if not is_secret(e.spec):
                 body = e.spec.description
             elif e.spec.key in reveal_keys:
@@ -522,13 +494,8 @@ def achievement_catalog(
     holder_counts: dict[str, int] | None = None,
     private: bool = False,
 ) -> discord.Embed:
-    """One rarity page of the full catalogue, for browsing everything that
-    exists. Two visibility gates for secrets:
-    - name: hidden as 🔒 ??? until the community has discovered it (anyone
-      earned it); the rarity tier still shows (it's the page).
-    - recipe: shown only when the VIEWER has earned it AND this is a private
-      (ephemeral) render — a public !catalog masks it so a channel message
-      never leaks the how."""
+    """One rarity page of the catalogue. A secret's name shows once anyone has
+    earned it; its recipe only to a viewer who has, on an ephemeral render."""
     holder_counts = holder_counts or {}
     # Secrets sink to the bottom of their rarity page (mystery slots last).
     specs = sorted((s for s in ACHIEVEMENT_SPECS if s.rarity == rarity), key=is_secret)
@@ -578,17 +545,9 @@ def achievement_sweep(
     names: dict[str, str],
     losses: list[tuple[str, AchievementSpec]] | None = None,
 ) -> discord.Embed:
-    """Announcement for what a rules change did to the ledger rather than what
-    a game did — see achievements.reconcile. `losses` are badges the new rules
-    no longer award, which the reconcile has just taken back.
-
-    Grouped by achievement, not by player: one re-based threshold can hand the
-    same badge to twenty people at once, and twenty near-identical lines read
-    as spam where one line with twenty names reads as news. Rarest first, same
-    as the per-match announcement.
-
-    Secrets name themselves and nothing else, for the same reason they do
-    there — the recipe would spoil the channel."""
+    """Announce a reconcile's grants and `losses`, one line per achievement
+    (a re-tuned rule can hit twenty people), rarest first. Secrets show their
+    name only."""
     by_key: dict[str, list[str]] = {}
     specs: dict[str, AchievementSpec] = {}
     for handle, earned in grants:
@@ -610,9 +569,7 @@ def achievement_sweep(
         lines.append(f"*…and {dropped} more.*")
     embed = discord.Embed(title="Achievements updated", color=ACCENT)
     embed.description = "\n\n".join(lines) or "*No new achievements.*"
-    # Removals get their own field rather than a line in the list: a badge
-    # going away is the part people will want explained, and burying it under
-    # the grants is how it becomes "the bot ate my achievement".
+    # Removals get their own field so they're never buried under grants.
     if losses:
         by_spec: dict[str, list[str]] = {}
         specs: dict[str, AchievementSpec] = {}
@@ -631,14 +588,9 @@ def achievement_sweep(
 def achievement_unlocks(
     unlocks: list[tuple[str, Earned]], first_discovery_keys: frozenset[str] = frozenset()
 ) -> discord.Embed:
-    """Announcement for achievements a just-ingested game unlocked, as
-    (player display name, earned) pairs, rarest first. A lobby full of new
-    players can unlock dozens at once, so the list is truncated to stay under
-    the 4096-char embed description limit — the rarest survive the cut.
-
-    Secrets show only their NAME here, never the how — the recipe would spoil
-    it for the whole channel. `first_discovery_keys` are secrets nobody had
-    earned before this game, so the finder gets a discovery credit."""
+    """A game's unlocks, rarest first, truncated to the description limit.
+    Secrets show their name only; `first_discovery_keys` get a discovery
+    credit."""
     lines, dropped, any_secret = [], 0, False
     budget = 3900  # headroom under the 4096 limit for the overflow line
     for name, e in unlocks:
@@ -675,10 +627,7 @@ def h2h_summary(
     numbers: dict[int, int],
     duo: DuoRecord | None = None,
 ) -> discord.Embed:
-    """`duo` is this pair's entry from rating.duo_records, when they have one.
-    The teamed record alone can't separate a strong pair from a pair that drew
-    easy opposition, so the second line gives the pair's own rating — the same
-    number !duos ranks on. None when they've never been on the same team."""
+    """`duo` (None if never teamed) adds the pair's own rating, as !duos ranks."""
     embed = discord.Embed(title=f"{name1} vs {name2}", color=ACCENT)
     total_vs = vs[0] + vs[1]
     if total_vs:
@@ -780,11 +729,8 @@ LINE_FIELD = "In line for a spot"
 
 
 def with_lineup_changes(embed: discord.Embed, sitting_out: list[str], line: list[str]) -> discord.Embed:
-    """Show who's giving up their spot and who's in line for one under the
-    teams, replacing any earlier copy of those fields. Works on an embed read
-    back off a message, so a proposal from before a restart can be updated
-    too. Takes Discord ids; mentions in an embed render as names and never
-    ping."""
+    """Replace the sitting-out / line fields, on a fresh or read-back embed.
+    Embed mentions never ping."""
     # "Waitlist" is the line's name on messages posted before it had this one.
     keep = [f for f in embed.fields if f.name not in (SITTING_OUT_FIELD, LINE_FIELD, "Waitlist")]
     embed.clear_fields()
@@ -804,19 +750,9 @@ def mvp_rates(
     min_games: int = 1,
     display_names: dict[str, str] | None = None,
 ) -> discord.Embed:
-    """`rows` is (handle, sc2_name, mvps, games), sorted by rate. Takes the
-    same display_names mapping as leaderboard() so both boards name people the
-    same way: the linked member's Discord name, falling back to the SC2 name.
-
-    One player in eight is the MVP, so the footer states that 12.5% is average
-    — a bare percentage gives no sense of what's good.
-
-    The footer also names the window as career/all-seasons. The ladder defaults
-    to the OPEN season, so without saying so these two boards show the same
-    person with wildly different game counts (21 this season vs 478 career) and
-    read as contradicting each other. MVP rate stays career on purpose — it is
-    a slow stat, and a fresh season holds far too few games for it to mean
-    anything — so the fix is to label the window, not to match the ladder."""
+    """`rows` is (handle, sc2_name, mvps, games), sorted by rate. Career-wide
+    (a season holds too few games), and the footer says so, since the ladder
+    shows the open season."""
     display_names = display_names or {}
     pages = page_count(rows)
     page = max(0, min(page, pages - 1))
@@ -841,21 +777,8 @@ def duo_board(
     display_names: dict[str, str] | None = None,
     sort: str = "rating",
 ) -> discord.Embed:
-    """`rows` is pre-sorted; `sort` only says which number to lead with and how
-    to label the board. One of "rating", "raw" or "synergy".
-
-    Rating leads by default because it is the only one of the three that is
-    both about the pair and stable. Raw win rate ignores who they played, so
-    it mostly ranks whoever is individually good. Synergy — wins above what
-    the ratings predicted — is a residual, and measured over this history it
-    does not repeat: a pair's synergy in one half of their games does not
-    predict the other half, and adding it to a win prediction never helps. The
-    pair's own rating is a level rather than a residual, and it does hold up
-    across halves, so it is the one that earns the headline.
-
-    Career, all seasons, and labelled as such: a pair needs many games
-    together before their record says anything, and one season never holds
-    enough of them."""
+    """`rows` is pre-sorted; `sort` ("rating", "raw" or "synergy") picks the
+    lead number. Rating is the default — see CLAUDE.md "Pair stats"."""
     display_names = display_names or {}
     pages = page_count(rows)
     page = max(0, min(page, pages - 1))
@@ -896,17 +819,9 @@ def unit_board(
     sort: str = "rating",
     label: str = "Career",
 ) -> discord.Embed:
-    """`rows` is pre-sorted; `sort` ("rating" or "raw") says which number
-    leads. A unit's rating is a bonus in ladder points over the average pick,
-    adjusted for who picked it and who they faced — so "+200" plays like its
-    picker being 200 rating better. The tight prior has already pulled
-    rarely-picked units toward zero, so the board sorts on the rating itself
-    rather than a conservative bound (which would sink a rare unit below a
-    common one no matter which way it leans).
-
-    No ± is shown: every unit's sigma settles at the same floor, where each
-    game's information is balanced by the model's per-game drift, so it read
-    as ±70-80 on every row and said nothing the game count doesn't."""
+    """`rows` is pre-sorted; `sort` ("rating" or "raw") picks the lead. Sorted
+    on mu, not a conservative bound (the tight prior already shrinks rare
+    units). No ± — every unit's sigma settles at the same floor."""
     pages = page_count(rows)
     page = max(0, min(page, pages - 1))
     start = page * BOARD_PAGE_SIZE
@@ -952,10 +867,7 @@ def _clock(moment: datetime.datetime) -> str:
 
 
 def session_recap(recap: SessionRecap, names: dict[str, str], tz: datetime.tzinfo, title: str) -> discord.Embed:
-    """Everyone who played a session, one line each, biggest rating climb
-    first: record, ladder rating and its change, MVPs, and below it anything
-    they unlocked. Secrets show their name only, as in the unlock
-    announcement — the recipe would spoil the channel."""
+    """One line per player, biggest climb first, with their unlocks."""
     start, end = recap.started_at.astimezone(tz), recap.ended_at.astimezone(tz)
     when = f"{start:%a %b} {start.day} · {_clock(start)} – {_clock(end)} {end.tzname()}"
     players = sorted(

@@ -35,14 +35,10 @@ _MATCH_NUMBER = re.compile(r"#?(\d{1,7})")
 # accounts now that the ladder is in real use. !leaderboard 1 shows everyone.
 DEFAULT_MIN_GAMES = MIN_RANKED_GAMES
 
-# MVP rate needs a much higher floor than the rating board. A player with six
-# games and two MVPs sits at 33% on nothing but variance, so a low floor makes
-# the board a list of small samples. !mvprate <n> overrides it.
+# High, or the board is small samples (2 MVPs in 6 games = 33%).
 MVP_RATE_MIN_GAMES = 50
 
-# Games a pair must have played together to make the duo board. Pairs are far
-# noisier than players — most of a duo's record is the other two teammates —
-# so the floor is high; !duos <n> overrides it.
+# High: most of a pair's record is their other two teammates.
 DUO_MIN_GAMES = 15
 
 # Default minimum games for a unit to make the unit board. Most picks clear
@@ -137,10 +133,8 @@ _DUO_SORTS = {
 
 
 class CatalogView(ExpiringView):
-    """◀ ▶ pagination over the full achievement catalogue, one rarity per
-    page. `private` (an ephemeral slash invocation) reveals the recipes of
-    secrets the viewer has earned; a public !catalog keeps them masked so a
-    channel message never leaks the how."""
+    """The catalogue, one rarity per page. `private` (ephemeral) reveals the
+    viewer's earned secret recipes."""
 
     def __init__(self, earned_keys: set[str], discovered_keys: set[str], holder_counts: dict[str, int], private: bool):
         super().__init__()
@@ -196,9 +190,7 @@ def _pager(pages: list[discord.Embed]) -> PagedBoardView | None:
 
 
 class MatchBrowserView(ExpiringView):
-    """⏮ ◀ ▶ ⏭ browsing over a snapshot of match history (oldest→newest);
-    opens on the newest game, ◀ steps back in time. `numbers` is
-    MatchStore.match_numbers(), for the footer."""
+    """Browse a snapshot of match history, opening on the newest game."""
 
     def __init__(
         self, matches, numbers: dict[int, int], map_names: dict[str, str] | None = None, start: int | None = None
@@ -250,10 +242,7 @@ class MatchBrowserView(ExpiringView):
 
 
 class ProfileView(ExpiringView):
-    """One button on a profile that flips the message between the profile
-    and the player's full unit list (the profile shows only the ten
-    highest rated). Edits in place, so anyone looking can flip it without
-    adding to the channel."""
+    """Flips a profile in place to the player's full unit list and back."""
 
     def __init__(self, profile: discord.Embed, units: discord.Embed):
         super().__init__()
@@ -380,11 +369,8 @@ class Leaderboard(CommunityCog):
 
     @staticmethod
     def _parse_board_query(query: str) -> tuple[int, str | None, str]:
-        """Split '!leaderboard [min_games] [race] [season]' into its parts. A
-        bare number stays min_games — that predates seasons and is what the
-        board's own footer tells people to type — so a season needs a name
-        ('s1'), and a number is part of it only straight after the word
-        'season' ('season 3'). A race word can go anywhere."""
+        """Split '[min_games] [race] [season]'. A bare number is min_games (the
+        footer says so); a season is 's1' or 'season 3'."""
         min_games, race, season_words = DEFAULT_MIN_GAMES, None, []
         for token in query.split():
             if token.lower() in _RACES:
@@ -405,19 +391,13 @@ class Leaderboard(CommunityCog):
         return season
 
     def _book_for(self, season, career: bool, by_race: bool = False, mode: str | None = None):
-        """The rating book for a season. The open season comes from the shared
-        cache; past seasons, the career board, race and mode boards are built
-        on demand — they're rare reads, and at this history size a full replay
-        is ~50ms."""
+        """The open season from the cache; anything else built on demand (~50ms)."""
         if not career and not by_race and mode is None and season is not None and season.ended_at is None:
             return self.ratings.book()
         return season_book(self.store, None if career else season, by_race, mode)
 
     def _shown_name(self, ctx, handles, fallback: str) -> str:
-        """The display name in THIS server of whoever these accounts are
-        linked to, else the SC2 name. Links are global, so the linked person
-        may not be here; their name from another server would mean nothing
-        to this one, and the SC2 name is what people see in game."""
+        """The linked member's name in this server, else the SC2 name."""
         for handle in handles if isinstance(handles, list) else [handles]:
             discord_id = self.store.discord_id_for_handle(handle)
             if discord_id is None:
@@ -546,10 +526,8 @@ class Leaderboard(CommunityCog):
         view.message = await ctx.send(embed=view.profile, view=view)
 
     async def _person_or_pick(self, ctx, query: str, on_pick):
-        """(person, note on the weaker matches) for a typed name, or None when
-        the caller has been answered already. Who the name means is decided by
-        views.person_or_pick, so every command agrees; this only adds that a
-        stats command needs someone with games."""
+        """(person, others note) via views.person_or_pick, requiring games; None
+        when the caller has been answered."""
         people = await person_or_pick(ctx, self.store, query, on_pick)
         if people is None:
             return None
@@ -577,9 +555,7 @@ class Leaderboard(CommunityCog):
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def achievements(self, ctx, *, player: str | None = None):
         self = self.at(ctx)
-        # A slash invocation renders privately, which is what lets it unmask
-        # the recipes of secrets the VIEWER has earned (same gate as
-        # /gallery). Text !ach stays public, so it stays masked.
+        # Only a private (slash) render unmasks the viewer's earned secrets.
         private = ctx.interaction is not None
         if player is None:
             group = self._own_group(ctx.author)
@@ -631,10 +607,7 @@ class Leaderboard(CommunityCog):
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def gallery(self, ctx):
         self = self.at(ctx)
-        # Recipes for secrets you've earned are only revealed on a PRIVATE
-        # (ephemeral) render, which needs a slash invocation. A text !catalog
-        # still works — it just keeps secret recipes masked, since the message
-        # is public.
+        # Only a private (slash) render unmasks the viewer's earned secrets.
         group = self._own_group(ctx.author)
         earned_keys = {e.spec.key for e in achievements.ledger_for_group(self.store, group)} if group else set()
         discovered = self.store.discovered_keys()
@@ -778,9 +751,7 @@ class Leaderboard(CommunityCog):
         return {"content": None, "embed": embed}
 
     def _duo_for(self, group1: list[str], group2: list[str]):
-        """This pair's entry on the duo board, or None if they've never been
-        teamed. Keyed the way duo_records keys them: canonical handles sorted,
-        so either argument order finds the same row."""
+        """The pair's duo record in either order, or None."""
         merge = self.store.merge_map()
         pair = tuple(sorted({merge.get(group1[0], group1[0]), merge.get(group2[0], group2[0])}))
         return self.duos.records().get(pair)
@@ -834,9 +805,7 @@ class Leaderboard(CommunityCog):
 
     @staticmethod
     def _parse_duo_query(query: str) -> tuple[int, str]:
-        """Split '!duos [min_games] [sort]'. The pair's own rating is the
-        default: it is the only one of the three sorts that is both about the
-        pair and stable enough to rank on (see match_embeds.duo_board)."""
+        """Split '[min_games] [sort]'; sort defaults to the pair's rating."""
         min_games, sort = DUO_MIN_GAMES, "rating"
         for token in query.lower().split():
             if token.isdigit():
@@ -850,9 +819,8 @@ class Leaderboard(CommunityCog):
         view.message = await ctx.send(embed=view.embed(), view=view if view.multipage else None)
 
     async def _kings_board(self, ctx, query: str):
-        """Who holds #1 on the most unit boards (!leaderboard <unit>), each
-        person once however many accounts they've linked. All-time, like the
-        unit boards it counts; a number sets the games a #1 needs on the unit."""
+        """Who holds #1 on the most unit boards (all-time); a number sets the
+        games a #1 needs."""
         min_games = next((int(t) for t in query.split() if t.isdigit()), DEFAULT_MIN_GAMES)
         boards = self.pick_boards.boards()
         kings = unit_kings(boards, min_games)
@@ -893,9 +861,8 @@ class Leaderboard(CommunityCog):
 
     @staticmethod
     def _parse_unit_query(query: str) -> tuple[int, bool, str]:
-        """Split '[units] [min_games] [raw] [season]' into (min_games, sort by
-        raw win rate, season words). As on the main board, a number is a
-        season's only straight after the word 'season'."""
+        """Split '[units] [min_games] [raw] [season]' -> (min_games, raw, season
+        words)."""
         min_games, raw, season_words = UNIT_MIN_GAMES, False, []
         for token in query.split():
             word = token.lower()

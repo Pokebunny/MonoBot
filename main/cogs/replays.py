@@ -1,7 +1,5 @@
-"""Replay ingestion: watch for .SC2Replay attachments, parse, store, and
-ask for manual winner confirmation when inference is below the rating gate.
-A .zip of replays is previewed first and added in one go once an admin
-confirms it."""
+"""Replay ingestion: parse and store uploads, asking for a winner when
+inference is unsure. Zips are previewed and added on an admin's say-so."""
 
 import asyncio
 import logging
@@ -22,10 +20,7 @@ from views import ExpiringView
 
 logger = logging.getLogger(__name__)
 
-# Raw uploads are archived here (gitignored) so future parser improvements
-# can re-process history instead of only applying to new games. Only stored
-# recordings are kept: of two recordings of one game, the weaker is deleted
-# (see keep_archive). The folder is shared by every community.
+# Stored recordings only, for reparsing; shared by every community.
 REPLAY_ARCHIVE_DIR = os.path.join(os.path.dirname(__file__), "..", "resources", "replays")
 
 
@@ -38,9 +33,8 @@ def archive_replay(data: bytes, file_hash: str) -> None:
 
 
 def keep_archive(client, result: storage.IngestResult, data: bytes, file_hash: str) -> None:
-    """Archive an upload only if ingest stored it, and delete the recording
-    it dropped as the weaker of two of one game -- unless another community
-    stores that same file."""
+    """Archive a stored upload; delete the weaker recording unless another
+    community stores it."""
     if result.status in ("inserted", "updated"):
         archive_replay(data, file_hash)
     dropped = result.dropped_hash
@@ -57,11 +51,8 @@ SEND_RETRY_DELAYS = (2, 5)
 
 
 async def send_with_retry(channel, **kwargs) -> discord.Message | None:
-    """channel.send, retried through transient Discord 5xx errors. Gives up
-    with a logged error and returns None rather than raising: by the time a
-    summary is posted the match is already stored, so a lost post must not
-    abort whatever the caller does next. A missing channel (a community
-    with none to post in) sends nothing."""
+    """channel.send retried through 5xx errors; logs and returns None rather
+    than raising, since the match is already stored."""
     if channel is None:
         return None
     for delay in (*SEND_RETRY_DELAYS, None):
@@ -77,10 +68,8 @@ async def send_with_retry(channel, **kwargs) -> discord.Message | None:
 
 
 class ConfirmWinnerView(ExpiringView):
-    """Two buttons to settle a match whose winner couldn't be inferred
-    confidently. Only a player who was in the match may confirm it — checked
-    via their linked SC2 name(s). Manual confirmation sets confidence to 1.0.
-    Expires after 12h (a restart kills it anyway); !pending re-posts buttons."""
+    """Winner buttons for an unsure match; only its players may press.
+    !pending re-posts them."""
 
     def __init__(
         self,
@@ -152,9 +141,7 @@ class ConfirmWinnerView(ExpiringView):
 
 
 async def settle_copy(client, community, match, team: int) -> None:
-    """Give another community's copy of a game the winner just confirmed for
-    it, and announce there any badges that unlocks. A copy someone already
-    confirmed is left alone."""
+    """Copy a confirmed winner to another community's unconfirmed copy."""
     row = community.store.find_game(match)
     if row is None or row["winner_method"] == "confirmed":
         return
@@ -179,12 +166,8 @@ async def settle_copy(client, community, match, team: int) -> None:
 
 
 class ApproveGameView(ExpiringView):
-    """One button under a "Not recorded" notice, for the real game the rules
-    mistook for a remake (or an off-format game the group wants kept): a
-    player who was in it, or an admin, records it anyway. The approval is
-    stored on the match, so a later prune leaves it be. Approving only stores
-    it — the rating gate still applies, so a game that isn't a 4v4 is kept in
-    history but never rated. Holds the replay in memory until it expires."""
+    """Lets a player or admin keep a rejected game anyway (still subject to
+    the rating gate)."""
 
     def __init__(self, cog: "Replays", match, data: bytes, file_hash: str, uploader: discord.abc.User):
         super().__init__()
@@ -254,9 +237,7 @@ def parse_all(replays: list[tuple[str, bytes]]) -> list[tuple[str, bytes, object
 
 
 def classify_zip(store: MatchStore, parsed: list[tuple[str, bytes, object | None]]) -> list[ZipEntry]:
-    """What adding each replay would do, decided without writing anything.
-    Two recordings of one game inside the zip both look new to the store;
-    the later one is marked in_zip (ingest keeps whichever is better)."""
+    """Dry-run each replay; a second recording within the zip is in_zip."""
     entries, seen_hashes, seen_games = [], set(), set()
     for name, data, match in parsed:
         file_hash = storage.hash_replay(data)
@@ -281,10 +262,7 @@ def classify_zip(store: MatchStore, parsed: list[tuple[str, bytes, object | None
 
 
 class ZipUploadView(ExpiringView):
-    """Add / Discard under a zip's preview. Only an admin decides: a zip can
-    hold dozens of games from anywhere, a different thing to vouch for than
-    the one game a player just played. Holds the replays in memory until
-    it's decided or expires."""
+    """Add / Discard under a zip preview, admins only."""
 
     def __init__(self, cog: "Replays", file_name: str, entries: list[ZipEntry]):
         super().__init__()
@@ -344,18 +322,8 @@ class Replays(CommunityCog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        """Announce what a deploy's rule changes did to the ledger — both the
-        badges it handed out and the ones it took back.
-
-        A reconcile normally does nothing at all — the ledger already agrees
-        with the rules — so this is silent on an ordinary restart. It speaks
-        when the rules moved under the existing history, which otherwise lands
-        invisibly: people would find a badge appear or vanish with no idea
-        why. Announcing the removals is the whole reason revoking is
-        acceptable; a silent one is just a bug report waiting to happen.
-
-        on_ready fires again on every gateway reconnect, so the flag keeps one
-        process to one announcement."""
+        """Announce a deploy's reconcile, grants and revokes alike (silent when
+        nothing changed). Once per process: on_ready refires on reconnect."""
         if self._swept:
             return
         self._swept = True
@@ -450,10 +418,8 @@ class Replays(CommunityCog):
     async def _record_in(
         self, channel, match, data: bytes, file_hash: str, author: discord.abc.User, from_guild: str | None = None
     ):
-        """Store a parsed upload in this community and post its summary,
-        unlocks and buttons. `from_guild` names the server it was uploaded in
-        when that's another one: then a game already stored here goes
-        unmentioned, and the summary carries no lobby buttons."""
+        """Store an upload and post its summary. With `from_guild` (another
+        server's upload), a duplicate is silent and there are no lobby buttons."""
         # uploaded_by keys on the Discord id so Chronicler can credit it.
         uploader = str(author.id)
         result = self.store.ingest(match, file_hash, uploaded_by=uploader)
@@ -466,18 +432,11 @@ class Replays(CommunityCog):
             await channel.send(embed=match_embeds.duplicate_notice(match.file_name))
             return
 
-        # Fresh-upload rating changes: the game just entered history, so replay
-        # to its chronological position and show what it moved. Scoped to the
-        # season the game was PLAYED in (not the open one) so a late-uploaded
-        # old replay reports the delta it actually caused. Empty for unrateable
-        # games (unconfirmed winner / too short / not a 4v4) — the field is simply omitted.
+        # Deltas in the season the game was played in, not the open one.
         season = self.store.season_containing(match.played_at.isoformat())
         history = self.store.season_matches(season) if season else self.store.all_matches()
         deltas = match_rating_deltas(history, result.match_id, start=season_start(self.store, season))
-        # A new rotation shows up as a map version nobody has looked up yet;
-        # fetching it is one network call per version, not per upload. Never
-        # let it stop the summary going out — the map's name is a garnish,
-        # posting the match is the job.
+        # A map lookup failure must never block the summary.
         try:
             await map_versions.resolve_pending_async(self.store)
         except Exception:
@@ -508,11 +467,8 @@ class Replays(CommunityCog):
         )
         if next_view is not None:
             embed = lobby.lineup_embed(embed)
-        # The summary goes out BEFORE badges are granted: granting rebuilds
-        # every player's achievements, seconds of work at thousands of games
-        # that would otherwise hold the summary back. The grant still runs in
-        # a finally — the ledger write is the part that matters, and a
-        # Discord failure on the summary must not leave the match ungranted.
+        # Summary first (granting takes seconds); grant in a finally so a
+        # Discord failure can't skip it.
         try:
             if needs_confirmation:
                 view = ConfirmWinnerView(
@@ -537,9 +493,7 @@ class Replays(CommunityCog):
         return self.client.communities.sharing_games_with(self.community)
 
     def _chronicler_unlock(self, author, match) -> list:
-        """Chronicler is earned by uploading, not playing — grant it here
-        when this upload crosses the threshold (needs a linked account to
-        hang the badge on)."""
+        """Grant Chronicler (earned by uploading) to a linked uploader."""
         if self.store.upload_count(str(author.id)) < achievements.CHRONICLER_UPLOADS:
             return []
         handles = self.store.handles_for(str(author.id))
@@ -576,10 +530,8 @@ class Replays(CommunityCog):
         view.message = status
 
     async def add_zip(self, entries: list[ZipEntry], author: discord.abc.User, file_name: str):
-        """Store a confirmed zip's games in play order, with no summary per
-        game. Returns the result embed and the achievement sweep (or None):
-        a reconcile, as on a deploy, since a batch of old games can move
-        badges either way and a silent revoke is never acceptable."""
+        """Store a zip's games in play order; returns (result embed, reconcile
+        result or None)."""
         uploader = str(author.id)
         results = Counter()
         storable = [e for e in entries if e.outcome in ("new", "better", "in_zip")]
@@ -616,10 +568,8 @@ class Replays(CommunityCog):
         return match_embeds.zip_result(file_name, results, need_winner), sweep
 
     async def forward_zip(self, entries: list[ZipEntry], author: discord.abc.User, file_name: str, from_guild: str):
-        """Add a zip confirmed in another server here too (this community
-        counts that one's games), posting the result in this server's replay
-        channel. Judged afresh against this ladder, which may hold games the
-        other doesn't and the other way round."""
+        """Add a zip confirmed in a server this one counts games from, judged
+        afresh against this ladder."""
         entries = classify_zip(self.store, [(e.name, e.data, e.match) for e in entries])
         if not any(e.outcome in ("new", "better", "in_zip") for e in entries):
             return

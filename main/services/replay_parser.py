@@ -1,18 +1,10 @@
-"""Parse StarCraft II monobattle replays into MonobattleMatch models.
+"""Parse monobattle replays into MonobattleMatch (the only sc2reader user).
 
-sc2reader is isolated behind this module: nothing else in the bot should
-import it, so the parsing backend can be swapped without touching callers.
+Pick: the last preview unit the map spawns before the pick phase ends, with
+production counts as corroboration and fallback.
 
-Pick detection: during the ~60s pick phase the map spawns one preview unit
-each time a player selects an option, so the player's final pick is the last
-preview unit born before the phase ends — reliable even in games too short
-for any production. Production counts corroborate it and act as fallback.
-
-Winner detection: the replay records a winner only when the losing players
-all leave before the recorder does. Otherwise we infer from independent
-signals — final army value per team, gg-concessions (gg then leave), and
-first-leaver order — scoring confidence by their agreement, each signal
-blind-validated against replays with recorded winners.
+Winner: recorded only when every loser leaves before the recorder; otherwise
+inferred from army value, gg-concessions and departures, scored by agreement.
 """
 
 import logging
@@ -27,9 +19,8 @@ from models.replay import UNIT_RACE, MapVersion, MatchPlayer, MonobattleMatch
 
 logger = logging.getLogger(__name__)
 
-# Fallback pick-phase length when no game-start marker is found. The real
-# boundary is detected per game: the map awards Spray* decals to every player
-# the moment the battle starts (workers spawn a second later).
+# Fallback when the battle-start marker (Spray* decals awarded to everyone) is
+# missing.
 _DEFAULT_PICK_PHASE_SECONDS = 60
 
 # Pick-mode classification: blind random games start at ~63-76s; both draft
@@ -53,25 +44,15 @@ _STATIC_DEFENSE = {
     "PlanetaryFortress",
 }
 
-# A cannon started this soon after the pick phase, nearer an enemy's starting
-# base than the builder's own, makes the game a cannon rush. Measured over
-# the ladder's replays the rule barely has an edge to fall on: a forge-first
-# player's first cannon sits either at home (under ~30% of the way to the
-# enemy) or at an enemy base (over ~84%), and 90% of forward cannons from
-# forge-first openers go down by 3:44. Later forward cannons are mostly
-# defense at bases taken mid-game, so the window keeps those out.
+# Cannon rush: a cannon this early, nearer an enemy start than one's own. First
+# cannons land under ~30% or over ~84% of the way, and 90% of forward ones by
+# 3:44; later forward cannons defend mid-game bases.
 _CANNON_RUSH_WINDOW_SECONDS = 240
 
-# The Zerg version: a spine or spore crawler started within this window, at
-# least _CRAWLER_RUSH_REACH of the way from the builder's start to an enemy's
-# (crawlers need creep, so this means a proxy hatchery). Before 8:00 spines
-# sit either at home (under ~40% of the way) or at an enemy base (70%+), and
-# every first forward spine lands by 6:00 or after 7:00 -- the late ones are
-# bases taken mid-game. The reach is stricter than the cannons' halfway mark
-# because early hatcheries 30-60% across are expansions (1 in 101 was
-# followed by a rush), and a spore at one of those is defense; 60% keeps the
-# proxy spores (hatch 70-95% across, spores instead of spines) and loses 3
-# borderline spine games of 125.
+# Spine rush: a crawler in the window at least _CRAWLER_RUSH_REACH across (so a
+# proxy hatch). Early spines sit under ~40% or past 70%; first forward spines
+# land by 6:00 or after 7:00 (mid-game bases). 60%, not half, because hatches
+# 30-60% across are expansions; it loses 3 borderline games of 125.
 _CRAWLER_RUSH_WINDOW_SECONDS = 360
 _CRAWLER_RUSH_REACH = 0.6
 _RUSH_CRAWLERS = {"SpineCrawler", "SporeCrawler"}
@@ -104,8 +85,7 @@ _NOISE_UNITS = {
     "ShieldBattery",  # building, but not flagged is_building by sc2reader
 }
 
-# Support units every player has access to regardless of pick. Only treated
-# as the pick when auxiliary evidence says so (or nothing else was made):
+# Available to everyone; the pick only on extra evidence (or nothing else made):
 # - Queen: limited to one per hatchery unless picked
 # - Raven: can't use abilities (e.g. AutoTurret) unless picked
 _SUPPORT_UNITS = {
@@ -141,11 +121,8 @@ _NORMALIZE = {
 # Overlords, which every zerg player has regardless of pick.
 _NEVER_PICKS = {"Overseer", "OverlordTransport"}
 
-# Units built by morphing a precursor (the pick when meaningfully produced):
-# Baneling/Ravager/Lurker/BroodLord from zerg units, Archon from either
-# templar type (both templar can merge, but only when Archon is the pick).
-# In production fallback the morph only overrides its own precursor — e.g.
-# a Mutalisk player's handful of Overseers must not override Mutalisk.
+# Morph -> precursors. In production fallback a morph overrides only its own
+# precursor (a Mutalisk player's Overseers mustn't override Mutalisk).
 _MORPH_PRECURSORS = {
     "Baneling": {"Zergling"},
     "Ravager": {"Roach"},
@@ -156,15 +133,11 @@ _MORPH_PRECURSORS = {
 
 _HATCHERIES = {"Hatchery", "Lair", "Hive"}
 
-# New town halls only — morphs (Lair/Orbital/PlanetaryFortress) are not new
-# bases. Base #1 spawns at game start, so a player's count starts at 1; the
-# map spawns the Terran starting base directly as an OrbitalCommand, caught
-# separately (born only, so a CC-to-orbital morph can't double count).
+# New town halls only, not morphs. The Terran start spawns as an
+# OrbitalCommand, counted separately on birth.
 _BASE_STRUCTURES = {"Nexus", "CommandCenter", "Hatchery"}
 
-# Every form a town hall can take, for tracking whether a player still owns
-# one. Unlike _BASE_STRUCTURES (which counts fresh expansions) this includes
-# morphs and lift-offs: a flying CC and a Hive are still homes.
+# Every town-hall form, morphs and lift-offs included.
 _TOWN_HALLS = _BASE_STRUCTURES | {
     "CommandCenterFlying",
     "OrbitalCommand",
@@ -182,21 +155,16 @@ _WORKER_RACE = {"Drone": "Zerg", "Probe": "Protoss", "SCV": "Terran"}
 # achievement engine can share it (see UNIT_RACE there).
 _UNIT_RACE = UNIT_RACE
 
-# Winner-inference tuning. Solo confidences reflect blind validation against
-# the 446 replays with a recorded winner (2026-07, event-time clock):
-#   net-departures 99.8% (fires on 444/446), army dominance 100% (fires 402),
-#   gg-concession 95.8%. army and net-departures never disagree on a
-#   recorded-winner game, so a conflict (only seen in unrecorded games like a
-#   cannon-rush base race) is resolved in departures' favor.
+# Solo confidences from blind validation on 446 recorded-winner replays
+# (2026-07): net-departures 99.8% (fires 444), army 100% (fires 402), gg 95.8%.
+# Army and departures never disagreed there; conflicts go to departures.
 _ARMY_DOMINANCE_RATIO = 1.5  # team army value ratio considered decisive
 _ARMY_MINIMUM = 2000  # leader must have real army or the snapshot is noise
 _GG_WINDOW_SECONDS = 90  # gg this close before leaving = concession
 # Standalone gg/ggs/ggwp/ggggg — not the "gg" inside "laggin" or "buggy".
 _GG_RE = re.compile(r"(?<![a-z])g{2,}\s*(wp)?s?(?![a-z])")
-# A call for a remake: remake, rehost, redo or restart anywhere in a message,
-# or re/rm/rmk ending one ("re?", "pls re", "we got an afk, rm") — never the
-# "re" in "you're", or the split typo in "theya re hitting". Only counted once
-# the battle is on: in the pick phase "re" means repick.
+# remake/rehost/redo/restart anywhere, or re/rm/rmk ending a message ("pls re"),
+# never "you're" or "theya re". Battle only: in the pick phase "re" is repick.
 _REMAKE_RE = re.compile(r"(?<![a-z'])(?:(?:remake|rehost|redo|re ?start)(?![a-z])|(?:re|rm|rmk)\W*$)")
 _RECORDER_LEAVE_WINDOW = 10  # a leave this close to the end is the recorder's
 _CONF_RECORDED = 1.0
@@ -217,12 +185,8 @@ def _canonical(name: str) -> str | None:
 
 
 def _canonical_killer(name: str) -> str:
-    """Normalize the name of a unit CREDITED WITH A KILL. Same mode-merging as
-    `_canonical` (a sieged tank is a tank), but deliberately NOT its noise
-    filter: `_canonical` drops workers, Interceptors, Locusts, Broodlings and
-    AutoTurrets because they can never be a player's PICK, and those are
-    exactly the killers worth telling apart here — a Carrier's damage is its
-    interceptors', and a cannon's kills are not the player's unit's."""
+    """A killer's name: `_canonical`'s mode merging without its noise filter,
+    since workers, Interceptors etc. are exactly the killers to tell apart."""
     if name.endswith("Burrowed"):
         name = name.removesuffix("Burrowed")
     return _NORMALIZE.get(name, name)
@@ -240,9 +204,7 @@ class _PlayerTally:
         self.econ_killed: int | None = None  # enemy economy value destroyed
         self.tech_killed: int | None = None  # enemy tech/building value destroyed
         self.resources_lost: int | None = None  # own value lost
-        # Bank per snapshot: hoarding is judged by the MEDIAN, not the final
-        # value — leavers donate their bank to teammates, so an end-of-game
-        # snapshot would credit the recipient of a donation as a hoarder.
+        # The median, not the final bank: leavers donate theirs to teammates.
         self.floated_samples: list[int] = []
         self.units = Counter()  # post-pick-phase army production
         self.hatcheries = 0
@@ -251,9 +213,7 @@ class _PlayerTally:
         self.drop_commands = 0  # transport/Nydus unload commands issued
         self.static_defense = 0  # defensive structures completed
         self.base_times: list[int] = []  # town-hall completion seconds
-        # Queens are tracked apart from other production: they're inject
-        # infrastructure every Zerg makes, so they only count as "making a
-        # unit" for the player whose PICK is Queen.
+        # Every Zerg makes Queens; they count as production only for a Queen pick.
         self.first_unit_second: int | None = None  # first non-Queen production
         self.first_queen_second: int | None = None
         self.orbitals = 0  # Orbital Commands owned (starting + CC morphs)
@@ -292,9 +252,7 @@ def _detect_pick(tally: _PlayerTally, play_race: str) -> str | None:
     if not pool:
         return None
     pick = max(pool, key=lambda u: pool[u])
-    # A morph pick implies mass precursor production (e.g. Baneling players
-    # born-count mostly Zerglings), so meaningful morph volume overrides
-    # its precursor.
+    # Meaningful morph volume overrides the precursor it was made from.
     for morph, precursors in _MORPH_PRECURSORS.items():
         if pick in precursors and pool.get(morph, 0) >= 3:
             pick = morph
@@ -309,11 +267,8 @@ def _rushed(
     window: int,
     reach: float,
 ) -> bool | None:
-    """Whether any of `starts` (second, x, y) went down within `window` of
-    the pick phase and more than `reach` of the way from the player's own
-    starting base to the nearest enemy one (0.5 = nearer the enemy). None
-    when either side's starting base is unknown, so there's nothing to
-    measure against."""
+    """Any of `starts` (second, x, y) within `window` and over `reach` of the
+    way to the nearest enemy start. None when a start is unknown."""
     if tally.home is None or not enemy_homes:
         return None
     for second, x, y in starts:
@@ -364,26 +319,16 @@ def _classify_pick_mode(tallies: dict[int, _PlayerTally], game_start: int) -> st
     return "tier_draft"
 
 
-# The pick dialog's repick (107) and keep (108) buttons. A click of 107 alone
-# is NOT a repick — it opens a confirmation the player can decline with 108
-# (seen live: 8x 107 then 108, unit kept). What matters is the LAST of the
-# two pressed: a player whose final action was 107 went through with it. This
-# also catches last-second repicks whose new preview unit never spawns.
+# Repick (107) / keep (108) buttons: 107 opens a confirmation 108 can decline,
+# so the last of the two pressed decides.
 _REPICK_BUTTON_CONTROL_ID = 107
 _KEEP_BUTTON_CONTROL_ID = 108
 
 
 def _credit_kill(tallies: dict[int, "_PlayerTally"], event, game_start: int) -> None:
-    """Credit one death to the enemy unit type that killed it, by the victim's
-    build cost. Skipped when the tracker records no killer (~11% of the value
-    of all deaths, almost all of it non-combat: Drones morphing into buildings,
-    templar merging into an Archon, Interceptors dying with their Carrier) and
-    when a player killed their own unit (a morph or a Baneling).
-
-    Measured over 300 replays: summed per player this reproduces the game's own
-    resources_killed with a median ratio of 1.00 (mean 0.97, sd 0.13), and no
-    pick is systematically under-credited — every unit's median lands between
-    0.97 and 1.04. See docs/kill-attribution.md."""
+    """Credit a death's build cost to the killer's unit type. Skips deaths with
+    no killer (~11% of value, mostly non-combat) and self-kills. See
+    docs/kill-attribution.md."""
     victim = event.unit
     killer, killing_player = getattr(event, "killing_unit", None), getattr(event, "killing_player", None)
     if victim is None or killer is None or killing_player is None or event.second < game_start:
@@ -500,25 +445,15 @@ def _tally_events(replay, game_start: int) -> dict[int, _PlayerTally]:
     return tallies
 
 
-# A lead in value on the map smaller than this is treated as "even" when
-# counting lead changes, so production cycles and small trades don't register
-# as momentum swings. 1,500 keeps 5+ lead changes (the Back-and-forth award)
-# about as rare as it was when this measured kill value (~2.5% of games); at
-# 1,000 it fires on 9%.
+# Leads smaller than this count as even. Keeps 5+ lead changes (Back-and-forth)
+# at ~2.5% of games; 1,000 fires on 9%.
 _LEAD_NOISE = 1500
 
 
 def _game_swings(replay, winning_team: int | None, game_start: int) -> tuple[int | None, int]:
-    """Momentum over the game, from each team's value on the map — everything
-    alive plus everything being built: (how far behind the winning team was at
-    its worst — None if no winner, number of meaningful lead changes).
-
-    Not kill value: a team can win every trade and still be losing on a dead
-    economy, and the biggest kill-value "comeback" on record (70k) was a team
-    with eleven times the other side's value on the map. Not the bank either: a
-    beaten team's unspendable money piles up after its army dies, so with the
-    bank a quarter of big "comebacks" were stomps measured in their last minute
-    (measured over 1,259 community games)."""
+    """(winner's worst deficit or None, lead changes), from value on the map
+    (alive + in production). Not kill value or bank: both turned stomps into
+    fake comebacks over 1,259 games."""
     team_of = {p.pid: t.number for t in replay.teams for p in t.players}
     first_team = min(t.number for t in replay.teams)
     latest: dict[int, tuple[int, int]] = {}  # player id -> (team, value on the map)
@@ -590,9 +525,7 @@ def _infer_winner(replay) -> tuple[int | None, float, str]:
             if e.player.pid in team_of:
                 leaves.append((e.second, e.player.pid, team_of[e.player.pid]))
     leaves.sort()
-    # Recording end in EVENT time: event timestamps run on a different clock
-    # than game_length (real time vs game time, ~1.4x on Faster), so the end
-    # marker must come from the events themselves.
+    # In event (game) time, not game_length's real time.
     end_second = replay.events[-1].second if replay.events else 0
 
     picks: dict[str, int] = {}
@@ -604,9 +537,8 @@ def _infer_winner(replay) -> tuple[int | None, float, str]:
         gg_loser = gg_leave_teams.pop()
         picks["gg"] = next(t for t in team_numbers if t != gg_loser)
 
-    # Signal 3: net departures — excluding the recorder's game-ending leave,
-    # the team that lost more players conceded. Robust to a single early
-    # leaver on the winning team, and subsumes full-team elimination.
+    # Signal 3: the team that lost more players (not counting the recorder's
+    # final leave) conceded.
     if leaves:
         counting = leaves[:-1] if end_second - leaves[-1][0] <= _RECORDER_LEAVE_WINDOW else leaves
         left: dict[int, set] = defaultdict(set)
@@ -628,9 +560,8 @@ def _infer_winner(replay) -> tuple[int | None, float, str]:
         if len(picks) >= 2:
             return winner, _CONF_AGREEMENT, method
         return winner, _CONF_SOLO[next(iter(picks))], method
-    # Conflict: an explicit gg concession is decisive; otherwise trust
-    # departures over army value (which misreads base races / cannon rushes,
-    # where the losing team keeps a big idle army on a dead economy).
+    # Conflict: gg decides; else departures beat army (base races leave the
+    # loser a big idle army).
     if "gg" in picks:
         return picks["gg"], _CONF_GG_CONFLICT, method + "(gg-conflict)"
     if "departures" in picks:
@@ -639,10 +570,7 @@ def _infer_winner(replay) -> tuple[int | None, float, str]:
 
 
 def _remake_called(replay, game_start: int) -> bool:
-    """Whether anyone in the game called for a remake after the battle began
-    (see _REMAKE_RE). Means little in a long game — a loser asking for a
-    rematch says the same — so storage.rejection_reason reads it only for a
-    short one."""
+    """Anyone called for a remake after the battle began (_REMAKE_RE)."""
     lobby = {p.pid for team in replay.teams for p in team.players}
     return any(
         type(e).__name__ == "ChatEvent"
@@ -675,12 +603,8 @@ def parse_replay(path: str) -> MonobattleMatch:
         for p in team.players:
             tally = tallies[p.pid]
             race = tally.race(fallback=p.play_race)
-            # Blind-random repick evidence, any of: a second preview unit; the
-            # player's final repick/keep dialog action being "repick" (covers
-            # last-second repicks with no new preview); or the last preview's
-            # race contradicting the played race, which in blind random can
-            # only mean the unit changed after that preview. Draft previews
-            # are just browsing — no repicks there.
+            # Blind-random repick: a second preview, a final "repick" press, or a
+            # last preview of the wrong race. Draft previews are just browsing.
             repick_used = repick_from = None
             if pick_mode == "blind_random":
                 race_mismatch = bool(tally.previews) and _UNIT_RACE.get(tally.previews[-1], race) != race
@@ -748,13 +672,9 @@ def parse_replay(path: str) -> MonobattleMatch:
 
 
 # -- map versions ---------------------------------------------------------
-#
-# The arcade map carries the terrain's real name only as prose in its
-# published header, in two places the author keeps in sync (the loading-screen
-# tip and the long description), both shaped like
+# The terrain name is prose in the published header, e.g.
 #     Current Map: The Ashen Cradle <c val="80FFFF">(Created by KillerSmile)</c>
-# Formatting varies by version ("(made by me)", no author at all), so parse
-# leniently and treat an unrecognized header as simply unknown.
+# Formatting varies, so parse leniently; unrecognized means unknown.
 _CURRENT_MAP_RE = re.compile(rb"Current Map:\s*([^\x00\x15\r\n]{1,200})")
 _TAG_RE = re.compile(r"<[^>]*>")
 _AUTHOR_RE = re.compile(r"^(?P<name>.+?)\s*\(\s*(?:created |made )?by\s+(?P<author>[^)]+)\)\s*$", re.IGNORECASE)
@@ -766,9 +686,7 @@ _DEPOT_URL = "https://{region}-s2-depot.classic.blizzard.com/{map_hash}.s2ma"
 
 
 def _parse_current_map(header: bytes) -> tuple[str, str | None] | None:
-    """Terrain name (and author, when credited) from a published map's
-    DocumentHeader. Prefers a match that credits an author — both copies of
-    the line name the same map, but only one usually names its maker."""
+    """Terrain name and author, preferring the copy that credits one."""
     best: tuple[str, str | None] | None = None
     for raw in _CURRENT_MAP_RE.findall(header):
         # Cut at the first line-break tag: the description continues into
@@ -788,10 +706,8 @@ def _parse_current_map(header: bytes) -> tuple[str, str | None] | None:
 
 
 def fetch_map_version(map_hash: str) -> MapVersion | None:
-    """Download the published map behind a replay's map_hash and read the
-    terrain's name out of it. Network call — cache the result by hash (see
-    MatchStore.record_map_version) rather than calling it per match. None
-    when the map can't be fetched or names no terrain."""
+    """Download the map behind map_hash and read its terrain (network; cache
+    by hash). None on failure."""
     for region in _DEPOT_REGIONS:
         url = _DEPOT_URL.format(region=region, map_hash=map_hash)
         try:

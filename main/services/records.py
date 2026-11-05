@@ -1,14 +1,5 @@
-"""All-time records for !records: the most extreme games and single-game
-performances in a community's history, one board per category.
-
-Pure functions over stored matches. Game records count only decided games
-(recap.is_decided — the gate every other stat uses), so an abandoned replay
-can't hold a record. Durations are battle time, the clock every summary
-shows.
-
-No fastest-wins board: with a two-minute minimum on rated games, the top of
-it was always games a team quit just past the cutoff (all ten on the
-Monobattle server's board fell between 2:00 and 2:19)."""
+"""All-time records for !records, one board per category, over decided
+games. No fastest-wins board: it filled with games quit just past 2:00."""
 
 import datetime
 from typing import Callable, NamedTuple
@@ -111,9 +102,7 @@ def record_boards(matches: list[tuple[int, MonobattleMatch]]) -> list[RecordBoar
         # One board per per-game award, titled as the award is.
         _award_board("worker_slayer", matches),
         _award_board("demolition", matches),
-        # The Best Trader award's own ratio, so a record and an award never
-        # disagree about the same game. (Most units built was tried: every
-        # row was a Zergling, which spawn in pairs.)
+        # (Most units built was tried: every row was a Zergling.)
         _player_board("trades", "⚖️", "Best Trades", matches, trade_efficiency, lambda value: f"{value:.1f}x"),
         _award_board("martyr", matches),
     ]

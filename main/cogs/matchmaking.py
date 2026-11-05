@@ -1,18 +1,11 @@
-"""Matchmaking: one line of people who want to play, and the bot splits the
-first eight into the two most balanced teams using their skill ratings.
+"""Matchmaking: one line of people who want to play; the first eight are split
+into the most balanced teams.
 
-Join means "I want to play" and Leave "I'm out", whatever is going on. With no
-game on, Join queues you and the eighth join forms a match. While a group is
-playing, Join puts you in line for the next open spot, and a player's Leave
-sits them out of the next game; the first in line takes the spot at the next
-re-team (New teams / !teams). Nobody has to know which list they belong on.
-A session ends when a player presses End session, or on its own once nobody
-has re-teamed for ACTIVE_GAME_MINUTES; either way the lobby turns back into
-the queue, with the line at its head.
-
-Each community has its own Lobby, and the cog routes every command and button
-press to the lobby of the server it came from. discord.py runs interaction
-callbacks on one event-loop thread, so no locking is needed.
+Join means "I want to play", Leave "I'm out". With no game on, the eighth Join
+forms a match. During a session Join takes the next open spot and Leave sits
+out the next game, swapped at the next re-team. A session ends on End session
+or after ACTIVE_GAME_MINUTES without a re-team, and the line becomes the queue.
+One Lobby per community; interaction callbacks share one thread, so no locks.
 """
 
 import asyncio
@@ -40,31 +33,20 @@ POST_RETRY_DELAYS = (2, 5)
 # has 35; the top few are all near-even, past that they get lopsided.
 SHUFFLE_OPTIONS = 8
 
-# meta key holding the live lobby message pointer ("<channel_id>:<message_id>")
-# -- the queue, or the teams while a game is on -- so a restart picks the
-# message back up and a superseded one can still be deleted.
+# Meta keys, so a restart keeps the lobby. Live lobby message: "<channel>:<message>".
 QUEUE_MSG_META_KEY = "queue_message"
 
-# meta key holding the roster of the live proposal (comma-separated Discord
-# ids), so New teams still works on a proposal posted before the last restart.
+# Comma-separated Discord ids.
 MATCH_ROSTER_META_KEY = "match_roster"
 
-# meta keys holding who's sitting out the next game and the line (comma-
-# separated Discord ids, the line in join order). Stored so a deploy doesn't
-# lose anyone's place. The line keeps the old waitlist's key, so the waitlist
-# a deploy finds becomes the start of the line.
+# The line keeps the old waitlist's key.
 SITTING_OUT_META_KEY = "match_sitting_out"
 LINE_META_KEY = "match_waitlist"
 
-# meta key holding when the live proposal went up (ISO, UTC). Teams are
-# re-posted for every game (New teams / !teams), so a recent post means a group
-# is mid-session — the stored roster alone can't say, since it outlives the
-# session it belonged to.
+# ISO UTC; a recent post means a session is on.
 MATCH_POSTED_AT_META_KEY = "match_posted_at"
 
-# How recently teams must have gone up for a game to count as on: a long game
-# plus the gap before someone re-teams. Past it the session is over, and
-# whoever is still in line is simply the queue for the next one.
+# A long game plus the gap before a re-team.
 ACTIVE_GAME_MINUTES = 90
 
 # How often queue timeouts are checked; the slack on the timeout itself.
@@ -77,9 +59,7 @@ def _reset_time(config) -> dt.time | None:
 
 
 async def _lobby_or_reply(lobby_for, interaction: discord.Interaction) -> "Lobby | None":
-    """The lobby of the server a button was pressed in, or None (answered)
-    if that server has no community — a persistent button can outlive one
-    being configured."""
+    """The press's lobby, or None (answered) if the server has no community."""
     lobby = lobby_for(interaction.guild)
     if lobby is None:
         await interaction.response.send_message("MonoBot's ladder isn't set up in this server.", ephemeral=True)
@@ -87,19 +67,10 @@ async def _lobby_or_reply(lobby_for, interaction: discord.Interaction) -> "Lobby
 
 
 class LobbyView(discord.ui.View):
-    """Join / Leave / New teams / End session. On the live lobby message, and on the summary
-    of each game the current group plays: once a game starts nobody scrolls
-    back up to the teams, but everyone sees the summary of the game they just
-    finished.
-
-    Persistent (fixed custom_ids, registered via client.add_view on cog load),
-    so the buttons keep working across restarts. It holds no state: what a
-    press acts on lives on the Lobby, so the one instance registered at load
-    serves every message. It also takes `lobby_for(guild)` rather than a
-    lobby, so each press finds the lobby of the server it came from.
-
-    The ids are the ones the queue and proposal buttons had before the queue
-    and waitlist were one line, so those messages keep working too."""
+    """Join / Leave / New teams / End session, on the lobby message and on the
+    current group's game summaries. Persistent and stateless: one registered
+    instance serves every message in every server. The custom_ids predate the
+    single line, so old messages keep working."""
 
     def __init__(self, lobby_for, teams: bool = True):
         super().__init__(timeout=None)
@@ -156,9 +127,7 @@ class EndSessionView(discord.ui.View):
 
 
 class LegacyLineupView(discord.ui.View):
-    """The Sit out / Waitlist buttons that proposals and summaries carried
-    before the queue and waitlist became one line. Those messages are still in
-    chat, so their buttons keep working: Sit out is Leave, Waitlist is Join."""
+    """Pre-merge Sit out / Waitlist buttons still in chat: now Leave / Join."""
 
     def __init__(self, lobby_for):
         super().__init__(timeout=None)
@@ -253,15 +222,8 @@ def _say(label: str | None, you: str, them: str) -> str:
 
 
 class Lobby:
-    """One community's matchmaking: the line, the live teams, and who's
-    sitting out. `lobby_for` is what views it posts are given, so their
-    buttons find this lobby again (after a restart too).
-
-    The line is everyone who wants to play and isn't in the current game, in
-    the order they joined. With no game on it's the queue, and teams form when
-    eight are in it. While a game is on, it's who takes the next open spot.
-    One list either way, so a session ending (no teams for
-    ACTIVE_GAME_MINUTES) needs no hand-over: whoever's waiting is queued."""
+    """One community's line, live teams and sit-outs. `lobby_for` is passed to
+    the views it posts so their buttons find it again."""
 
     def __init__(self, client, community: Community, lobby_for):
         self.client = client
@@ -278,20 +240,14 @@ class Lobby:
         # Users seen pressing a button or added by command, so forming a match
         # needn't look them up; anyone else is found in the server.
         self.members: dict[str, discord.abc.User] = {}
-        # When each person in the line last pressed Join; while no game is on
-        # they're dropped once it's queue_timeout_minutes old. A restored line
-        # starts its clocks at the restart.
+        # Last Join press per person in line, for the queue timeout.
         now = discord.utils.utcnow()
         self.joined_at: dict[str, dt.datetime] = {uid: now for uid in self.line}
         # The one live lobby message: the queue, or the teams while a game is on.
         self.message: discord.Message | None = None
-        # The last roster to get teams, so New teams / !teams can re-split it.
-        # Users, not QueuedPlayers: ratings are looked up fresh each time so
-        # re-teaming picks up recent games.
+        # Users, not QueuedPlayers, so a re-team reads fresh ratings.
         self.last_roster: list[discord.abc.User] = []
-        # The ranked splits of that roster, which New teams cycles through
-        # until a game is stored (games_at_post). Lost on restart, after which
-        # New teams re-balances instead.
+        # Ranked splits New teams cycles through until a game is stored.
         self.options: list[ProposedMatch] = []
         self.option_index = 0
         self.games_at_post = 0
@@ -454,9 +410,7 @@ class Lobby:
     def lineup_for_next(
         self, guild: discord.Guild | None, users: list[discord.abc.User]
     ) -> tuple[list[discord.abc.User], list[discord.abc.User]] | str:
-        """`users` with sit-outs swapped for the first in line: (roster,
-        promoted), or a message saying why the swap can't happen yet. People
-        in line who've left the server are skipped, not counted."""
+        """(roster, promoted) with sit-outs swapped for the line, or why not."""
         found = {str(u.id): u for u in users}
         for uid in self.line:
             if uid not in found and (user := self._user(uid, guild)) is not None:
@@ -473,10 +427,7 @@ class Lobby:
     # -- timers and resets ---------------------------------------------------
 
     async def notice_session_end(self):
-        """Redraw the lobby as the queue once a session runs past
-        ACTIVE_GAME_MINUTES. Nothing else would: the clock running out isn't
-        an event, so the old teams and their buttons stayed up until someone
-        happened to press something."""
+        """Redraw as the queue once a session times out (no event fires for it)."""
         active = self.game_active()
         if self.was_active and not active:
             logger.info("Session ran out (community %s)", self.community.guild_id)
@@ -484,11 +435,8 @@ class Lobby:
         self.was_active = active
 
     async def end_session(self, channel: discord.abc.Messageable, guild: discord.Guild | None, by: str):
-        """End session: the group's done before the clock says so. The line
-        becomes the queue, in order, its timeout clocks starting now (they're
-        paused through a game). The players aren't queued: when a group breaks
-        up most are leaving, and anyone who isn't presses Join. The queue goes
-        up fresh at the bottom of the channel, naming who ended the session."""
+        """The line becomes the queue (clocks start now); players aren't
+        re-queued, since most are leaving."""
         self.store.set_meta(MATCH_POSTED_AT_META_KEY, "")
         self.was_active = False
         self.options = []
@@ -505,9 +453,7 @@ class Lobby:
         )
         await asyncio.gather(self._show(message), self._refresh(skip=message))
 
-    # A queue that sat unfilled overnight is stale: people who joined, never
-    # got a game and forgot to leave make the count look healthier than it is.
-    # Wiped once a day in the small hours (the community's queue_reset_time).
+    # Wipe a queue left overnight, at queue_reset_time.
     async def daily_reset(self):
         had = bool(self.line or self.sitting_out)
         self.line.clear()
@@ -519,13 +465,8 @@ class Lobby:
             # Silent: the lobby message just redraws, no new post.
             await self._refresh()
 
-    # The daily reset catches a queue forgotten overnight; this catches one
-    # player who wandered off and would otherwise be pinged into a match they
-    # aren't there for. Only while no game is on: waiting in line through a
-    # game is the point of the line, so its clocks start when the session
-    # ends. Silent on purpose: a reminder before removal was tried and found
-    # too noisy, so the queue message states the rule instead and pressing
-    # Join again restarts the clock.
+    # Drop players who wandered off, only while no game is on. Silent: a
+    # reminder was too noisy, so the queue message states the rule.
     async def sweep_timeouts(self):
         if self.game_active():
             return
@@ -548,11 +489,8 @@ class Lobby:
     # -- rating lookup ---------------------------------------------------
 
     def _queued_player(self, user: discord.abc.User) -> QueuedPlayer:
-        """Build a QueuedPlayer, rated by the user's bound SC2 account with the
-        most games. A season's seed counts until they've played in it, so a
-        soft reset balances on carried-over skill from the first game. Users
-        who haven't played yet start from the level they reported on Join,
-        or the new-player default."""
+        """Rated by their most-played account's standing (seed included), else
+        their reported level."""
         book = self.ratings.book()
         best = None
         for handle in self.store.handles_for(str(user.id)):
@@ -609,10 +547,7 @@ class Lobby:
         return self.message is not None and message is not None and message.id == self.message.id
 
     async def _refresh(self, skip: discord.Message | None = None):
-        """Redraw the lobby wherever it shows -- the lobby message and the
-        lineup fields on the latest summaries -- except `skip`, which the
-        caller has just drawn itself. A summary's embed is read back off its
-        message, so it keeps its own fields."""
+        """Redraw the lobby message and recent summaries' lineups, except `skip`."""
         if self.message is not None and not (skip is not None and self.message.id == skip.id):
             try:
                 await self.message.edit(embed=self._embed(), view=self._view())
@@ -628,9 +563,7 @@ class Lobby:
                 pass
 
     async def _show(self, message: discord.Message):
-        """Make `message` the one live lobby message and delete the one before,
-        so nobody acts on a superseded queue or split. The pointer lives in
-        the DB, so a message from before a restart goes too."""
+        """Make `message` the live lobby message, deleting the previous one."""
         previous, old_ref = self.message, self.store.get_meta(QUEUE_MSG_META_KEY) or ""
         new_ref = f"{message.channel.id}:{message.id}"
         self.message = message
@@ -679,26 +612,17 @@ class Lobby:
         await self._refresh()
 
     async def open_queue(self, ctx):
-        """!queue: the lobby at the bottom of chat. Moves the live message
-        rather than opening a second one. No role ping -- re-opening it
-        mid-session is routine, and pinging the whole role each time is
-        noise. Whoever wants the community called in can @ the role."""
+        """!queue: move the lobby to the bottom of chat. No role ping."""
         message = await ctx.send(embed=self._embed(), view=self._view())
         if ctx.interaction is not None:
-            # A slash reply edits and deletes through the interaction's token,
-            # which dies after 15 minutes -- after that the lobby couldn't be
-            # redrawn or cleared away. Fetched back, it's the bot's own message.
+            # A slash reply's token dies after 15 minutes; hold the fetched message.
             message = await ctx.channel.fetch_message(message.id)
         await self._show(message)
 
     # -- buttons ---------------------------------------------------------
 
     async def _answer(self, interaction: discord.Interaction, outcome: Outcome):
-        """Answer a press, before anything slow: Discord drops a press that
-        isn't answered within 3 seconds (that once lost the 8th join's press
-        after the queue was already emptied). A plain queue change pressed on
-        the queue message just redraws it; anything else replies privately
-        and then redraws the lobby."""
+        """Answer a press within Discord's 3 seconds, before anything slow."""
         if outcome.quiet and self._is_lobby_message(interaction.message):
             await interaction.response.edit_message(embed=self._embed(), view=self._view())
             await self._refresh(skip=interaction.message)
@@ -736,20 +660,9 @@ class Lobby:
         )
 
     async def handle_new_teams(self, interaction: discord.Interaction):
-        """New teams does whichever of two things the moment calls for:
-
-        - No games since the teams went up, and nobody sitting out: cycle the
-          splits that were ranked then -- same ratings, different split.
-        - Otherwise: re-split from the players' *current* ratings, so the
-          replay that just went up counts, swapping sit-outs for the first in
-          line. Groups play a couple of games before re-teaming, and by then
-          the ranked options no longer reflect where anyone stands.
-
-        Asking which one they meant would be a worse button: the stale options
-        are never what someone wants after a game, and before one there is
-        nothing to re-balance from. A restart loses the options, so New teams
-        then goes straight to re-balancing. Only a player in the match may
-        press it."""
+        """Players only. With no game stored and nobody sitting out, cycle the
+        ranked splits; otherwise re-balance on current ratings, swapping
+        sit-outs for the line."""
         if str(interaction.user.id) not in self.stored_roster_ids():
             await interaction.response.send_message("Only a player in this match can re-team.", ephemeral=True)
             return
@@ -785,12 +698,8 @@ class Lobby:
     # -- commands --------------------------------------------------------
 
     async def _member_for(self, ctx, query: str, on_pick):
-        """A guild member from a typed name, resolved the way every command
-        resolves names (views.person_or_pick). No partial matching — queueing
-        the wrong person is worse than being told to type the whole name.
-
-        None when the caller has already been answered: nothing matched, the
-        name is shared and a picker went out, or the person isn't reachable."""
+        """A member from a typed name (no partial matching), or None when the
+        caller has been answered."""
         people = await person_or_pick(ctx, self.store, query, on_pick)
         if people is None:
             return None
@@ -813,9 +722,7 @@ class Lobby:
         return ctx.guild.get_member(int(person.discord_id))
 
     async def _for_someone(self, ctx, player: str, act):
-        """Run `act(member, label)` for a typed name, picker included; it
-        returns the Outcome, which is said in the channel. Open to everyone:
-        it only does what that person's own Join or Leave would."""
+        """Run `act(member, label)` for a typed name and post its Outcome."""
 
         async def picked(interaction, person):
             member = await self._member_of(ctx, person)
@@ -884,9 +791,7 @@ class Lobby:
         return not self.has_played(uid) and self.store.skill_level(uid) is None
 
     def set_level(self, user: discord.abc.User, level: str) -> str:
-        """Record a level, and say what happened. Refused once they've played:
-        their rating then comes from their games, and changing the start
-        would rewrite every rating since."""
+        """Record a level; refused once they've played."""
         uid = str(user.id)
         if self.has_played(uid):
             return "You've played here already, so your rating comes from your games now."
@@ -896,10 +801,8 @@ class Lobby:
     # -- posting teams ---------------------------------------------------
 
     async def post_formed_match(self, channel: discord.abc.Messageable, users: list[discord.abc.User]):
-        """Announce the match a full queue just formed. The eight are already
-        out of the line, so a failure here would otherwise drop them on the
-        floor: the roster is kept first, and if posting fails anyway the
-        channel is told to run !teams, which re-splits it."""
+        """Post a just-formed match. The roster is kept first, so if posting
+        fails !teams can recover it."""
         self.last_roster = list(users)
         self.store.set_meta(MATCH_ROSTER_META_KEY, ",".join(str(u.id) for u in users))
         for delay in (0, *POST_RETRY_DELAYS):
@@ -919,19 +822,9 @@ class Lobby:
         announce: bool = False,
         promoted: list[discord.abc.User] = (),
     ):
-        """Balance `users` from their current ratings and post the teams as the
-        lobby message at the bottom of the channel, superseding the last one.
-
-        The ratings are read here rather than passed in, so every route into
-        this (queue filling, New teams, !teams) reflects games played since
-        the last split. `announce` mentions the players — on for a freshly
-        formed match, off for a re-team, where everyone is already watching
-        and eight pings per re-roll would be spam. `promoted` are people from
-        the line who just took a spot; they're pinged even on a re-team,
-        since they aren't watching the way the players are.
-
-        Starts a fresh lineup: sit-outs belonged to the old roster, and anyone
-        now playing comes out of the line."""
+        """Balance on current ratings and post the teams as the new lobby
+        message. `announce` pings everyone (new matches only); `promoted` are
+        pinged regardless. Resets sit-outs."""
         players = [self._queued_player(u) for u in users]
         self.options = ranked_matches(players, limit=SHUFFLE_OPTIONS)
         self.option_index = 0
@@ -958,19 +851,14 @@ class Lobby:
             view=self._view(),
             allowed_mentions=discord.AllowedMentions(users=pinged),
         )
-        # Teams go up first and the tidying after, all at once: each of these
-        # is a Discord round-trip, and run one by one ahead of the send they
-        # made a re-team look frozen for seconds.
+        # Post first, then tidy concurrently: serial round-trips looked frozen.
         cleanup = [self._show(message)]
         if lineup_changed:
             cleanup.append(self._refresh(skip=message))
         await asyncio.gather(*cleanup)
 
     def next_game_view(self, handles: set[str]) -> LobbyView | None:
-        """Lobby buttons for the summary of a game with these players' toon
-        handles, if it was the current group's game — at least half the live
-        roster played in it. None for anyone else's game, where handing over
-        spots in this roster would make no sense."""
+        """Lobby buttons if at least half the live roster played this game."""
         roster = self.stored_roster_ids()
         if not roster:
             return None

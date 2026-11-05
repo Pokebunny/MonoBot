@@ -6,10 +6,11 @@ import datetime
 import sqlite3
 
 import pytest
-from models.replay import MapVersion, MatchPlayer, MonobattleMatch
+from conftest import make_match, make_player
+from models.replay import MapVersion
 from services import map_versions
 from services.replay_parser import _parse_current_map
-from services.storage import MatchStore, hash_replay
+from services.storage import hash_replay
 
 BASE = datetime.datetime(2026, 8, 26, 4, 28, tzinfo=datetime.timezone.utc)
 
@@ -18,38 +19,10 @@ FORTITUDE = "d47b4f1ab2a6" + "0" * 52
 
 
 def _match(map_hash="", played_at=None, file_name="test.SC2Replay"):
-    players = [
-        MatchPlayer(
-            name=f"P{i}",
-            toon_handle=f"h-{i}",
-            team=(1 if i < 4 else 2),
-            race="Zerg",
-            pick="Zergling",
-            unit_counts={"Zergling": 50},
-        )
-        for i in range(8)
-    ]
-    return MonobattleMatch(
-        file_name=file_name,
-        map_name="Monobattle LotV - Map Rotation",
-        map_hash=map_hash,
-        played_at=played_at or BASE,
-        duration_seconds=900,
-        game_type="4v4",
-        pick_mode="blind_random",
-        pick_phase_seconds=63,
-        players=players,
-        winning_team=1,
-        winner_confidence=1.0,
-        winner_method="recorded",
+    players = [make_player(f"P{i}", 1 if i < 4 else 2, handle=f"h-{i}", unit_counts={"Zergling": 50}) for i in range(8)]
+    return make_match(
+        players, map_hash=map_hash, played_at=played_at or BASE, file_name=file_name, pick_phase_seconds=63
     )
-
-
-@pytest.fixture
-def store(tmp_path):
-    s = MatchStore(str(tmp_path / "test.db"))
-    yield s
-    s.close()
 
 
 class TestParseHeader:

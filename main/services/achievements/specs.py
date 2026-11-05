@@ -1,7 +1,5 @@
-"""The declarative achievement catalogue. Each entry is one `_spec(...)`; the
-mechanics that evaluate them live in `core` (the `Tally` a spec's check reads)
-and `engine` (the detector that runs the checks). Adding an achievement is
-usually a one-line entry here plus, if it needs a new stat, a `Tally` field."""
+"""The achievement catalogue: one `_spec(...)` per entry, plus a `Tally`
+field when a new stat is needed."""
 
 from models.replay import PICKABLE_UNITS
 from services.achievements.core import (
@@ -20,18 +18,10 @@ from services.achievements.core import (
 )
 
 SPECS: list[AchievementSpec] = [
-    # Career tier ladders end WELL above the current record holder (2026-08:
-    # 478 games, 281 wins, 110 MVPs, 41 units won with, 16.4k units built,
-    # 184 repicks, 54 teammates): at the most active pace (~370 games and
-    # ~225 wins a year, up sharply from the ~175 games/yr of a year ago) each
-    # top rung is a multi-year chase, so there is always something to play
-    # for. Epic rungs may be held; Legendary rungs must be years out.
-    #
-    # Rungs step ~2-2.5x and each rarity lands in a holder band measured over
-    # the community DB: Common >=25%, Uncommon 10-25%, Rare 4-10%, Epic 1-4%,
-    # Legendary unheld. Rarity is display-only and moves in both directions --
-    # it is re-tuned against how often a badge actually turns up, which is a
-    # label change and never touches the ledger.
+    # Top rungs sit years past the record holder (2026-08: 478 games, 281 wins,
+    # 110 MVPs, 41 units won with, 16.4k built, 184 repicks, 54 teammates; the
+    # most active pace is ~370 games a year). Rungs step ~2-2.5x; holder bands:
+    # Common >=25%, Uncommon 10-25%, Rare 4-10%, Epic 1-4%, Legendary unheld.
     # -- career: volume ---------------------------------------------------
     _spec("first_game", "Fresh Meat", "🐣", "Common", "Play your first monobattle", _career("games", 1)),
     _spec("settling_in", "Settling In", "🏕️", "Common", "Play 10 games", _career("games", 10)),
@@ -450,10 +440,7 @@ SPECS: list[AchievementSpec] = [
         _live("mirror_wins", 1),
     ),
     # -- moment: comebacks (live only) ---------------------------------------
-    # The deficit is in value on the map (replay_parser._game_swings). Over the
-    # community's history 8k is ~7% of games, 12k ~2.3%, 18k ~0.6%, 25k two
-    # games ever — comebacks are the games people remember, so the ladder runs
-    # all the way up.
+    # Deficit in value on the map: 8k ~7% of games, 12k ~2.3%, 18k ~0.6%, 25k twice.
     _spec(
         "never_doubted",
         "Never Doubted",

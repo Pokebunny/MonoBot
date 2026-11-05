@@ -1,11 +1,5 @@
-"""Session recaps: who played, how they did, and what moved, over a stretch of
-games — the latest session on demand, or the last 24 hours for the morning
-post.
-
-A "session" is a run of games with no gap longer than SESSION_GAP between
-consecutive starts. Monobattle nights are dense (a game every 15-30 minutes)
-and separated by most of a day, so the split is unambiguous in practice.
-"""
+"""Session recaps. A session is a run of games with no gap over SESSION_GAP
+between starts."""
 
 import datetime
 
@@ -48,15 +42,9 @@ def build_recap(
     unlocks: list[tuple[str, str]],
     start: RatingBook | None = None,
 ) -> SessionRecap | None:
-    """Summarise `session` (oldest first). None when none of its games were
-    decided — there is nothing to report.
-
-    `season_matches` are the season the session was played in, for the rating
-    walk: each player's "before" is their rating going into their first game
-    of the session, and "after" their rating coming out of the last one.
-    `unlocks` are (handle, key) ledger rows earned in the session's window.
-    `start` is the book that season's walk begins from (rating.season_start);
-    it is consumed."""
+    """Summarise `session` (oldest first); None if nothing was decided.
+    `season_matches` drive the before/after ratings; `start`
+    (rating.season_start) is consumed."""
     decided = [m for _, m in session if is_decided(m)]
     if not decided:
         return None

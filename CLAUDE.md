@@ -156,6 +156,11 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   `models/matchmaking.py`).
 - Logging via the `logging` module (`logger = logging.getLogger(__name__)`),
   not `print`. Root logger is configured by `bot.run(..., root_logger=True)`.
+- Comments and docstrings: short, and only what the code can't say — a
+  measured threshold, a non-obvious constraint, a trap. Don't restate the
+  code, narrate history, or repeat this file; point to it instead.
+- Tests: build matches with `conftest.make_match` / `make_player` (and the
+  shared `store` fixture), not a per-file copy. Test behaviour, not trivia.
 
 ## Config & secrets
 

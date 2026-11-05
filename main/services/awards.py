@@ -1,11 +1,5 @@
-"""Per-match stat awards, given selectively.
-
-Rather than always crowning a leader for every stat, an award is only given
-when the leader is an OUTLIER within their own game — measured as z-score
-against the lobby's distribution of that stat — so awards mark performances
-that were actually unusual. Each match shows at most MAX_AWARDS, picking the
-most extreme; an absolute floor per stat keeps trivial games quiet.
-"""
+"""Per-match awards, only for lobby outliers (by z-score, above a per-stat
+floor), at most MAX_AWARDS per game."""
 
 import statistics
 from typing import Callable, NamedTuple
@@ -20,24 +14,10 @@ MAX_AWARDS = 2
 
 
 def trade_efficiency(player: MatchPlayer) -> float | None:
-    """Kills per value lost, against a prior of TRADE_PRIOR lost. None when
-    the stats weren't recorded.
-
-    A raw ratio is unusable at the top of the scale — losing nothing divides
-    by zero, and 3,150 kills for 50 lost is 63x — so this used to require
-    1,000 value lost, which excluded the very games it should crown: a player
-    who killed 13,900 and lost nothing wasn't in the running. The prior is
-    added to EVERY player's losses instead of being a floor under a few, so a
-    flawless game beats a smaller efficient one (10,000 for nothing = 10.0x,
-    5,000 for 400 = 3.6x) and a player who barely fought scores near zero
-    rather than infinity (200 for nothing = 0.2x). No eligibility gate needed.
-
-    Lives here, and is imported rather than reimplemented, because the Best
-    Trader award and the Highway Robbery achievement both read it. They were
-    once two formulas over the same two numbers, and duly disagreed: 13,650
-    destroyed for 2,100 lost is 6.5x raw but 4.4x with the prior, so a 5x
-    badge got announced on a line reading 4.4x. One function, one answer.
-    """
+    """Kills / (lost + TRADE_PRIOR), or None without stats. The prior on every
+    player avoids dividing by zero without a gate (10,000 for nothing = 10.0x;
+    200 for nothing = 0.2x). The one formula for Best Trader, Highway Robbery
+    and the records board — they once disagreed."""
     if player.resources_killed is None or player.resources_lost is None:
         return None
     return player.resources_killed / (player.resources_lost + TRADE_PRIOR)

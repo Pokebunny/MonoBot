@@ -2,33 +2,21 @@ import datetime
 
 import pytest
 from cogs.leaderboard import DUO_MIN_GAMES, Leaderboard
-from models.replay import MatchPlayer, MonobattleMatch
+from conftest import TEAM1, TEAM2, make_match
 from services.match_embeds import duo_board
 from services.rating import duo_records
 
 BASE = datetime.datetime(2026, 7, 17, tzinfo=datetime.timezone.utc)
 
 
-def _match(winning_team, team1=None, team2=None, minutes=0, confidence=1.0, duration=900):
-    team1 = team1 or ["A1", "A2", "A3", "A4"]
-    team2 = team2 or ["B1", "B2", "B3", "B4"]
-    players = [
-        MatchPlayer(name=n, toon_handle=n, team=t, race="Zerg", pick="Zergling", repick_used=False, unit_counts={})
-        for t, names in ((1, team1), (2, team2))
-        for n in names
-    ]
-    return MonobattleMatch(
-        file_name="test.SC2Replay",
-        map_name="Monobattle LotV - Map Rotation",
+def _match(winning_team, team1=TEAM1, team2=TEAM2, minutes=0, confidence=1.0, duration=900):
+    return make_match(
+        team1=team1,
+        team2=team2,
+        winning_team=winning_team,
+        confidence=confidence,
         played_at=BASE + datetime.timedelta(minutes=minutes),
         duration_seconds=duration,
-        game_type="4v4",
-        pick_mode="blind_random",
-        pick_phase_seconds=60,
-        players=players,
-        winning_team=winning_team,
-        winner_confidence=confidence,
-        winner_method="recorded",
     )
 
 

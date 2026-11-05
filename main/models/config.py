@@ -4,16 +4,14 @@ from pydantic import BaseModel, model_validator
 class GuildConfig(BaseModel):
     """Settings for one community (one Discord server's ladder)."""
 
-    # Only parse .SC2Replay attachments posted in these channels, which also
-    # get the morning recap and achievement announcements. Empty means
-    # watch every channel in the server (simplest, but noisy — set this in
-    # production).
+    # Channels watched for replays and used for recaps/announcements. Empty =
+    # every channel (noisy).
     replays_channel_ids: list[int] = []
 
     @model_validator(mode="before")
     @classmethod
     def _accept_legacy_single_channel(cls, data):
-        """Older configs used a single replays_channel_id — fold it in."""
+        """Fold in the legacy single replays_channel_id."""
         if isinstance(data, dict):
             legacy = data.pop("replays_channel_id", None)
             if legacy is not None:
@@ -23,50 +21,31 @@ class GuildConfig(BaseModel):
                 data["replays_channel_ids"] = ids
         return data
 
-    # Daily automatic queue reset, for players who joined, never got a game,
-    # and forgot to leave. "HH:MM" in queue_reset_timezone (an IANA name);
-    # None disables the reset.
+    # "HH:MM" in an IANA timezone; None disables.
     queue_reset_time: str | None = "05:00"
     queue_reset_timezone: str = "America/New_York"
 
-    # Daily session recap, posted to the replay channels, covering the
-    # previous 24 hours. "HH:MM" in
-    # recap_timezone; None disables the post (!recap still works on demand).
+    # Daily recap of the previous 24 hours; None disables (!recap still works).
     recap_time: str | None = "08:00"
     recap_timezone: str = "America/New_York"
 
-    # Queued players are removed this many minutes after they last pressed
-    # Join (pressing it again while queued restarts the clock). None disables
-    # the timeout.
+    # Minutes after their last Join press a queued player is dropped; None disables.
     queue_timeout_minutes: int | None = 60
 
-    # The in-game chat channel players meet in to start a game, and the
-    # Battle.net region it's on. Shown on the queue and on every proposed
-    # match; None leaves the hint off.
+    # In-game chat channel shown on the queue and proposals; None hides it.
     sc2_chat_channel: str | None = None
     sc2_region: str = "Americas"
 
-    # Discord user IDs allowed to run bot-admin commands (merges, linking other
-    # members, clearing the queue) regardless of server permissions. The
-    # top-level list is admin everywhere; a guild's own list only there.
+    # Bot admins regardless of server permissions: top-level everywhere, a
+    # guild's own list only there.
     admin_user_ids: list[int] = []
 
-    # Servers (by guild id) whose uploads also count here: every replay or
-    # zip added there is stored in this ladder too and posted in this
-    # server's replay channel, and a winner confirmed in either server
-    # settles both copies. One way only — this server's uploads stay here.
+    # Guilds whose uploads (and winner confirmations) also count here. One way.
     counts_games_from: list[int] = []
 
 
 class BotConfig(GuildConfig):
-    """The top-level fields are the home community's settings — the original
-    ladder, whose database is resources/monobot.db. Every server in `guilds`
-    is a separate community with its own database, queue and settings."""
+    """Top-level fields are the home community's; `guilds` are the others."""
 
-    # The server the home community belongs to. None (the legacy default)
-    # means it serves every server not listed in `guilds`, as the bot did
-    # before there was more than one community.
-    home_guild_id: int | None = None
-
-    # Other communities, by guild id.
+    home_guild_id: int | None = None  # None: home serves every unlisted server
     guilds: dict[int, GuildConfig] = {}

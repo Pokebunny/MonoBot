@@ -1,39 +1,15 @@
 import datetime
 
-import pytest
-from conftest import community_cog
-from models.replay import MatchPlayer, MonobattleMatch
-from services.storage import MatchStore, hash_replay
-
-
-@pytest.fixture
-def store(tmp_path):
-    s = MatchStore(str(tmp_path / "test.db"))
-    yield s
-    s.close()
+from conftest import community_cog, make_match, make_player
+from services.storage import hash_replay
 
 
 def _match(names, winning_team=None, handles=None):
-    # names may be display names; handles overrides the toon_handle per slot
-    # (defaults to "H-<name>") so we can model two accounts sharing a name.
+    """`handles` overrides each slot's toon_handle (default "H-<name>"), to
+    model two accounts sharing a name."""
     handles = handles or [f"H-{n}" for n in names]
-    players = [
-        MatchPlayer(name=n, toon_handle=h, team=(1 if i < 4 else 2), race="Zerg", pick="Zergling", unit_counts={})
-        for i, (n, h) in enumerate(zip(names, handles))
-    ]
-    return MonobattleMatch(
-        file_name="m.SC2Replay",
-        map_name="Monobattle LotV - Map Rotation",
-        played_at=datetime.datetime(2026, 7, 17, tzinfo=datetime.timezone.utc),
-        duration_seconds=900,
-        game_type="4v4",
-        pick_mode="blind_random",
-        pick_phase_seconds=63,
-        players=players,
-        winning_team=winning_team,
-        winner_confidence=0.0 if winning_team is None else 1.0,
-        winner_method="unknown" if winning_team is None else "recorded",
-    )
+    players = [make_player(n, 1 if i < 4 else 2, handle=h) for i, (n, h) in enumerate(zip(names, handles))]
+    return make_match(players, winning_team=winning_team, file_name="m.SC2Replay", pick_phase_seconds=63)
 
 
 def test_link_and_lookup(store):
@@ -66,7 +42,6 @@ def test_unlink(store):
     store.link_player("disc123", "Pokebunny")
     assert store.unlink_player("disc123", "Pokebunny") is True
     assert store.sc2_names_for("disc123") == []
-    # unlinking a name you don't own fails
     store.link_player("disc123", "Pokebunny")
     assert store.unlink_player("disc999", "Pokebunny") is False
 
@@ -189,10 +164,8 @@ def test_candidates_and_bind_specific(store):
 
     cands = store.candidates_for_name("rain")  # case-insensitive
     assert {c[0] for c in cands} == {"H-rain1", "H-rain2"}
-    # pick one account explicitly
     assert store.bind_specific("disc1", "Rain", "H-rain2")
     assert store.handles_for("disc1") == ["H-rain2"]
-    # another user can't claim the same name
     assert not store.bind_specific("disc2", "Rain", "H-rain1")
 
 
@@ -240,7 +213,6 @@ def test_linked_accounts_merge_into_one_rating(store):
     assert set(store.handles_for("disc1")) == {"H-main", "H-smurf"}
 
     book = RatingBook.from_matches((m for _, m in store.all_matches()), store.merge_map())
-    # both accounts' games fall under a single rating
     assert book.rating_for("H-main") is book.rating_for("H-smurf")
     assert book.rating_for("H-main").wins == 2
 

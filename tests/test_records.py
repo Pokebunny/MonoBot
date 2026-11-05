@@ -47,10 +47,31 @@ def test_kills_rank_single_game_performances():
     assert (top.value, top.who) == ("50,000", "p0 (Zergling)")
 
 
+def test_every_game_award_has_a_board_measuring_its_stat():
+    from services.awards import SPECS
+
+    match = _match(1, 900)
+    match.players[2].econ_killed, match.players[5].tech_killed = 9000, 7000
+    match.players[6].resources_lost = 40000
+    boards = records.record_boards([(1, match)])
+    for spec in SPECS:
+        board = _board(boards, "trades" if spec.key == "best_trader" else spec.key)
+        assert board.rows, spec.key
+    assert _board(boards, "worker_slayer").rows[0][:2] == ("9,000", "p2 (Zergling)")
+    assert _board(boards, "demolition").rows[0][:2] == ("7,000", "p5 (Zergling)")
+    assert _board(boards, "martyr").rows[0][:2] == ("40,000", "p6 (Zergling)")
+
+
 def test_category_words_open_their_page():
     keys = list(records.RECORD_ALIASES)
+    # Pages open by position, so the two lists must agree.
+    assert keys == [b.key for b in records.record_boards([])]
     assert records.board_index("Longest") == keys.index("longest")
     assert records.board_index("lead") == keys.index("swings")
+    assert records.board_index("workers") == keys.index("worker_slayer")
+    assert records.board_index("worker_slayer") == keys.index("worker_slayer")
+    assert records.board_index("tech") == keys.index("demolition")
+    assert records.board_index("martyr") == keys.index("martyr")
     assert records.board_index("nonsense") is None
 
 

@@ -14,7 +14,7 @@ import datetime
 from typing import Callable, NamedTuple
 
 from models.replay import MatchPlayer, MonobattleMatch
-from services.awards import trade_efficiency
+from services.awards import SPECS, AwardSpec, trade_efficiency
 from services.recap import is_decided
 
 RECORDS_SHOWN = 10
@@ -73,6 +73,13 @@ def _player_board(
     return RecordBoard(key, emoji, title, rows)
 
 
+def _award_board(key: str, matches: list[tuple[int, MonobattleMatch]]) -> RecordBoard:
+    """The all-time best of one per-game award's stat, read through the
+    award's own spec so the record and the award measure the same thing."""
+    spec: AwardSpec = next(s for s in SPECS if s.key == key)
+    return _player_board(key, spec.emoji, spec.title, matches, spec.value)
+
+
 def record_boards(matches: list[tuple[int, MonobattleMatch]]) -> list[RecordBoard]:
     """Every category's top rows, in page order."""
     return [
@@ -101,10 +108,14 @@ def record_boards(matches: list[tuple[int, MonobattleMatch]]) -> list[RecordBoar
             lambda m: f"{m.lead_changes} lead changes",
         ),
         _player_board("kills", "💀", "Most Kills in a Game", matches, lambda p: p.resources_killed),
+        # One board per per-game award, titled as the award is.
+        _award_board("worker_slayer", matches),
+        _award_board("demolition", matches),
         # The Best Trader award's own ratio, so a record and an award never
         # disagree about the same game. (Most units built was tried: every
         # row was a Zergling, which spawn in pairs.)
         _player_board("trades", "⚖️", "Best Trades", matches, trade_efficiency, lambda value: f"{value:.1f}x"),
+        _award_board("martyr", matches),
     ]
 
 
@@ -113,8 +124,11 @@ RECORD_ALIASES = {
     "comebacks": ("comeback", "comebacks", "cb"),
     "longest": ("long", "longest", "length", "duration"),
     "swings": ("swing", "swings", "lead", "leads", "back-and-forth", "rollercoaster"),
-    "kills": ("kill", "kills", "killed"),
+    "kills": ("kill", "kills", "killed", "mvp"),
+    "worker_slayer": ("worker", "workers", "slayer", "workerslayer", "economy", "econ"),
+    "demolition": ("demolition", "demo", "tech", "buildings"),
     "trades": ("trade", "trades", "trader", "efficiency"),
+    "martyr": ("martyr", "lost", "losses", "deaths"),
 }
 
 
@@ -122,4 +136,4 @@ def board_index(query: str) -> int | None:
     """The page `!records <query>` opens on, or None if it names no board."""
     word = query.strip().lower()
     keys = list(RECORD_ALIASES)
-    return next((keys.index(k) for k, words in RECORD_ALIASES.items() if word in words), None)
+    return next((keys.index(k) for k, words in RECORD_ALIASES.items() if word == k or word in words), None)

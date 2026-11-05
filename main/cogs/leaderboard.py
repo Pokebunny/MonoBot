@@ -697,9 +697,10 @@ class Leaderboard(CommunityCog):
 
     @commands.hybrid_command(
         aliases=["record"],
-        description="all-time records: comebacks, longest games, lead changes, kills, trades",
+        description="all-time records: comebacks, long games, lead changes, and each game award's best",
         help="all-time records, one page each: biggest comebacks, longest games, most lead "
-        "changes, most kills in a game and best trades. Name one to open on it (!records longest)",
+        "changes, then the best ever for each game award (kills, worker slayer, demolition, "
+        "trades, martyr). Name one to open on it (!records longest)",
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def records(self, ctx, *, category: str = ""):

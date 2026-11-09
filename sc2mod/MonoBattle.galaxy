@@ -1,0 +1,1804 @@
+//==================================================================================================
+// MonoBattle - an extension mod: monobattles on any 4v4 melee map.
+//
+// Each player builds one army unit. The mod freezes the start, runs a pick phase in one of four
+// modes, spawns every player's base in their pick's race, and ends the game itself. Facts MonoBot
+// needs are granted as no-effect upgrades named MB_* (defined in UpgradeData.xml, read by
+// main/services/replay_parser.py); see sc2mod/README.md.
+//
+// Entry point: MB_Init (set it as the Custom Script's initialization function).
+//==================================================================================================
+include "TriggerLibs/NativeLib"
+
+//--------------------------------------------------------------------------------------------------
+// Settings
+//--------------------------------------------------------------------------------------------------
+// Bump when the rules change; MonoBot reads it from MB_Version.
+const int MB_VERSION = 1;
+
+const int MB_UNITS = 42;
+const int MB_ZERG_FIRST = 1;      // roster index ranges, by race
+const int MB_ZERG_LAST = 13;
+const int MB_PROTOSS_FIRST = 14;
+const int MB_PROTOSS_LAST = 28;
+const int MB_TERRAN_FIRST = 29;
+const int MB_TERRAN_LAST = 42;
+
+const int MB_POOL_SIZE = 20;      // Single Draft and Captains Draft pool
+
+// Pick-phase timers, in real seconds.
+const int MB_VOTE_SECONDS = 14;
+const int MB_BLIND_SECONDS = 30;
+const int MB_PICK_THREE_SECONDS = 30;
+const int MB_DRAFT_TURN_SECONDS = 30;
+const int MB_OPT_IN_SECONDS = 10;
+const int MB_ASSIGN_SECONDS = 30;
+
+// No resource trading until 10:00 on the in-game clock (a house rule). The clock shows real
+// seconds at Faster speed, 1.4 game seconds each, and starts when the battle does.
+const fixed MB_TRADE_LOCK_GAME_SECONDS = 840.0;
+
+// Lifted-off Terran buildings start burning this long into the battle if they're all a player has.
+const fixed MB_FLOATER_GRACE_GAME_SECONDS = 168.0;  // 2:00 on the clock
+const int MB_FLOATER_WARNING_SECONDS = 10;
+
+const int MB_MODE_BLIND = 1;
+const int MB_MODE_SINGLE = 2;
+const int MB_MODE_PICK_THREE = 3;
+const int MB_MODE_CAPTAINS = 4;
+
+const int MB_PHASE_NONE = 0;
+const int MB_PHASE_VOTE = 1;
+const int MB_PHASE_BLIND = 2;
+const int MB_PHASE_PICK_THREE = 3;
+const int MB_PHASE_SINGLE = 4;
+const int MB_PHASE_OPT_IN = 5;
+const int MB_PHASE_CAPTAIN_DRAFT = 6;
+const int MB_PHASE_ASSIGN = 7;
+const int MB_PHASE_BATTLE = 8;
+
+const int MB_BUTTONS = 20;
+
+//--------------------------------------------------------------------------------------------------
+// State
+//--------------------------------------------------------------------------------------------------
+string[43] gv_unitName;   // canonical name: marker suffix and MonoBot's name for the unit
+string[43] gv_unitLabel;  // shown to players
+string[43] gv_unitRace;   // "Zerg" | "Prot" | "Terr"
+
+int gv_mode;
+int gv_phase;
+
+int[9] gv_pick;           // roster index, 0 = none yet
+bool[9] gv_locked;
+int[9] gv_rolls;          // Blind Random rolls taken
+int[9] gv_raceChoice;     // Blind Random: 1 Random, 2 Terran, 3 Zerg, 4 Protoss
+int[9][4] gv_offer;       // Pick Three offers, [player][1..3]
+int[9] gv_vote;
+
+int[3][5] gv_teamPlayers; // [team][1..4]
+int[3] gv_teamSize;
+
+bool[43] gv_used;         // Pick Three: units already offered in the team being dealt
+int[21] gv_pool;          // draft pool, roster indexes
+bool[21] gv_poolTaken;
+int[9] gv_order;          // draft turn order
+int gv_orderCount;
+int gv_turnPlayer;
+bool gv_turnDone;
+
+bool[9] gv_optIn;
+int[3] gv_captain;
+int[3][5] gv_teamUnits;   // Captains Draft: [team][1..n] roster indexes drafted
+int[3] gv_teamUnitCount;
+int[3][5] gv_assignee;    // [team][unit slot] -> player
+int[3] gv_selectedSlot;   // captain's unit slot waiting for a player
+
+int[9] gv_floatSeconds;   // consecutive seconds a Terran has had only lifted-off buildings
+
+// Per-player pick panel
+int[9] gv_dialog;
+int[9] gv_title;
+int[9] gv_info;
+int[9][21] gv_button;
+
+//--------------------------------------------------------------------------------------------------
+// Prototypes
+//--------------------------------------------------------------------------------------------------
+void MB_StartBattle ();
+void MB_RefreshInfo ();
+
+//--------------------------------------------------------------------------------------------------
+// Small helpers
+//--------------------------------------------------------------------------------------------------
+text MB_Text (string s) {
+    return StringToText(s);
+}
+
+bool MB_IsPlaying (int p) {
+    return PlayerStatus(p) == c_playerStatusActive;
+}
+
+int MB_TeamOf (int p) {
+    if (PlayerGroupHasPlayer(GameAttributePlayersForTeam(1), p)) {
+        return 1;
+    }
+    if (PlayerGroupHasPlayer(GameAttributePlayersForTeam(2), p)) {
+        return 2;
+    }
+    return 0;
+}
+
+void MB_Marker (int p, string name) {
+    TechTreeUpgradeAddLevel(p, "MB_" + name, 1);
+}
+
+void MB_MarkerAll (string name) {
+    int p;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) != 0) {
+            MB_Marker(p, name);
+        }
+    }
+}
+
+void MB_Say (playergroup players, text t) {
+    UIDisplayMessage(players, c_messageAreaSubtitle, t);
+}
+
+int MB_RandomInRace (string race) {
+    if (race == "Zerg") {
+        return RandomInt(MB_ZERG_FIRST, MB_ZERG_LAST);
+    }
+    if (race == "Prot") {
+        return RandomInt(MB_PROTOSS_FIRST, MB_PROTOSS_LAST);
+    }
+    return RandomInt(MB_TERRAN_FIRST, MB_TERRAN_LAST);
+}
+
+void MB_BuildTeams () {
+    int t;
+    int p;
+    for (t = 1; t <= 2; t += 1) {
+        gv_teamSize[t] = 0;
+    }
+    for (p = 1; p <= 8; p += 1) {
+        t = MB_TeamOf(p);
+        if (t != 0 && MB_IsPlaying(p) && gv_teamSize[t] < 4) {
+            gv_teamSize[t] += 1;
+            gv_teamPlayers[t][gv_teamSize[t]] = p;
+        }
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+// Roster: index ranges by race (Zerg 1-13, Protoss 14-28, Terran 29-42) are relied on above.
+//--------------------------------------------------------------------------------------------------
+void MB_AddUnit (int i, string name, string label, string race) {
+    gv_unitName[i] = name;
+    gv_unitLabel[i] = label;
+    gv_unitRace[i] = race;
+}
+
+void MB_SetupRoster () {
+    MB_AddUnit(1, "Zergling", "Zergling", "Zerg");
+    MB_AddUnit(2, "Baneling", "Baneling", "Zerg");
+    MB_AddUnit(3, "Roach", "Roach", "Zerg");
+    MB_AddUnit(4, "Ravager", "Ravager", "Zerg");
+    MB_AddUnit(5, "Hydralisk", "Hydralisk", "Zerg");
+    MB_AddUnit(6, "Lurker", "Lurker", "Zerg");
+    MB_AddUnit(7, "Infestor", "Infestor", "Zerg");
+    MB_AddUnit(8, "SwarmHost", "Swarm Host", "Zerg");
+    MB_AddUnit(9, "Mutalisk", "Mutalisk", "Zerg");
+    MB_AddUnit(10, "Corruptor", "Corruptor", "Zerg");
+    MB_AddUnit(11, "BroodLord", "Brood Lord", "Zerg");
+    MB_AddUnit(12, "Ultralisk", "Ultralisk", "Zerg");
+    MB_AddUnit(13, "Viper", "Viper", "Zerg");
+    MB_AddUnit(14, "Zealot", "Zealot", "Prot");
+    MB_AddUnit(15, "Stalker", "Stalker", "Prot");
+    MB_AddUnit(16, "Sentry", "Sentry", "Prot");
+    MB_AddUnit(17, "Adept", "Adept", "Prot");
+    MB_AddUnit(18, "DarkTemplar", "Dark Templar", "Prot");
+    MB_AddUnit(19, "HighTemplar", "High Templar", "Prot");
+    MB_AddUnit(20, "Archon", "Archon", "Prot");
+    MB_AddUnit(21, "Immortal", "Immortal", "Prot");
+    MB_AddUnit(22, "Colossus", "Colossus", "Prot");
+    MB_AddUnit(23, "Disruptor", "Disruptor", "Prot");
+    MB_AddUnit(24, "Phoenix", "Phoenix", "Prot");
+    MB_AddUnit(25, "Carrier", "Carrier", "Prot");
+    MB_AddUnit(26, "VoidRay", "Void Ray", "Prot");
+    MB_AddUnit(27, "Tempest", "Tempest", "Prot");
+    MB_AddUnit(28, "Oracle", "Oracle", "Prot");
+    MB_AddUnit(29, "Marine", "Marine", "Terr");
+    MB_AddUnit(30, "Reaper", "Reaper", "Terr");
+    MB_AddUnit(31, "Marauder", "Marauder", "Terr");
+    MB_AddUnit(32, "Ghost", "Ghost", "Terr");
+    MB_AddUnit(33, "SiegeTank", "Siege Tank", "Terr");
+    MB_AddUnit(34, "Thor", "Thor", "Terr");
+    MB_AddUnit(35, "Hellion", "Hellion/Hellbat", "Terr");
+    MB_AddUnit(36, "Cyclone", "Cyclone", "Terr");
+    MB_AddUnit(37, "WidowMine", "Widow Mine", "Terr");
+    MB_AddUnit(38, "Banshee", "Banshee", "Terr");
+    MB_AddUnit(39, "Viking", "Viking", "Terr");
+    MB_AddUnit(40, "Liberator", "Liberator", "Terr");
+    MB_AddUnit(41, "Raven", "Raven", "Terr");
+    MB_AddUnit(42, "Battlecruiser", "Battlecruiser", "Terr");
+}
+
+//--------------------------------------------------------------------------------------------------
+// Tech: everything army-related off, then the pick's unit, morph chain and own upgrades back on.
+// Ported from the old arcade map. Queens stay buildable by every Zerg with no cap; Ravens stay
+// buildable by every Terran but can't use abilities unless picked; Medivacs are transport only.
+//--------------------------------------------------------------------------------------------------
+void MB_DisallowEverything (int lp_player) {
+    TechTreeUnitAllow(lp_player, "Marine", false);
+    TechTreeUnitAllow(lp_player, "Marauder", false);
+    TechTreeUnitAllow(lp_player, "Reaper", false);
+    TechTreeUnitAllow(lp_player, "Ghost", false);
+    TechTreeUnitAllow(lp_player, "Cyclone", false);
+    TechTreeUnitAllow(lp_player, "SiegeTank", false);
+    TechTreeUnitAllow(lp_player, "SiegeTankSieged", false);
+    TechTreeUnitAllow(lp_player, "WidowMine", false);
+    TechTreeUnitAllow(lp_player, "WidowMineBurrowed", false);
+    TechTreeUnitAllow(lp_player, "Hellion", false);
+    TechTreeUnitAllow(lp_player, "HellionTank", false);
+    TechTreeUnitAllow(lp_player, "Thor", false);
+    TechTreeUnitAllow(lp_player, "ThorAP", false);
+    TechTreeUnitAllow(lp_player, "Banshee", false);
+    TechTreeUnitAllow(lp_player, "VikingAssault", false);
+    TechTreeUnitAllow(lp_player, "VikingFighter", false);
+    TechTreeUnitAllow(lp_player, "Liberator", false);
+    TechTreeUnitAllow(lp_player, "LiberatorAG", false);
+    TechTreeUnitAllow(lp_player, "Battlecruiser", false);
+    TechTreeUnitAllow(lp_player, "Zealot", false);
+    TechTreeUnitAllow(lp_player, "Stalker", false);
+    TechTreeUnitAllow(lp_player, "Adept", false);
+    TechTreeUnitAllow(lp_player, "HighTemplar", false);
+    TechTreeUnitAllow(lp_player, "DarkTemplar", false);
+    TechTreeUnitAllow(lp_player, "Immortal", false);
+    TechTreeUnitAllow(lp_player, "Disruptor", false);
+    TechTreeUnitAllow(lp_player, "Colossus", false);
+    TechTreeUnitAllow(lp_player, "Archon", false);
+    TechTreeUnitAllow(lp_player, "Sentry", false);
+    TechTreeUnitAllow(lp_player, "Phoenix", false);
+    TechTreeUnitAllow(lp_player, "Carrier", false);
+    TechTreeUnitAllow(lp_player, "Oracle", false);
+    TechTreeUnitAllow(lp_player, "Tempest", false);
+    TechTreeUnitAllow(lp_player, "VoidRay", false);
+    TechTreeUnitAllow(lp_player, "Mothership", false);
+    TechTreeUnitAllow(lp_player, "Zergling", false);
+    TechTreeUnitAllow(lp_player, "Baneling", false);
+    TechTreeUnitAllow(lp_player, "Hydralisk", false);
+    TechTreeUnitAllow(lp_player, "Roach", false);
+    TechTreeUnitAllow(lp_player, "Ultralisk", false);
+    TechTreeUnitAllow(lp_player, "Infestor", false);
+    TechTreeUnitAllow(lp_player, "Mutalisk", false);
+    TechTreeUnitAllow(lp_player, "Corruptor", false);
+    TechTreeUnitAllow(lp_player, "Viper", false);
+    TechTreeUnitAllow(lp_player, "SwarmHostMP", false);
+    TechTreeUnitAllow(lp_player, "Ravager", false);
+    TechTreeUnitAllow(lp_player, "LurkerMP", false);
+    TechTreeUnitAllow(lp_player, "BroodLord", false);
+    TechTreeUnitAllow(lp_player, "BanelingCocoon", false);
+    TechTreeUnitAllow(lp_player, "BroodLordCocoon", false);
+    TechTreeUnitAllow(lp_player, "RavagerCocoon", false);
+    TechTreeUnitAllow(lp_player, "LurkerMPEgg", false);
+    TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel1", false);
+    TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel2", false);
+    TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel3", false);
+    TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", false);
+    TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel2", false);
+    TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel3", false);
+    TechTreeUpgradeAllow(lp_player, "TerranVehicleWeaponsLevel1", false);
+    TechTreeUpgradeAllow(lp_player, "TerranVehicleWeaponsLevel2", false);
+    TechTreeUpgradeAllow(lp_player, "TerranVehicleWeaponsLevel3", false);
+    TechTreeUpgradeAllow(lp_player, "VikingJotunBoosters", false);
+    TechTreeUpgradeAllow(lp_player, "ZergFlyerWeaponsLevel1", false);
+    TechTreeUpgradeAllow(lp_player, "ZergFlyerWeaponsLevel2", false);
+    TechTreeUpgradeAllow(lp_player, "ZergFlyerWeaponsLevel3", false);
+    TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel1", false);
+    TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel2", false);
+    TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel3", false);
+    TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", false);
+    TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", false);
+    TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", false);
+    TechTreeUpgradeAllow(lp_player, "AdeptPiercingAttack", false);
+    TechTreeUpgradeAllow(lp_player, "AdeptShieldUpgrade", false);
+    TechTreeUpgradeAllow(lp_player, "AdeptKillBounce", false);
+    TechTreeUpgradeAllow(lp_player, "PhoenixRangeUpgrade", false);
+    TechTreeUpgradeAllow(lp_player, "BansheeCloak", false);
+    TechTreeUpgradeAllow(lp_player, "OracleEnergyUpgrade", false);
+    TechTreeUpgradeAllow(lp_player, "CombatDrugs", false);
+    TechTreeUpgradeAllow(lp_player, "PersonalCloaking", false);
+    TechTreeUpgradeAllow(lp_player, "HighCapacityBarrels", false);
+    TechTreeUpgradeAllow(lp_player, "PsiStormTech", false);
+    TechTreeUpgradeAllow(lp_player, "ImmortalBarrier", false);
+    TechTreeUpgradeAllow(lp_player, "ImmortalRevive", false);
+    TechTreeUpgradeAllow(lp_player, "NeuralParasite", false);
+    TechTreeUpgradeAllow(lp_player, "InfestorPeristalsis", false);
+    TechTreeUpgradeAllow(lp_player, "ReaperJump", false);
+    TechTreeUpgradeAllow(lp_player, "RestoreShields", false);
+    TechTreeUpgradeAllow(lp_player, "haltech", false);
+    TechTreeUpgradeAllow(lp_player, "SiegeTech", false);
+    TechTreeUpgradeAllow(lp_player, "BlinkTech", false);
+    TechTreeUpgradeAllow(lp_player, "Stimpack", false);
+    TechTreeUpgradeAllow(lp_player, "StrikeCannons", false);
+    TechTreeUpgradeAllow(lp_player, "WarpGateResearch", false);
+    TechTreeUpgradeAllow(lp_player, "CycloneLockOnDamageUpgrade", false);
+    TechTreeUpgradeAllow(lp_player, "TempestGroundAttackUpgrade", false);
+    TechTreeUpgradeAllow(lp_player, "MedivacIncreaseSpeedBoost", false);
+    TechTreeUpgradeAllow(lp_player, "BansheeSpeed", false);
+    TechTreeUpgradeAllow(lp_player, "AnionPulseCrystals", false);
+    TechTreeUpgradeAllow(lp_player, "AbdominalFortitude", false);
+    TechTreeUpgradeAllow(lp_player, "CentrificalHooks", false);
+    TechTreeUpgradeAllow(lp_player, "BattlecruiserBehemothReactor", false);
+    TechTreeUpgradeAllow(lp_player, "BattlecruiserEnableSpecializations", false);
+    TechTreeUpgradeAllow(lp_player, "CarrierLaunchSpeedUpgrade", false);
+    TechTreeUpgradeAllow(lp_player, "ExtendedThermalLance", false);
+    TechTreeUpgradeAllow(lp_player, "CycloneAirUpgrade", false);
+    TechTreeUpgradeAllow(lp_player, "LocustLifetimeIncrease", false);
+    TechTreeUpgradeAllow(lp_player, "UltraliskBurrowChargeUpgrade", false);
+    TechTreeUpgradeAllow(lp_player, "FlyingLocusts", false);
+    TechTreeUpgradeAllow(lp_player, "GhostMoebiusReactor", false);
+    TechTreeUpgradeAllow(lp_player, "TransformationServos", false);
+    TechTreeUpgradeAllow(lp_player, "hydraliskspeed", false);
+    TechTreeUpgradeAllow(lp_player, "IncreasedRange", false);
+    TechTreeUpgradeAllow(lp_player, "InfestorEnergyUpgrade", false);
+    TechTreeUpgradeAllow(lp_player, "LiberatorMorph", false);
+    TechTreeUpgradeAllow(lp_player, "LiberatorAGRangeUpgrade", false);
+    TechTreeUpgradeAllow(lp_player, "PunisherGrenades", false);
+    TechTreeUpgradeAllow(lp_player, "ShieldWall", false);
+    TechTreeUpgradeAllow(lp_player, "MedivacCaduceusReactor", false);
+    TechTreeUpgradeAllow(lp_player, "HydraliskSpeedUpgrade", false);
+    TechTreeUpgradeAllow(lp_player, "TempestRangeUpgrade", false);
+    TechTreeUpgradeAllow(lp_player, "ReaperSpeed", false);
+    TechTreeUpgradeAllow(lp_player, "GlialReconstitution", false);
+    TechTreeUpgradeAllow(lp_player, "OrganicCarapace", false);
+    TechTreeUpgradeAllow(lp_player, "RoachSupply", false);
+    TechTreeUpgradeAllow(lp_player, "TunnelingClaws", false);
+    TechTreeUpgradeAllow(lp_player, "BanelingBurrowMove", false);
+    TechTreeUpgradeAllow(lp_player, "AnabolicSynthesis", false);
+    TechTreeUpgradeAllow(lp_player, "ChitinousPlating", false);
+    TechTreeUpgradeAllow(lp_player, "VoidRaySpeedUpgrade", false);
+    TechTreeUpgradeAllow(lp_player, "GraviticDrive", false);
+    TechTreeUpgradeAllow(lp_player, "DrillClaws", false);
+    TechTreeUpgradeAllow(lp_player, "Charge", false);
+    TechTreeUpgradeAllow(lp_player, "ZergBurrowMove", false);
+    TechTreeUpgradeAllow(lp_player, "zerglingattackspeed", false);
+    TechTreeUpgradeAllow(lp_player, "zerglingmovementspeed", false);
+    TechTreeUpgradeAllow(lp_player, "ObverseIncubation", false);
+    TechTreeAbilityAllow(lp_player, AbilityCommand("MedivacHeal", 0), false);
+    TechTreeAbilityAllow(lp_player, AbilityCommand("MedivacSpeedBoost", 0), false);
+    TechTreeAbilityAllow(lp_player, AbilityCommand("ArmSiloWithNuke", 0), false);
+    TechTreeAbilityAllow(lp_player, AbilityCommand("ArchonWarp", 0), false);
+    TechTreeAbilityAllow(lp_player, AbilityCommand("ArchonWarp", 1), false);
+    TechTreeAbilityAllow(lp_player, AbilityCommand("Feedback", 0), false);
+    TechTreeAbilityAllow(lp_player, AbilityCommand("PsiStorm", 0), false);
+    TechTreeAbilityAllow(lp_player, AbilityCommand("UpgradeToLurkerDenMP", 0), false);
+    TechTreeUnitAllow(lp_player, "FusionCore", true);
+    TechTreeUpgradeAllow(lp_player, "HunterSeeker", false);
+    TechTreeUpgradeAllow(lp_player, "RavenDamageUpgrade", false);
+    TechTreeUpgradeAllow(lp_player, "RavenEnhancedMunitions", false);
+    TechTreeUpgradeAllow(lp_player, "RavenRecalibratedExplosives", false);
+    TechTreeUpgradeAllow(lp_player, "RavenCorvidReactor", false);
+    TechTreeUpgradeAllow(lp_player, "DurableMaterials", false);
+    TechTreeAbilityAllow(lp_player, AbilityCommand("RavenScramblerMissile", 0), false);
+    TechTreeAbilityAllow(lp_player, AbilityCommand("RavenShredderMissile", 0), false);
+    TechTreeAbilityAllow(lp_player, AbilityCommand("RavenRepairDrone", 0), false);
+    TechTreeAbilityAllow(lp_player, AbilityCommand("BuildAutoTurret", 0), false);
+    TechTreeAbilityAllow(lp_player, AbilityCommand("PlacePointDefenseDrone", 0), false);
+    TechTreeAbilityAllow(lp_player, AbilityCommand("SeekerMissile", 0), false);
+}
+
+void MB_Unlock (int lp_player, string lp_name) {
+    if (lp_name == "Zergling") {
+        TechTreeUnitAllow(lp_player, "Zergling", true);
+        TechTreeUpgradeAllow(lp_player, "zerglingattackspeed", true);
+        TechTreeUpgradeAllow(lp_player, "zerglingmovementspeed", true);
+    }
+    else if (lp_name == "Baneling") {
+        TechTreeUnitAllow(lp_player, "Baneling", true);
+        TechTreeUnitAllow(lp_player, "Zergling", true);
+        TechTreeUnitAllow(lp_player, "BanelingCocoon", true);
+        TechTreeUpgradeAllow(lp_player, "CentrificalHooks", true);
+        TechTreeUpgradeAllow(lp_player, "zerglingmovementspeed", true);
+    }
+    else if (lp_name == "Roach") {
+        TechTreeUnitAllow(lp_player, "Roach", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "TunnelingClaws", true);
+        TechTreeUpgradeAllow(lp_player, "GlialReconstitution", true);
+    }
+    else if (lp_name == "Ravager") {
+        TechTreeUnitAllow(lp_player, "Ravager", true);
+        TechTreeUnitAllow(lp_player, "Roach", true);
+        TechTreeUnitAllow(lp_player, "RavagerCocoon", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "TunnelingClaws", true);
+        TechTreeUpgradeAllow(lp_player, "GlialReconstitution", true);
+    }
+    else if (lp_name == "Hydralisk") {
+        TechTreeUnitAllow(lp_player, "Hydralisk", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "hydraliskspeed", true);
+    }
+    else if (lp_name == "Lurker") {
+        TechTreeUnitAllow(lp_player, "LurkerMP", true);
+        TechTreeUnitAllow(lp_player, "Hydralisk", true);
+        TechTreeUnitAllow(lp_player, "LurkerMPEgg", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "hydraliskspeed", true);
+        TechTreeAbilityAllow(lp_player, AbilityCommand("UpgradeToLurkerDenMP", 0), true);
+    }
+    else if (lp_name == "Infestor") {
+        TechTreeUnitAllow(lp_player, "Infestor", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "NeuralParasite", true);
+        TechTreeUpgradeAllow(lp_player, "InfestorPeristalsis", true);
+        TechTreeUpgradeAllow(lp_player, "InfestorEnergyUpgrade", true);
+    }
+    else if (lp_name == "SwarmHost") {
+        TechTreeUnitAllow(lp_player, "SwarmHostMP", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel3", true);
+    }
+    else if (lp_name == "Mutalisk") {
+        TechTreeUnitAllow(lp_player, "Mutalisk", true);
+        TechTreeUpgradeAllow(lp_player, "ZergFlyerWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ZergFlyerWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ZergFlyerWeaponsLevel3", true);
+    }
+    else if (lp_name == "Corruptor") {
+        TechTreeUnitAllow(lp_player, "Corruptor", true);
+        TechTreeUpgradeAllow(lp_player, "ZergFlyerWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ZergFlyerWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ZergFlyerWeaponsLevel3", true);
+    }
+    else if (lp_name == "BroodLord") {
+        TechTreeUnitAllow(lp_player, "BroodLord", true);
+        TechTreeUnitAllow(lp_player, "Corruptor", true);
+        TechTreeUnitAllow(lp_player, "BroodLordCocoon", true);
+        TechTreeAbilityAllow(lp_player, AbilityCommand("CausticSpray", 0), false);
+        TechTreeUpgradeAllow(lp_player, "ZergFlyerWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ZergFlyerWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ZergFlyerWeaponsLevel3", true);
+    }
+    else if (lp_name == "Ultralisk") {
+        TechTreeUnitAllow(lp_player, "Ultralisk", true);
+        TechTreeUpgradeAllow(lp_player, "ChitinousPlating", true);
+        TechTreeUpgradeAllow(lp_player, "AnabolicSynthesis", true);
+    }
+    else if (lp_name == "Zealot") {
+        TechTreeUnitAllow(lp_player, "Zealot", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", false);
+        TechTreeUpgradeAllow(lp_player, "Charge", true);
+        TechTreeUpgradeAllow(lp_player, "WarpGateResearch", true);
+    }
+    else if (lp_name == "Stalker") {
+        TechTreeUnitAllow(lp_player, "Stalker", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", false);
+        TechTreeUpgradeAllow(lp_player, "BlinkTech", true);
+        TechTreeUpgradeAllow(lp_player, "WarpGateResearch", true);
+    }
+    else if (lp_name == "Sentry") {
+        TechTreeUnitAllow(lp_player, "Sentry", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", false);
+        TechTreeUpgradeAllow(lp_player, "haltech", true);
+        TechTreeUpgradeAllow(lp_player, "WarpGateResearch", true);
+    }
+    else if (lp_name == "Adept") {
+        TechTreeUnitAllow(lp_player, "Adept", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", false);
+        TechTreeUpgradeAllow(lp_player, "AdeptShieldUpgrade", true);
+        TechTreeUpgradeAllow(lp_player, "AdeptKillBounce", true);
+        TechTreeUpgradeAllow(lp_player, "WarpGateResearch", true);
+        TechTreeUpgradeAllow(lp_player, "AdeptPiercingAttack", true);
+    }
+    else if (lp_name == "DarkTemplar") {
+        TechTreeUnitAllow(lp_player, "DarkTemplar", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", false);
+        TechTreeUpgradeAllow(lp_player, "WarpGateResearch", true);
+    }
+    else if (lp_name == "HighTemplar") {
+        TechTreeUnitAllow(lp_player, "HighTemplar", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", false);
+        TechTreeUpgradeAllow(lp_player, "PsiStormTech", true);
+        TechTreeUpgradeAllow(lp_player, "WarpGateResearch", true);
+        TechTreeAbilityAllow(lp_player, AbilityCommand("Feedback", 0), true);
+        TechTreeAbilityAllow(lp_player, AbilityCommand("PsiStorm", 0), true);
+    }
+    else if (lp_name == "Archon") {
+        TechTreeUnitAllow(lp_player, "Archon", true);
+        TechTreeUnitAllow(lp_player, "HighTemplar", true);
+        TechTreeUnitAllow(lp_player, "DarkTemplar", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", false);
+        TechTreeUpgradeAllow(lp_player, "WarpGateResearch", true);
+        TechTreeAbilityAllow(lp_player, AbilityCommand("ArchonWarp", 0), true);
+        TechTreeAbilityAllow(lp_player, AbilityCommand("ArchonWarp", 1), true);
+    }
+    else if (lp_name == "Immortal") {
+        TechTreeUnitAllow(lp_player, "Immortal", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", false);
+    }
+    else if (lp_name == "Colossus") {
+        TechTreeUnitAllow(lp_player, "Colossus", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", false);
+        TechTreeUpgradeAllow(lp_player, "ExtendedThermalLance", true);
+    }
+    else if (lp_name == "Disruptor") {
+        TechTreeUnitAllow(lp_player, "Disruptor", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", false);
+    }
+    else if (lp_name == "Phoenix") {
+        TechTreeUnitAllow(lp_player, "Phoenix", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "PhoenixRangeUpgrade", true);
+    }
+    else if (lp_name == "Carrier") {
+        TechTreeUnitAllow(lp_player, "Carrier", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "CarrierLaunchSpeedUpgrade", true);
+    }
+    else if (lp_name == "VoidRay") {
+        TechTreeUnitAllow(lp_player, "VoidRay", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "VoidRaySpeedUpgrade", true);
+    }
+    else if (lp_name == "Tempest") {
+        TechTreeUnitAllow(lp_player, "Tempest", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "TempestGroundAttackUpgrade", true);
+    }
+    else if (lp_name == "Oracle") {
+        TechTreeUnitAllow(lp_player, "Oracle", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", true);
+    }
+    else if (lp_name == "Marine") {
+        TechTreeUnitAllow(lp_player, "Marine", true);
+        TechTreeUnitAllow(lp_player, "Medivac", true);
+        TechTreeUpgradeAllow(lp_player, "Stimpack", true);
+        TechTreeUpgradeAllow(lp_player, "ShieldWall", true);
+    }
+    else if (lp_name == "Reaper") {
+        TechTreeUnitAllow(lp_player, "Reaper", true);
+        TechTreeUnitAllow(lp_player, "Medivac", true);
+    }
+    else if (lp_name == "Marauder") {
+        TechTreeUnitAllow(lp_player, "Marauder", true);
+        TechTreeUnitAllow(lp_player, "Medivac", true);
+        TechTreeUpgradeAllow(lp_player, "PunisherGrenades", true);
+        TechTreeUpgradeAllow(lp_player, "Stimpack", true);
+    }
+    else if (lp_name == "Ghost") {
+        TechTreeUnitAllow(lp_player, "Ghost", true);
+        TechTreeUnitAllow(lp_player, "Medivac", true);
+        TechTreeUpgradeAllow(lp_player, "PersonalCloaking", true);
+        TechTreeAbilityAllow(lp_player, AbilityCommand("ArmSiloWithNuke", 0), true);
+        TechTreeUpgradeAllow(lp_player, "GhostMoebiusReactor", true);
+    }
+    else if (lp_name == "SiegeTank") {
+        TechTreeUnitAllow(lp_player, "SiegeTank", true);
+        TechTreeUnitAllow(lp_player, "SiegeTankSieged", true);
+        TechTreeUnitAllow(lp_player, "Medivac", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleWeaponsLevel3", true);
+    }
+    else if (lp_name == "Thor") {
+        TechTreeUnitAllow(lp_player, "ThorAP", true);
+        TechTreeUnitAllow(lp_player, "Medivac", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "StrikeCannons", true);
+    }
+    else if (lp_name == "Hellion") {
+        TechTreeUnitAllow(lp_player, "HellionTank", true);
+        TechTreeUnitAllow(lp_player, "Hellion", true);
+        TechTreeUnitAllow(lp_player, "Medivac", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "HighCapacityBarrels", true);
+    }
+    else if (lp_name == "Cyclone") {
+        TechTreeUnitAllow(lp_player, "Cyclone", true);
+        TechTreeUnitAllow(lp_player, "Medivac", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "CycloneAirUpgrade", true);
+        TechTreeUpgradeAllow(lp_player, "CycloneLockOnDamageUpgrade", true);
+    }
+    else if (lp_name == "WidowMine") {
+        TechTreeUnitAllow(lp_player, "WidowMine", true);
+        TechTreeUnitAllow(lp_player, "WidowMineBurrowed", true);
+        TechTreeUpgradeAllow(lp_player, "DrillClaws", true);
+    }
+    else if (lp_name == "Banshee") {
+        TechTreeUnitAllow(lp_player, "Banshee", true);
+        TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "BansheeCloak", true);
+        TechTreeUpgradeAllow(lp_player, "BansheeSpeed", true);
+    }
+    else if (lp_name == "Viking") {
+        TechTreeUnitAllow(lp_player, "VikingAssault", true);
+        TechTreeUnitAllow(lp_player, "VikingFighter", true);
+        TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel3", true);
+    }
+    else if (lp_name == "Liberator") {
+        TechTreeUnitAllow(lp_player, "Liberator", true);
+        TechTreeUnitAllow(lp_player, "LiberatorAG", true);
+        TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "LiberatorMorph", true);
+        TechTreeUpgradeAllow(lp_player, "LiberatorAGRangeUpgrade", true);
+    }
+    else if (lp_name == "Raven") {
+        TechTreeUnitAllow(lp_player, "Raven", true);
+        TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel3", true);
+        TechTreeAbilityAllow(lp_player, AbilityCommand("RavenScramblerMissile", 0), true);
+        TechTreeAbilityAllow(lp_player, AbilityCommand("RavenShredderMissile", 0), true);
+        TechTreeAbilityAllow(lp_player, AbilityCommand("RavenRepairDrone", 0), true);
+        TechTreeAbilityAllow(lp_player, AbilityCommand("BuildAutoTurret", 0), true);
+        TechTreeUpgradeAllow(lp_player, "HunterSeeker", true);
+        TechTreeUpgradeAllow(lp_player, "RavenCorvidReactor", true);
+        TechTreeUpgradeAllow(lp_player, "DurableMaterials", true);
+        TechTreeAbilityAllow(lp_player, AbilityCommand("PlacePointDefenseDrone", 0), true);
+        TechTreeAbilityAllow(lp_player, AbilityCommand("SeekerMissile", 0), true);
+        TechTreeUpgradeAllow(lp_player, "RavenDamageUpgrade", true);
+    }
+    else if (lp_name == "Battlecruiser") {
+        TechTreeUnitAllow(lp_player, "Battlecruiser", true);
+        TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "BattlecruiserBehemothReactor", true);
+        TechTreeUpgradeAllow(lp_player, "BattlecruiserEnableSpecializations", true);
+    }
+    else if (lp_name == "Viper") {
+        TechTreeUnitAllow(lp_player, "Viper", true);
+    }
+}
+
+// A morph pick's precursor can't stand in for it: its weapon is removed.
+bool MB_OnUnitCreated (bool testConds, bool runActions) {
+    unit u;
+    string pick;
+    u = EventUnitCreatedUnit();
+    if (gv_phase != MB_PHASE_BATTLE || UnitGetOwner(u) < 1 || UnitGetOwner(u) > 8) {
+        return true;
+    }
+    if (gv_pick[UnitGetOwner(u)] == 0) {
+        return true;
+    }
+    pick = gv_unitName[gv_pick[UnitGetOwner(u)]];
+    if (pick == "Baneling" && UnitGetType(u) == "Zergling") {
+        UnitWeaponRemove(u, "Claws");
+    }
+    else if (pick == "Ravager" && UnitGetType(u) == "Roach") {
+        UnitWeaponRemove(u, "AcidSaliva");
+        UnitWeaponRemove(u, "RoachMelee");
+    }
+    else if (pick == "Lurker" && UnitGetType(u) == "Hydralisk") {
+        UnitWeaponRemove(u, "HydraliskMelee");
+        UnitWeaponRemove(u, "NeedleSpines");
+    }
+    else if (pick == "BroodLord" && UnitGetType(u) == "Corruptor") {
+        UnitWeaponRemove(u, "ParasiteSpore");
+    }
+    else if (pick == "Archon" && UnitGetType(u) == "DarkTemplar") {
+        UnitWeaponRemove(u, "WarpBlades");
+    }
+    return true;
+}
+
+//--------------------------------------------------------------------------------------------------
+// Pick panel: a title, a 5x4 grid of buttons and an info line, one panel per player.
+//--------------------------------------------------------------------------------------------------
+void MB_CreatePanel (int p) {
+    int i;
+    int c;
+    gv_dialog[p] = DialogCreate(720, 460, c_anchorCenter, 0, 0, false);
+    gv_title[p] = DialogControlCreate(gv_dialog[p], c_triggerControlTypeLabel);
+    DialogControlSetSize(gv_title[p], PlayerGroupAll(), 680, 40);
+    DialogControlSetPosition(gv_title[p], PlayerGroupAll(), c_anchorTopLeft, 20, 24);
+    for (i = 1; i <= MB_BUTTONS; i += 1) {
+        c = DialogControlCreate(gv_dialog[p], c_triggerControlTypeButton);
+        DialogControlSetSize(c, PlayerGroupAll(), 128, 50);
+        DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 20 + ModI(i - 1, 5) * 136, 72 + ((i - 1) / 5) * 58);
+        DialogControlSetVisible(c, PlayerGroupAll(), false);
+        gv_button[p][i] = c;
+    }
+    gv_info[p] = DialogControlCreate(gv_dialog[p], c_triggerControlTypeLabel);
+    DialogControlSetSize(gv_info[p], PlayerGroupAll(), 680, 140);
+    DialogControlSetPosition(gv_info[p], PlayerGroupAll(), c_anchorTopLeft, 20, 310);
+    DialogSetVisible(gv_dialog[p], PlayerGroupSingle(p), true);
+}
+
+void MB_SetTitle (int p, text t) {
+    DialogControlSetPropertyAsText(gv_title[p], c_triggerControlPropertyText, PlayerGroupSingle(p), t);
+}
+
+void MB_SetInfo (int p, text t) {
+    DialogControlSetPropertyAsText(gv_info[p], c_triggerControlPropertyText, PlayerGroupSingle(p), t);
+}
+
+void MB_SetButtonText (int p, int i, text label, bool enabled) {
+    DialogControlSetPropertyAsText(gv_button[p][i], c_triggerControlPropertyText, PlayerGroupSingle(p), label);
+    DialogControlSetEnabled(gv_button[p][i], PlayerGroupSingle(p), enabled);
+    DialogControlSetVisible(gv_button[p][i], PlayerGroupSingle(p), true);
+}
+
+void MB_SetButton (int p, int i, string label, bool enabled) {
+    MB_SetButtonText(p, i, MB_Text(label), enabled);
+}
+
+void MB_HideButtons (int p) {
+    int i;
+    for (i = 1; i <= MB_BUTTONS; i += 1) {
+        DialogControlSetVisible(gv_button[p][i], PlayerGroupSingle(p), false);
+    }
+}
+
+void MB_TitleAll (text t) {
+    int p;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) != 0) {
+            MB_SetTitle(p, t);
+        }
+    }
+}
+
+int MB_ButtonIndex (int p, int control) {
+    int i;
+    for (i = 1; i <= MB_BUTTONS; i += 1) {
+        if (gv_button[p][i] == control) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+text MB_Name (int p) {
+    return PlayerName(p);
+}
+
+// One line per teammate: their pick so far, as each mode lets allies see it.
+text MB_TeamLines (int t) {
+    text s;
+    string line;
+    int k;
+    int p;
+    s = MB_Text("");
+    for (k = 1; k <= gv_teamSize[t]; k += 1) {
+        p = gv_teamPlayers[t][k];
+        line = ": ";
+        if (gv_mode == MB_MODE_PICK_THREE && gv_offer[p][1] != 0) {
+            line = line + gv_unitLabel[gv_offer[p][1]] + " / " + gv_unitLabel[gv_offer[p][2]] + " / " + gv_unitLabel[gv_offer[p][3]] + " - ";
+        }
+        if (gv_pick[p] != 0) {
+            line = line + gv_unitLabel[gv_pick[p]];
+            if (gv_locked[p]) {
+                line = line + " (locked)";
+            }
+        }
+        else {
+            line = line + "choosing";
+        }
+        s = s + MB_Name(p) + MB_Text(line + "<n/>");
+    }
+    return s;
+}
+
+//--------------------------------------------------------------------------------------------------
+// Mode vote
+//--------------------------------------------------------------------------------------------------
+string MB_ModeName (int mode) {
+    if (mode == MB_MODE_BLIND) {
+        return "Blind Random";
+    }
+    if (mode == MB_MODE_SINGLE) {
+        return "Single Draft";
+    }
+    if (mode == MB_MODE_PICK_THREE) {
+        return "Pick Three";
+    }
+    return "Captains Draft";
+}
+
+string MB_ModeMarker (int mode) {
+    if (mode == MB_MODE_BLIND) {
+        return "Mode_Blind";
+    }
+    if (mode == MB_MODE_SINGLE) {
+        return "Mode_Single";
+    }
+    if (mode == MB_MODE_PICK_THREE) {
+        return "Mode_PickThree";
+    }
+    return "Mode_Captains";
+}
+
+int MB_VoteCount (int mode) {
+    int p;
+    int n;
+    n = 0;
+    for (p = 1; p <= 8; p += 1) {
+        if (gv_vote[p] == mode) {
+            n += 1;
+        }
+    }
+    return n;
+}
+
+void MB_ShowVotes () {
+    int p;
+    int m;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) != 0) {
+            for (m = 1; m <= 4; m += 1) {
+                MB_SetButton(p, m, MB_ModeName(m) + " (" + IntToString(MB_VoteCount(m)) + ")", true);
+            }
+        }
+    }
+}
+
+bool MB_AllVoted () {
+    int p;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) != 0 && MB_IsPlaying(p) && gv_vote[p] == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Most votes wins; ties (including nobody voting) are broken at random.
+int MB_VoteResult () {
+    int best;
+    int m;
+    int[5] tied;
+    int n;
+    best = 0;
+    for (m = 1; m <= 4; m += 1) {
+        if (MB_VoteCount(m) > best) {
+            best = MB_VoteCount(m);
+        }
+    }
+    n = 0;
+    for (m = 1; m <= 4; m += 1) {
+        if (MB_VoteCount(m) == best) {
+            n += 1;
+            tied[n] = m;
+        }
+    }
+    return tied[RandomInt(1, n)];
+}
+
+void MB_RunVote () {
+    int left;
+    gv_phase = MB_PHASE_VOTE;
+    MB_ShowVotes();
+    left = MB_VOTE_SECONDS;
+    while (left > 0 && !MB_AllVoted()) {
+        MB_TitleAll(MB_Text("Vote for a mode - " + IntToString(left) + " s"));
+        Wait(1.0, c_timeReal);
+        left -= 1;
+    }
+    gv_mode = MB_VoteResult();
+    MB_MarkerAll(MB_ModeMarker(gv_mode));
+    MB_Say(PlayerGroupAll(), MB_Text(MB_ModeName(gv_mode) + " it is."));
+}
+
+//--------------------------------------------------------------------------------------------------
+// Blind Random: everyone rolls at once. Choosing the Random race allows one repick, which always
+// lands on a different unit. Each roll is an MB_Offer, so MonoBot sees repicks.
+//--------------------------------------------------------------------------------------------------
+void MB_Roll (int p, int raceChoice) {
+    int u;
+    u = gv_pick[p];
+    while (u == gv_pick[p]) {
+        if (raceChoice == 2) {
+            u = MB_RandomInRace("Terr");
+        }
+        else if (raceChoice == 3) {
+            u = MB_RandomInRace("Zerg");
+        }
+        else if (raceChoice == 4) {
+            u = MB_RandomInRace("Prot");
+        }
+        else {
+            u = RandomInt(1, MB_UNITS);
+        }
+    }
+    gv_pick[p] = u;
+    gv_rolls[p] += 1;
+    MB_Marker(p, "Offer_" + gv_unitName[u]);
+}
+
+void MB_BlindButtons (int p) {
+    MB_HideButtons(p);
+    if (gv_rolls[p] == 0) {
+        MB_SetButton(p, 1, "Random (one repick)", true);
+        MB_SetButton(p, 2, "Terran", true);
+        MB_SetButton(p, 3, "Zerg", true);
+        MB_SetButton(p, 4, "Protoss", true);
+    }
+    else if (!gv_locked[p]) {
+        MB_SetButton(p, 1, "Repick", true);
+        MB_SetButton(p, 2, "Lock in " + gv_unitLabel[gv_pick[p]], true);
+    }
+}
+
+void MB_BlindClick (int p, int i) {
+    if (gv_locked[p]) {
+        return;
+    }
+    if (gv_rolls[p] == 0) {
+        gv_raceChoice[p] = i;
+        MB_Roll(p, i);
+        gv_locked[p] = (i != 1);
+    }
+    else if (i == 1) {
+        MB_Roll(p, 1);
+        gv_locked[p] = true;
+    }
+    else if (i == 2) {
+        gv_locked[p] = true;
+    }
+    MB_BlindButtons(p);
+    MB_RefreshInfo();
+}
+
+void MB_RunBlind () {
+    int p;
+    int left;
+    gv_phase = MB_PHASE_BLIND;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) != 0) {
+            MB_BlindButtons(p);
+        }
+    }
+    MB_RefreshInfo();
+    left = MB_BLIND_SECONDS;
+    while (left > 0) {
+        MB_TitleAll(MB_Text("Blind Random - " + IntToString(left) + " s"));
+        Wait(1.0, c_timeReal);
+        left -= 1;
+    }
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) != 0 && gv_rolls[p] == 0) {
+            MB_Roll(p, 1);
+        }
+        gv_locked[p] = true;
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+// Pick Three: each player is offered one unit per race, never the same unit twice in a team, and
+// picks one. Everyone picks at once; allies see each other's offers and choices, enemies nothing.
+//--------------------------------------------------------------------------------------------------
+int MB_DrawForTeam (string race) {
+    int u;
+    u = MB_RandomInRace(race);
+    while (gv_used[u]) {
+        u = MB_RandomInRace(race);
+    }
+    gv_used[u] = true;
+    return u;
+}
+
+void MB_DealOffers (int t) {
+    int k;
+    int p;
+    int i;
+    for (i = 1; i <= MB_UNITS; i += 1) {
+        gv_used[i] = false;
+    }
+    for (k = 1; k <= gv_teamSize[t]; k += 1) {
+        p = gv_teamPlayers[t][k];
+        gv_offer[p][1] = MB_DrawForTeam("Zerg");
+        gv_offer[p][2] = MB_DrawForTeam("Prot");
+        gv_offer[p][3] = MB_DrawForTeam("Terr");
+        for (i = 1; i <= 3; i += 1) {
+            MB_Marker(p, "Offer_" + gv_unitName[gv_offer[p][i]]);
+        }
+    }
+}
+
+void MB_PickThreeButtons (int p) {
+    int i;
+    MB_HideButtons(p);
+    for (i = 1; i <= 3; i += 1) {
+        if (gv_pick[p] == gv_offer[p][i]) {
+            MB_SetButton(p, i, "> " + gv_unitLabel[gv_offer[p][i]] + " <", true);
+        }
+        else {
+            MB_SetButton(p, i, gv_unitLabel[gv_offer[p][i]], true);
+        }
+    }
+}
+
+void MB_PickThreeClick (int p, int i) {
+    if (i < 1 || i > 3 || gv_offer[p][i] == 0) {
+        return;
+    }
+    gv_pick[p] = gv_offer[p][i];
+    MB_PickThreeButtons(p);
+    MB_RefreshInfo();
+}
+
+void MB_RunPickThree () {
+    int k;
+    int t;
+    int p;
+    int left;
+    gv_phase = MB_PHASE_PICK_THREE;
+    for (t = 1; t <= 2; t += 1) {
+        MB_DealOffers(t);
+        for (k = 1; k <= gv_teamSize[t]; k += 1) {
+            MB_PickThreeButtons(gv_teamPlayers[t][k]);
+        }
+    }
+    MB_RefreshInfo();
+    left = MB_PICK_THREE_SECONDS;
+    while (left > 0) {
+        MB_TitleAll(MB_Text("Pick Three - " + IntToString(left) + " s"));
+        Wait(1.0, c_timeReal);
+        left -= 1;
+    }
+    for (p = 1; p <= 8; p += 1) {
+        if (gv_offer[p][1] != 0 && gv_pick[p] == 0) {
+            gv_pick[p] = gv_offer[p][RandomInt(1, 3)];
+        }
+        gv_locked[p] = true;
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+// Drafts: a pool of 20 units drawn from all 42, shared by both teams.
+//--------------------------------------------------------------------------------------------------
+void MB_DealPool () {
+    int[43] deck;
+    int i;
+    int j;
+    int swap;
+    for (i = 1; i <= MB_UNITS; i += 1) {
+        deck[i] = i;
+    }
+    for (i = 1; i <= MB_POOL_SIZE; i += 1) {
+        j = RandomInt(i, MB_UNITS);
+        swap = deck[i];
+        deck[i] = deck[j];
+        deck[j] = swap;
+        gv_pool[i] = deck[i];
+        gv_poolTaken[i] = false;
+    }
+}
+
+void MB_PoolButtons () {
+    int p;
+    int i;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) != 0) {
+            for (i = 1; i <= MB_POOL_SIZE; i += 1) {
+                MB_SetButton(p, i, gv_unitLabel[gv_pool[i]], !gv_poolTaken[i] && p == gv_turnPlayer);
+            }
+        }
+    }
+}
+
+int MB_RandomFreeSlot () {
+    int i;
+    i = RandomInt(1, MB_POOL_SIZE);
+    while (gv_poolTaken[i]) {
+        i = RandomInt(1, MB_POOL_SIZE);
+    }
+    return i;
+}
+
+// Turn order A-B-B-A-A-B-B-A by team, players shuffled within each team; the first team is random.
+// `slots` turns per team (4 for Single Draft's one each; Captains Draft repeats its captain).
+void MB_BuildOrder (bool captainsOnly) {
+    int first;
+    int[9] pattern;
+    int[3] next;
+    int[3][5] shuffled;
+    int t;
+    int k;
+    int j;
+    int swap;
+    int n;
+    first = RandomInt(1, 2);
+    pattern[1] = first;
+    pattern[2] = 3 - first;
+    pattern[3] = 3 - first;
+    pattern[4] = first;
+    pattern[5] = first;
+    pattern[6] = 3 - first;
+    pattern[7] = 3 - first;
+    pattern[8] = first;
+    for (t = 1; t <= 2; t += 1) {
+        next[t] = 1;
+        for (k = 1; k <= gv_teamSize[t]; k += 1) {
+            shuffled[t][k] = gv_teamPlayers[t][k];
+        }
+        for (k = 1; k <= gv_teamSize[t]; k += 1) {
+            j = RandomInt(k, gv_teamSize[t]);
+            swap = shuffled[t][k];
+            shuffled[t][k] = shuffled[t][j];
+            shuffled[t][j] = swap;
+        }
+    }
+    gv_orderCount = 0;
+    for (n = 1; n <= 8; n += 1) {
+        t = pattern[n];
+        if (next[t] <= gv_teamSize[t]) {
+            gv_orderCount += 1;
+            if (captainsOnly) {
+                gv_order[gv_orderCount] = gv_captain[t];
+            }
+            else {
+                gv_order[gv_orderCount] = shuffled[t][next[t]];
+            }
+            next[t] += 1;
+        }
+    }
+}
+
+// The current turn takes pool slot i.
+void MB_TakeSlot (int i) {
+    int p;
+    int t;
+    p = gv_turnPlayer;
+    gv_poolTaken[i] = true;
+    if (gv_mode == MB_MODE_SINGLE) {
+        gv_pick[p] = gv_pool[i];
+        gv_locked[p] = true;
+    }
+    else {
+        t = MB_TeamOf(p);
+        gv_teamUnitCount[t] += 1;
+        gv_teamUnits[t][gv_teamUnitCount[t]] = gv_pool[i];
+        MB_Marker(p, "Draft_" + gv_unitName[gv_pool[i]]);
+    }
+    gv_turnDone = true;
+}
+
+void MB_DraftClick (int p, int i) {
+    if (p != gv_turnPlayer || gv_turnDone || i < 1 || i > MB_POOL_SIZE || gv_poolTaken[i]) {
+        return;
+    }
+    MB_TakeSlot(i);
+}
+
+void MB_RunDraftTurns (string modeName) {
+    int n;
+    int left;
+    for (n = 1; n <= gv_orderCount; n += 1) {
+        gv_turnPlayer = gv_order[n];
+        gv_turnDone = false;
+        MB_PoolButtons();
+        MB_RefreshInfo();
+        left = MB_DRAFT_TURN_SECONDS;
+        while (left > 0 && !gv_turnDone) {
+            MB_TitleAll(MB_Text(modeName + " - ") + MB_Name(gv_turnPlayer) + MB_Text("'s turn - " + IntToString(left) + " s"));
+            Wait(1.0, c_timeReal);
+            left -= 1;
+        }
+        if (!gv_turnDone) {
+            MB_TakeSlot(MB_RandomFreeSlot());
+        }
+    }
+    gv_turnPlayer = 0;
+    MB_PoolButtons();
+}
+
+void MB_RunSingle () {
+    gv_phase = MB_PHASE_SINGLE;
+    MB_DealPool();
+    MB_BuildOrder(false);
+    MB_RunDraftTurns("Single Draft");
+}
+
+//--------------------------------------------------------------------------------------------------
+// Captains Draft: volunteers become captains; captains draft their team's units from the shared
+// pool in snake order, then hand them out to their players.
+//--------------------------------------------------------------------------------------------------
+void MB_ChooseCaptains () {
+    int t;
+    int k;
+    int n;
+    int[5] volunteers;
+    for (t = 1; t <= 2; t += 1) {
+        n = 0;
+        for (k = 1; k <= gv_teamSize[t]; k += 1) {
+            if (gv_optIn[gv_teamPlayers[t][k]]) {
+                n += 1;
+                volunteers[n] = gv_teamPlayers[t][k];
+            }
+        }
+        if (n > 0) {
+            gv_captain[t] = volunteers[RandomInt(1, n)];
+        }
+        else if (gv_teamSize[t] > 0) {
+            gv_captain[t] = gv_teamPlayers[t][RandomInt(1, gv_teamSize[t])];
+        }
+        if (gv_captain[t] != 0) {
+            MB_Marker(gv_captain[t], "Captain");
+        }
+    }
+}
+
+void MB_AssignButtons (int t) {
+    int c;
+    int s;
+    int k;
+    text label;
+    c = gv_captain[t];
+    if (c == 0) {
+        return;
+    }
+    MB_HideButtons(c);
+    for (s = 1; s <= gv_teamUnitCount[t]; s += 1) {
+        label = MB_Text(gv_unitLabel[gv_teamUnits[t][s]]);
+        if (gv_assignee[t][s] != 0) {
+            label = label + MB_Text(" -> ") + MB_Name(gv_assignee[t][s]);
+        }
+        if (gv_selectedSlot[t] == s) {
+            label = MB_Text("> ") + label + MB_Text(" <");
+        }
+        MB_SetButtonText(c, s, label, true);
+    }
+    for (k = 1; k <= gv_teamSize[t]; k += 1) {
+        MB_SetButtonText(c, 5 + k, MB_Text("Give to ") + MB_Name(gv_teamPlayers[t][k]), gv_selectedSlot[t] != 0);
+    }
+}
+
+void MB_AssignClick (int p, int i) {
+    int t;
+    int s;
+    int target;
+    t = MB_TeamOf(p);
+    if (t == 0 || p != gv_captain[t]) {
+        return;
+    }
+    if (i >= 1 && i <= gv_teamUnitCount[t]) {
+        gv_selectedSlot[t] = i;
+    }
+    else if (i >= 6 && i - 5 <= gv_teamSize[t] && gv_selectedSlot[t] != 0) {
+        target = gv_teamPlayers[t][i - 5];
+        for (s = 1; s <= gv_teamUnitCount[t]; s += 1) {
+            if (gv_assignee[t][s] == target) {
+                gv_assignee[t][s] = 0;  // a player holds one unit; reassigning frees the old one
+            }
+        }
+        gv_assignee[t][gv_selectedSlot[t]] = target;
+        gv_selectedSlot[t] = 0;
+    }
+    MB_AssignButtons(t);
+    MB_RefreshInfo();
+}
+
+bool MB_Holds (int t, int p) {
+    int s;
+    for (s = 1; s <= gv_teamUnitCount[t]; s += 1) {
+        if (gv_assignee[t][s] == p) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Unassigned units go to players without one, at random.
+void MB_FinishAssignment (int t) {
+    int s;
+    int k;
+    int p;
+    int n;
+    int[5] free;
+    n = 0;
+    for (k = 1; k <= gv_teamSize[t]; k += 1) {
+        if (!MB_Holds(t, gv_teamPlayers[t][k])) {
+            n += 1;
+            free[n] = gv_teamPlayers[t][k];
+        }
+    }
+    for (s = 1; s <= gv_teamUnitCount[t]; s += 1) {
+        if (gv_assignee[t][s] == 0 && n > 0) {
+            k = RandomInt(1, n);
+            gv_assignee[t][s] = free[k];
+            free[k] = free[n];
+            n -= 1;
+        }
+        p = gv_assignee[t][s];
+        if (p != 0) {
+            gv_pick[p] = gv_teamUnits[t][s];
+            gv_locked[p] = true;
+        }
+    }
+}
+
+void MB_RunCaptains () {
+    int p;
+    int t;
+    int left;
+    gv_phase = MB_PHASE_OPT_IN;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) != 0) {
+            MB_HideButtons(p);
+            MB_SetButton(p, 1, "I'll captain", true);
+        }
+    }
+    left = MB_OPT_IN_SECONDS;
+    while (left > 0) {
+        MB_TitleAll(MB_Text("Captains Draft - volunteer to captain - " + IntToString(left) + " s"));
+        Wait(1.0, c_timeReal);
+        left -= 1;
+    }
+    MB_ChooseCaptains();
+    MB_Say(PlayerGroupAll(), MB_Text("Captains: ") + MB_Name(gv_captain[1]) + MB_Text(" and ") + MB_Name(gv_captain[2]));
+
+    gv_phase = MB_PHASE_CAPTAIN_DRAFT;
+    MB_DealPool();
+    MB_BuildOrder(true);
+    MB_RunDraftTurns("Captains Draft");
+
+    gv_phase = MB_PHASE_ASSIGN;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) != 0) {
+            MB_HideButtons(p);
+        }
+    }
+    for (t = 1; t <= 2; t += 1) {
+        MB_AssignButtons(t);
+    }
+    MB_RefreshInfo();
+    left = MB_ASSIGN_SECONDS;
+    while (left > 0) {
+        MB_TitleAll(MB_Text("Captains assign units - " + IntToString(left) + " s"));
+        Wait(1.0, c_timeReal);
+        left -= 1;
+    }
+    for (t = 1; t <= 2; t += 1) {
+        MB_FinishAssignment(t);
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+// Info line: what each player may see right now.
+//--------------------------------------------------------------------------------------------------
+text MB_DraftLines () {
+    text s;
+    string line;
+    int t;
+    int k;
+    s = MB_Text("");
+    for (t = 1; t <= 2; t += 1) {
+        line = "Team " + IntToString(t) + ": ";
+        for (k = 1; k <= gv_teamUnitCount[t]; k += 1) {
+            line = line + gv_unitLabel[gv_teamUnits[t][k]] + "  ";
+        }
+        s = s + MB_Text(line + "<n/>");
+    }
+    return s;
+}
+
+text MB_AssignLines (int t) {
+    text s;
+    int k;
+    s = MB_Text("");
+    for (k = 1; k <= gv_teamUnitCount[t]; k += 1) {
+        s = s + MB_Text(gv_unitLabel[gv_teamUnits[t][k]]);
+        if (gv_assignee[t][k] != 0) {
+            s = s + MB_Text(" -> ") + MB_Name(gv_assignee[t][k]);
+        }
+        s = s + MB_Text("<n/>");
+    }
+    return s;
+}
+
+text MB_SingleLines () {
+    text s;
+    int n;
+    int p;
+    s = MB_Text("");
+    for (n = 1; n <= gv_orderCount; n += 1) {
+        p = gv_order[n];
+        s = s + MB_Name(p) + MB_Text(" (team " + IntToString(MB_TeamOf(p)) + "): ");
+        if (gv_pick[p] != 0) {
+            s = s + MB_Text(gv_unitLabel[gv_pick[p]]);
+        }
+        s = s + MB_Text("<n/>");
+    }
+    return s;
+}
+
+void MB_RefreshInfo () {
+    int p;
+    int t;
+    for (p = 1; p <= 8; p += 1) {
+        t = MB_TeamOf(p);
+        if (t == 0) {
+            continue;
+        }
+        if (gv_phase == MB_PHASE_BLIND || gv_phase == MB_PHASE_PICK_THREE) {
+            MB_SetInfo(p, MB_Text("Your team:<n/>") + MB_TeamLines(t));
+        }
+        else if (gv_phase == MB_PHASE_SINGLE) {
+            MB_SetInfo(p, MB_SingleLines());
+        }
+        else if (gv_phase == MB_PHASE_CAPTAIN_DRAFT) {
+            MB_SetInfo(p, MB_DraftLines());
+        }
+        else if (gv_phase == MB_PHASE_ASSIGN) {
+            MB_SetInfo(p, MB_Text("Your team's units:<n/>") + MB_AssignLines(t));
+        }
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+// Clicks
+//--------------------------------------------------------------------------------------------------
+bool MB_OnClick (bool testConds, bool runActions) {
+    int p;
+    int i;
+    p = EventPlayer();
+    if (p < 1 || p > 8) {
+        return true;
+    }
+    i = MB_ButtonIndex(p, EventDialogControl());
+    if (i == 0) {
+        return true;
+    }
+    if (gv_phase == MB_PHASE_VOTE && i <= 4) {
+        gv_vote[p] = i;
+        MB_ShowVotes();
+    }
+    else if (gv_phase == MB_PHASE_BLIND) {
+        MB_BlindClick(p, i);
+    }
+    else if (gv_phase == MB_PHASE_PICK_THREE) {
+        MB_PickThreeClick(p, i);
+    }
+    else if (gv_phase == MB_PHASE_SINGLE || gv_phase == MB_PHASE_CAPTAIN_DRAFT) {
+        MB_DraftClick(p, i);
+        MB_RefreshInfo();
+    }
+    else if (gv_phase == MB_PHASE_OPT_IN && i == 1) {
+        gv_optIn[p] = true;
+        MB_SetButton(p, 1, "You volunteered", false);
+    }
+    else if (gv_phase == MB_PHASE_ASSIGN) {
+        MB_AssignClick(p, i);
+    }
+    return true;
+}
+
+//--------------------------------------------------------------------------------------------------
+// Battle
+//--------------------------------------------------------------------------------------------------
+void MB_RemovePlayerUnits (int p) {
+    unitgroup g;
+    int i;
+    g = UnitGroup(null, p, RegionEntireMap(), UnitFilter(0, 0, 0, 0), 0);
+    for (i = UnitGroupCount(g, c_unitCountAll); i >= 1; i -= 1) {
+        UnitRemove(UnitGroupUnit(g, i));
+    }
+}
+
+void MB_SetTrading (bool allowed) {
+    int p;
+    int q;
+    for (p = 1; p <= 8; p += 1) {
+        for (q = 1; q <= 8; q += 1) {
+            if (p != q && MB_TeamOf(p) != 0 && MB_TeamOf(p) == MB_TeamOf(q)) {
+                PlayerSetAlliance(p, c_allianceIdTrade, q, allowed);
+            }
+        }
+    }
+}
+
+bool MB_TradeUnlock (bool testConds, bool runActions) {
+    Wait(MB_TRADE_LOCK_GAME_SECONDS, c_timeGame);
+    MB_SetTrading(true);
+    MB_Say(PlayerGroupAll(), MB_Text("Resource trading is now allowed."));
+    return true;
+}
+
+bool MB_IsCountedStructure (string type) {
+    return type != "CreepTumor" && type != "CreepTumorBurrowed" && type != "CreepTumorQueen"
+        && type != "AutoTurret" && type != "PointDefenseDrone" && type != "ForceField"
+        && type != "OracleStasisTrap" && type != "XelNagaTower"
+        && type != "TechLab" && type != "Reactor" && type != "BarracksTechLab" && type != "BarracksReactor"
+        && type != "FactoryTechLab" && type != "FactoryReactor" && type != "StarportTechLab" && type != "StarportReactor";
+}
+
+bool MB_IsFloater (string type) {
+    return type == "BarracksFlying" || type == "CommandCenterFlying" || type == "FactoryFlying"
+        || type == "OrbitalCommandFlying" || type == "StarportFlying";
+}
+
+unitgroup MB_Structures (int p) {
+    return UnitGroup(null, p, RegionEntireMap(), UnitFilter((1 << c_targetFilterStructure), 0, (1 << c_targetFilterMissile), (1 << (c_targetFilterDead - 32))), 0);
+}
+
+int MB_CountStructures (int p) {
+    unitgroup g;
+    int i;
+    int n;
+    g = MB_Structures(p);
+    n = 0;
+    for (i = 1; i <= UnitGroupCount(g, c_unitCountAll); i += 1) {
+        if (MB_IsCountedStructure(UnitGetType(UnitGroupUnit(g, i)))) {
+            n += 1;
+        }
+    }
+    return n;
+}
+
+// A team is out once it has no structures left or none of its players is still in the game.
+bool MB_TeamIsOut (int t) {
+    int p;
+    int structures;
+    bool anyone;
+    structures = 0;
+    anyone = false;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) == t) {
+            structures += MB_CountStructures(p);
+            if (MB_IsPlaying(p)) {
+                anyone = true;
+            }
+        }
+    }
+    return structures == 0 || !anyone;
+}
+
+void MB_EndGame (int winner) {
+    int p;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) == winner) {
+            MB_Marker(p, "Win");
+        }
+        else if (MB_TeamOf(p) != 0) {
+            MB_Marker(p, "Loss");
+        }
+    }
+    Wait(1.0, c_timeGame);
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) != 0 && MB_IsPlaying(p)) {
+            if (MB_TeamOf(p) == winner) {
+                GameOver(p, c_gameOverVictory, true, true);
+            }
+            else {
+                GameOver(p, c_gameOverDefeat, true, true);
+            }
+        }
+    }
+}
+
+// A Terran left with only lifted-off buildings is warned, then those buildings burn until they
+// land or die (5 life per half second, as on the old map).
+void MB_CheckFloaters (int p) {
+    unitgroup g;
+    int i;
+    int total;
+    int flying;
+    unit u;
+    g = MB_Structures(p);
+    total = 0;
+    flying = 0;
+    for (i = 1; i <= UnitGroupCount(g, c_unitCountAll); i += 1) {
+        if (MB_IsCountedStructure(UnitGetType(UnitGroupUnit(g, i)))) {
+            total += 1;
+            if (MB_IsFloater(UnitGetType(UnitGroupUnit(g, i)))) {
+                flying += 1;
+            }
+        }
+    }
+    if (total == 0 || total != flying) {
+        gv_floatSeconds[p] = 0;
+        return;
+    }
+    if (gv_floatSeconds[p] == 0) {
+        MB_Say(PlayerGroupSingle(p), MB_Text("You only have lifted-off buildings left. Land one within 10 seconds or they start burning."));
+    }
+    gv_floatSeconds[p] += 1;
+    if (gv_floatSeconds[p] <= MB_FLOATER_WARNING_SECONDS) {
+        return;
+    }
+    for (i = 1; i <= UnitGroupCount(g, c_unitCountAll); i += 1) {
+        u = UnitGroupUnit(g, i);
+        if (MB_IsFloater(UnitGetType(u))) {
+            UnitSetPropertyFixed(u, c_unitPropLife, UnitGetPropertyFixed(u, c_unitPropLife, c_unitPropCurrent) - 10.0);
+        }
+    }
+}
+
+bool MB_WatchBattle (bool testConds, bool runActions) {
+    fixed elapsed;
+    int p;
+    elapsed = 0.0;
+    while (true) {
+        Wait(1.0, c_timeGame);
+        elapsed += 1.0;
+        if (MB_TeamIsOut(1)) {
+            MB_EndGame(2);
+            return true;
+        }
+        if (MB_TeamIsOut(2)) {
+            MB_EndGame(1);
+            return true;
+        }
+        if (elapsed >= MB_FLOATER_GRACE_GAME_SECONDS) {
+            for (p = 1; p <= 8; p += 1) {
+                if (MB_TeamOf(p) != 0 && PlayerRace(p) == "Terr") {
+                    MB_CheckFloaters(p);
+                }
+            }
+        }
+    }
+    return true;
+}
+
+void MB_StartBattle () {
+    int p;
+    int u;
+    string race;
+    for (p = 1; p <= 8; p += 1) {
+        if (gv_dialog[p] != 0) {
+            DialogDestroy(gv_dialog[p]);
+        }
+    }
+    gv_phase = MB_PHASE_BATTLE;
+    for (p = 1; p <= 8; p += 1) {
+        u = gv_pick[p];
+        if (MB_TeamOf(p) == 0 || u == 0) {
+            continue;
+        }
+        MB_Marker(p, "Pick_" + gv_unitName[u]);
+        MB_Marker(p, "Start");
+        if (!MB_IsPlaying(p)) {
+            continue;
+        }
+        race = gv_unitRace[u];
+        PlayerSetRace(p, race);
+        MB_Unlock(p, gv_unitName[u]);
+        MeleeInitResourcesForPlayer(p, race);
+        MeleeInitUnitsForPlayer(p, race, PlayerStartLocation(p));
+    }
+    // Hatcheries spawn after the pick phase rather than at load, so their creep catches up fast.
+    CreepSetSpeed(c_creepSpeedGrowth, 1000.0);
+    MB_SetTrading(false);
+    MB_Say(PlayerGroupAll(), MB_Text("Resource trading unlocks at 10:00. Good luck!"));
+    GameSetMissionTimePaused(false);
+    TriggerExecute(TriggerCreate("MB_TradeUnlock"), false, false);
+    TriggerExecute(TriggerCreate("MB_WatchBattle"), false, false);
+    Wait(8.0, c_timeGame);
+    CreepSetSpeed(c_creepSpeedGrowth, 100.0);
+}
+
+//--------------------------------------------------------------------------------------------------
+// Main flow
+//--------------------------------------------------------------------------------------------------
+bool MB_Main (bool testConds, bool runActions) {
+    int p;
+    // Let the map's own melee setup run first, then take it over.
+    Wait(0.5, c_timeGame);
+    GameSetMissionTimePaused(true);
+    MB_SetupRoster();
+    MB_BuildTeams();
+    for (p = 1; p <= 8; p += 1) {
+        MeleeSetOption(p, c_meleeOptionDefeat, false);
+        MeleeSetOption(p, c_meleeOptionVictory, false);
+        MeleeSetOption(p, c_meleeOptionStalemate, false);
+        MB_RemovePlayerUnits(p);
+        MB_DisallowEverything(p);
+        if (MB_TeamOf(p) != 0) {
+            TechTreeUpgradeAddLevel(p, "MB_Version", MB_VERSION);
+            MB_CreatePanel(p);
+        }
+    }
+    MB_RunVote();
+    if (gv_mode == MB_MODE_BLIND) {
+        MB_RunBlind();
+    }
+    else if (gv_mode == MB_MODE_SINGLE) {
+        MB_RunSingle();
+    }
+    else if (gv_mode == MB_MODE_PICK_THREE) {
+        MB_RunPickThree();
+    }
+    else {
+        MB_RunCaptains();
+    }
+    MB_StartBattle();
+    return true;
+}
+
+void MB_Init () {
+    trigger t;
+    t = TriggerCreate("MB_Main");
+    TriggerAddEventMapInit(t);
+    t = TriggerCreate("MB_OnClick");
+    TriggerAddEventDialogControl(t, c_playerAny, c_invalidDialogControlId, c_triggerControlEventTypeClick);
+    t = TriggerCreate("MB_OnUnitCreated");
+    TriggerAddEventUnitCreated(t, null, null, null);
+}

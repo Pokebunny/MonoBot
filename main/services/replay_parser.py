@@ -5,6 +5,9 @@ production counts as corroboration and fallback.
 
 Winner: recorded only when every loser leaves before the recorder; otherwise
 inferred from army value, gg-concessions and departures, scored by agreement.
+
+Games played with the MonoBattle mod (sc2mod/) state mode, picks, battle start
+and result as marker upgrades, which win over all of the above when present.
 """
 
 import logging
@@ -13,6 +16,7 @@ import os
 import re
 import statistics
 from collections import Counter, defaultdict
+from dataclasses import dataclass, field
 
 import sc2reader
 from models.replay import UNIT_RACE, MapVersion, MatchPlayer, MonobattleMatch
@@ -341,7 +345,10 @@ def _credit_kill(tallies: dict[int, "_PlayerTally"], event, game_start: int) -> 
         tallies[killing_player.pid].kills_by_unit[_canonical_killer(killer.name)] += value
 
 
-def _tally_events(replay, game_start: int) -> dict[int, _PlayerTally]:
+def _tally_events(replay, game_start: int, prestart_units: bool = True) -> dict[int, _PlayerTally]:
+    """prestart_units=False ignores everything born before game_start: on a
+    melee map the mod removes the map's starting bases and spawns new ones at
+    the start, so the first set would count twice."""
     tallies: dict[int, _PlayerTally] = defaultdict(_PlayerTally)
     for event in replay.events:
         event_name = type(event).__name__
@@ -402,7 +409,7 @@ def _tally_events(replay, game_start: int) -> dict[int, _PlayerTally]:
             owner = event.unit.owner
         else:
             continue
-        if owner is None:
+        if owner is None or (not prestart_units and event.second < game_start):
             continue
         tally = tallies[owner.pid]
         raw = event.unit.name
@@ -487,13 +494,18 @@ def _game_swings(replay, winning_team: int | None, game_start: int) -> tuple[int
     return max_deficit, changes
 
 
-def _infer_winner(replay) -> tuple[int | None, float, str]:
+def _infer_winner(replay, markers: "_Markers | None" = None) -> tuple[int | None, float, str]:
     """Returns (winning_team, confidence, method)."""
     if replay.winner is not None:
         return replay.winner.number, _CONF_RECORDED, "recorded"
 
     team_of = {p.pid: team.number for team in replay.teams for p in team.players}
     team_numbers = [t.number for t in replay.teams]
+
+    if markers is not None:
+        winners = {team_of[pid] for pid, won in markers.results.items() if won and pid in team_of}
+        if len(winners) == 1:
+            return winners.pop(), _CONF_RECORDED, "marker"
 
     # Signal 1: final army value per team.
     last_stats = {}
@@ -591,12 +603,65 @@ def read_game_seed(path: str) -> int | None:
     return _game_seed(sc2reader.load_replay(path, load_level=1))
 
 
+# -- MonoBattle mod markers ------------------------------------------------
+# The mod grants upgrades with no effect, whose names carry the facts; each is
+# logged with its player and time. Names are documented in sc2mod/README.md and
+# must match sc2mod's MB_* constants. Units use this module's canonical names.
+_MARKER_PREFIX = "MB_"
+_MARKER_MODES = {
+    "Mode_Blind": "blind_random",
+    "Mode_Single": "single_draft",
+    "Mode_PickThree": "pick_three",
+    "Mode_Captains": "captains_draft",
+}
+
+
+@dataclass
+class _Markers:
+    version: int = 0
+    mode: str | None = None
+    start: int | None = None  # battle start, game seconds
+    picks: dict[int, str] = field(default_factory=dict)
+    offers: dict[int, list[str]] = field(default_factory=lambda: defaultdict(list))  # in order shown
+    results: dict[int, bool] = field(default_factory=dict)  # won?
+
+
+def _read_markers(events) -> _Markers | None:
+    """The mod's markers, or None for a game played without the mod."""
+    markers = None
+    for e in events:
+        if type(e).__name__ != "UpgradeCompleteEvent" or not e.upgrade_type_name.startswith(_MARKER_PREFIX):
+            continue
+        markers = markers or _Markers()
+        name = e.upgrade_type_name.removeprefix(_MARKER_PREFIX)
+        if name == "Version":
+            markers.version = max(markers.version, e.count)
+        elif name in _MARKER_MODES:
+            markers.mode = _MARKER_MODES[name]
+        elif name == "Start":
+            markers.start = e.second if markers.start is None else min(markers.start, e.second)
+        elif name.startswith("Pick_"):
+            markers.picks[e.pid] = name.removeprefix("Pick_")
+        elif name.startswith("Offer_"):
+            markers.offers[e.pid].append(name.removeprefix("Offer_"))
+        elif name in ("Win", "Loss"):
+            markers.results[e.pid] = name == "Win"
+    return markers
+
+
 def parse_replay(path: str) -> MonobattleMatch:
     replay = sc2reader.load_replay(path, load_level=4)
-    game_start = _find_game_start(replay)
-    tallies = _tally_events(replay, game_start)
+    markers = _read_markers(replay.events)
+    if markers is not None and markers.start is not None:
+        game_start = markers.start
+    else:
+        game_start = _find_game_start(replay)
+    tallies = _tally_events(replay, game_start, prestart_units=markers is None)
 
-    pick_mode = _classify_pick_mode(tallies, game_start)
+    if markers is not None and markers.mode is not None:
+        pick_mode = markers.mode
+    else:
+        pick_mode = _classify_pick_mode(tallies, game_start)
     homes = {(team.number, p.pid): tallies[p.pid].home for team in replay.teams for p in team.players}
     players = []
     for team in replay.teams:
@@ -606,14 +671,19 @@ def parse_replay(path: str) -> MonobattleMatch:
             # Blind-random repick: a second preview, a final "repick" press, or a
             # last preview of the wrong race. Draft previews are just browsing.
             repick_used = repick_from = None
-            if pick_mode == "blind_random":
+            offers = markers.offers.get(p.pid, []) if markers is not None else []
+            if pick_mode == "blind_random" and offers:
+                # Each roll is an offer, so a second one is the repick.
+                repick_used = len(offers) > 1
+                repick_from = offers[0] if repick_used else None
+            elif pick_mode == "blind_random" and markers is None:
                 race_mismatch = bool(tally.previews) and _UNIT_RACE.get(tally.previews[-1], race) != race
                 repick_used = (
                     len(tally.previews) > 1 or tally.last_pick_dialog == _REPICK_BUTTON_CONTROL_ID or race_mismatch
                 )
                 if repick_used and tally.previews:
                     repick_from = tally.previews[0]  # the unit they gave up
-            pick = _detect_pick(tally, race)
+            pick = (markers.picks.get(p.pid) if markers is not None else None) or _detect_pick(tally, race)
             # Queens only stop the "bases before your first unit" clock for
             # the player whose pick they are.
             clocks = [tally.first_unit_second]
@@ -649,7 +719,7 @@ def parse_replay(path: str) -> MonobattleMatch:
                 )
             )
 
-    winning_team, confidence, method = _infer_winner(replay)
+    winning_team, confidence, method = _infer_winner(replay, markers)
     comeback_deficit, lead_changes = _game_swings(replay, winning_team, game_start)
     return MonobattleMatch(
         file_name=os.path.basename(path),

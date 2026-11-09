@@ -141,12 +141,14 @@ class MonobattleMatch(BaseModel):
     game_seed: int | None = None
     duration_seconds: int  # real seconds, the clock the in-game timer shows
     game_type: str  # e.g. "4v4", from real_type
-    pick_mode: str  # "blind_random" | "single_draft" | "tier_draft"
+    # "blind_random" | "single_draft" | "tier_draft" (old map) | "pick_three" |
+    # "captains_draft" (MonoBattle mod)
+    pick_mode: str
     pick_phase_seconds: int  # GAME seconds, unlike duration_seconds
     players: list[MatchPlayer]
     winning_team: int | None  # None when no winner recorded or inferred
     winner_confidence: float  # 1.0 recorded, <1.0 inferred, 0.0 unknown
-    winner_method: str  # "recorded" | "inferred:<signals>" | "unknown"
+    winner_method: str  # "recorded" | "marker" | "inferred:<signals>" | "unknown"
     comeback_deficit: int | None = None  # winner's worst deficit in value on the map
     lead_changes: int | None = None  # meaningful flips of the lead in value on the map
     # Someone called for a remake after the battle began (replay_parser._REMAKE_RE).

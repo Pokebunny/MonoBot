@@ -66,6 +66,8 @@ _MODES = {
     **dict.fromkeys(("br", "blindrandom", "blind_random", "random"), "blind_random"),
     **dict.fromkeys(("sd", "singledraft", "single_draft"), "single_draft"),
     **dict.fromkeys(("td", "tierdraft", "tier_draft"), "tier_draft"),
+    **dict.fromkeys(("pt", "pickthree", "pick_three"), "pick_three"),
+    **dict.fromkeys(("cd", "captainsdraft", "captains_draft", "captains"), "captains_draft"),
 }
 
 

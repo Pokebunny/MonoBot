@@ -1,0 +1,119 @@
+//==================================================================================================
+// RaceSwapTest - a throwaway extension mod that checks what MonoBattle relies on, on any melee map.
+//
+// At load it removes every player's starting base, switches each player to a different race than
+// they chose in the lobby (Terran -> Zerg -> Protoss -> Terran), and spawns a base for the new race
+// at their start location. Normal melee tech stays on. Type -end in chat to finish: team 1 wins.
+// The replay carries MB_* markers, so uploading it to MonoBot tests the parser too.
+// See README.md for what to check.
+//
+// Entry point: RT_Init. Needs UpgradeData.xml imported alongside.
+//==================================================================================================
+include "TriggerLibs/NativeLib"
+
+string RT_NextRace (string race) {
+    if (race == "Terr") {
+        return "Zerg";
+    }
+    if (race == "Zerg") {
+        return "Prot";
+    }
+    return "Terr";
+}
+
+// A unit of each race to report as the "pick", so MonoBot shows something sensible.
+string RT_SampleUnit (string race) {
+    if (race == "Zerg") {
+        return "Roach";
+    }
+    if (race == "Prot") {
+        return "Stalker";
+    }
+    return "Marine";
+}
+
+int RT_TeamOf (int p) {
+    if (PlayerGroupHasPlayer(GameAttributePlayersForTeam(1), p)) {
+        return 1;
+    }
+    if (PlayerGroupHasPlayer(GameAttributePlayersForTeam(2), p)) {
+        return 2;
+    }
+    return 0;
+}
+
+void RT_RemoveUnits (int p) {
+    unitgroup g;
+    int i;
+    g = UnitGroup(null, p, RegionEntireMap(), UnitFilter(0, 0, 0, 0), 0);
+    for (i = UnitGroupCount(g, c_unitCountAll); i >= 1; i -= 1) {
+        UnitRemove(UnitGroupUnit(g, i));
+    }
+}
+
+bool RT_Main (bool testConds, bool runActions) {
+    int p;
+    string race;
+    Wait(0.5, c_timeGame);
+    GameSetMissionTimePaused(true);
+    for (p = 1; p <= 8; p += 1) {
+        if (RT_TeamOf(p) == 0 || PlayerStatus(p) != c_playerStatusActive) {
+            continue;
+        }
+        MeleeSetOption(p, c_meleeOptionDefeat, false);
+        MeleeSetOption(p, c_meleeOptionVictory, false);
+        MeleeSetOption(p, c_meleeOptionStalemate, false);
+        TechTreeUpgradeAddLevel(p, "MB_Version", 1);
+        TechTreeUpgradeAddLevel(p, "MB_Mode_Blind", 1);
+        RT_RemoveUnits(p);
+    }
+    // A pause like a pick phase, so the swap happens well after load.
+    UIDisplayMessage(PlayerGroupAll(), c_messageAreaSubtitle, StringToText("RaceSwapTest: bases removed. Swapping races in 10 seconds."));
+    Wait(10.0, c_timeReal);
+    for (p = 1; p <= 8; p += 1) {
+        if (RT_TeamOf(p) == 0 || PlayerStatus(p) != c_playerStatusActive) {
+            continue;
+        }
+        race = RT_NextRace(PlayerRace(p));
+        TechTreeUpgradeAddLevel(p, "MB_Pick_" + RT_SampleUnit(race), 1);
+        TechTreeUpgradeAddLevel(p, "MB_Start", 1);
+        PlayerSetRace(p, race);
+        MeleeInitResourcesForPlayer(p, race);
+        MeleeInitUnitsForPlayer(p, race, PlayerStartLocation(p));
+        UIDisplayMessage(PlayerGroupSingle(p), c_messageAreaSubtitle, StringToText("You are now " + race + ". Check the list in README.md. Type -end to finish."));
+    }
+    GameSetMissionTimePaused(false);
+    return true;
+}
+
+bool RT_End (bool testConds, bool runActions) {
+    int p;
+    for (p = 1; p <= 8; p += 1) {
+        if (RT_TeamOf(p) == 1) {
+            TechTreeUpgradeAddLevel(p, "MB_Win", 1);
+        }
+        else if (RT_TeamOf(p) == 2) {
+            TechTreeUpgradeAddLevel(p, "MB_Loss", 1);
+        }
+    }
+    Wait(1.0, c_timeGame);
+    for (p = 1; p <= 8; p += 1) {
+        if (RT_TeamOf(p) != 0 && PlayerStatus(p) == c_playerStatusActive) {
+            if (RT_TeamOf(p) == 1) {
+                GameOver(p, c_gameOverVictory, true, true);
+            }
+            else {
+                GameOver(p, c_gameOverDefeat, true, true);
+            }
+        }
+    }
+    return true;
+}
+
+void RT_Init () {
+    trigger t;
+    t = TriggerCreate("RT_Main");
+    TriggerAddEventMapInit(t);
+    t = TriggerCreate("RT_End");
+    TriggerAddEventChatMessage(t, c_playerAny, "-end", true);
+}

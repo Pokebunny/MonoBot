@@ -142,6 +142,12 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   archive (`resources/replays`, shared by all communities) keeps only stored
   recordings: the weaker file is deleted unless some database still stores
   it (`cogs.replays.keep_archive`; `prune_matches.py --files` for old ones).
+- `sc2mod/` (repo root) — the MonoBattle extension mod (Galaxy script + marker
+  upgrades) meant to replace the arcade map; see `sc2mod/README.md`. Its `MB_*`
+  marker upgrades (mode, offers, picks, battle start, result) are read by
+  `replay_parser._read_markers` and win over inference; replays without them
+  must parse exactly as before. `tests/test_mod_markers.py` keeps the script's
+  roster, the marker XML and the parser in step.
 - `scripts/` (repo root) — one-shot utilities, e.g. `backfill_archive.py` to
   seed the database from a folder of replays (idempotent, dedupes by hash).
   `reparse_stored.py` re-applies parser improvements to stored games

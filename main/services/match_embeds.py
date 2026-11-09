@@ -22,10 +22,18 @@ _PICK_MODE_LABELS = {
     "blind_random": "Blind Random",
     "single_draft": "Single Draft",
     "tier_draft": "Tier Draft",
+    "pick_three": "Pick Three",
+    "captains_draft": "Captains Draft",
 }
 
 # What to type to get each mode's board back (cogs.leaderboard._MODES).
-_MODE_WORDS = {"blind_random": "br", "single_draft": "sd", "tier_draft": "td"}
+_MODE_WORDS = {
+    "blind_random": "br",
+    "single_draft": "sd",
+    "tier_draft": "td",
+    "pick_three": "pt",
+    "captains_draft": "cd",
+}
 
 
 def _duration(seconds: int) -> str:

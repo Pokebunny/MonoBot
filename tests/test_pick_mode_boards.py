@@ -48,6 +48,8 @@ def store(tmp_path):
         ("blind random zerg", "blind_random", "zerg"),
         ("5 Single Draft s1", "single_draft", "5 s1"),
         ("singledraft", "single_draft", ""),
+        ("pick three s4", "pick_three", "s4"),
+        ("Captains Draft protoss", "captains_draft", "protoss"),
         ("zerg 3", None, "zerg 3"),
     ],
 )

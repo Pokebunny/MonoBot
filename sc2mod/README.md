@@ -43,11 +43,12 @@ only the Editor's compiler and a real game can prove them.
 5. **End.** A team with no structures left, or no players left, loses. Every
    game ends with Victory/Defeat.
 
-Unit rules are the old map's: only the pick's own upgrades, morph precursors
+Unit rules are the old map's: only the pick's own upgrades (including ones
+newer than the old map, like Interference Matrix and Lunge), morph precursors
 can't attack (e.g. a Baneling player's Zerglings), Medivacs never heal,
 Ravens are shared but can't use abilities unless picked. Changes from
 the old map: **Viper** is pickable and **Queen** isn't; Queens are shared and
-uncapped; Medivacs get Afterburners (Rapid Reignition stays off); Tier Draft
+uncapped; Medivacs get Afterburners and Rapid Reignition; Tier Draft
 is gone; **no resource trading until 10:00** on the
 clock; balance is live LotV (Void Multi, no balance mod).
 
@@ -138,10 +139,16 @@ Run `MonoBattle.galaxy` on a 4v4 melee map through each mode, then check:
 ## Checking the scripts
 
 ```
-git clone --depth 1 https://github.com/Talv/sc2-data-trigger
-python sc2mod/lint_galaxy.py sc2-data-trigger/mods/core.sc2mod/base.sc2data/TriggerLibs sc2mod/*.galaxy
+git clone --depth 1 --filter=blob:none --sparse https://github.com/SC2Mapster/SC2GameData
+cd SC2GameData && git sparse-checkout set mods/core.sc2mod/base.sc2data/TriggerLibs \
+    mods/{liberty,libertymulti,swarm,swarmmulti,void,voidmulti}.sc2mod/base.sc2data/GameData && cd ..
+python sc2mod/lint_galaxy.py SC2GameData/mods/core.sc2mod/base.sc2data/TriggerLibs sc2mod/*.galaxy
+python sc2mod/audit_upgrades.py SC2GameData/mods
 ```
 
-That dump of Blizzard's script library is a little behind the live game (it
-lacks `UnitAbilityRemove`, for one); a function it doesn't know is not
-necessarily wrong.
+`lint_galaxy.py` checks the scripts against Blizzard's function list.
+`audit_upgrades.py` lists researchable upgrades the mod leaves open to every
+pick; run it after a balance patch. Hi-Sec Auto Tracking, Neosteel Frame,
+Medivac Rapid Deployment and Rapid Reignition, the Observer speed upgrade, Secreted Coating and
+Overlord transport are left on deliberately. That dump stopped updating in
+2026, so a function or upgrade it doesn't know is not necessarily wrong.

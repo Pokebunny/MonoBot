@@ -237,10 +237,27 @@ void MB_SetupRoster () {
 //--------------------------------------------------------------------------------------------------
 // Tech: everything army-related off, then the pick's unit, morph chain and own upgrades back on.
 // Ported from the old arcade map. Queens stay buildable by every Zerg with no cap; Ravens stay
-// buildable by every Terran but can't use abilities unless picked; Medivacs can boost but
-// never heal (Rapid Reignition stays off).
+// buildable by every Terran but can't use abilities unless picked; Medivacs can boost (with
+// Rapid Reignition) but never heal.
 //--------------------------------------------------------------------------------------------------
 void MB_DisallowEverything (int lp_player) {
+    // Unit upgrades newer than the old map, gated to their pick in MB_Unlock.
+    TechTreeUpgradeAllow(lp_player, "AmplifiedShielding", false);
+    TechTreeUpgradeAllow(lp_player, "CycloneLockOnRangeUpgrade", false);
+    TechTreeUpgradeAllow(lp_player, "CycloneRapidFireLaunchers", false);
+    TechTreeUpgradeAllow(lp_player, "DarkTemplarBlinkUpgrade", false);
+    TechTreeUpgradeAllow(lp_player, "DiggingClaws", false);
+    TechTreeUpgradeAllow(lp_player, "EvolveGroovedSpines", false);
+    TechTreeUpgradeAllow(lp_player, "EvolveMuscularAugments", false);
+    TechTreeUpgradeAllow(lp_player, "Frenzy", false);
+    TechTreeUpgradeAllow(lp_player, "HighTemplarKhaydarinAmulet", false);
+    TechTreeUpgradeAllow(lp_player, "HurricaneThrusters", false);
+    TechTreeUpgradeAllow(lp_player, "InterferenceMatrix", false);
+    TechTreeUpgradeAllow(lp_player, "LurkerRange", false);
+    TechTreeUpgradeAllow(lp_player, "MicrobialShroud", false);
+    TechTreeUpgradeAllow(lp_player, "PsionicAmplifiers", false);
+    TechTreeUpgradeAllow(lp_player, "SmartServos", false);
+    TechTreeUpgradeAllow(lp_player, "SunderingImpact", false);
     TechTreeUnitAllow(lp_player, "Marine", false);
     TechTreeUnitAllow(lp_player, "Marauder", false);
     TechTreeUnitAllow(lp_player, "Reaper", false);
@@ -336,7 +353,6 @@ void MB_DisallowEverything (int lp_player) {
     TechTreeUpgradeAllow(lp_player, "WarpGateResearch", false);
     TechTreeUpgradeAllow(lp_player, "CycloneLockOnDamageUpgrade", false);
     TechTreeUpgradeAllow(lp_player, "TempestGroundAttackUpgrade", false);
-    TechTreeUpgradeAllow(lp_player, "MedivacIncreaseSpeedBoost", false);
     TechTreeUpgradeAllow(lp_player, "BansheeSpeed", false);
     TechTreeUpgradeAllow(lp_player, "AnionPulseCrystals", false);
     TechTreeUpgradeAllow(lp_player, "AbdominalFortitude", false);
@@ -431,6 +447,9 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "GlialReconstitution", true);
     }
     else if (lp_name == "Hydralisk") {
+        TechTreeUpgradeAllow(lp_player, "EvolveGroovedSpines", true);
+        TechTreeUpgradeAllow(lp_player, "EvolveMuscularAugments", true);
+        TechTreeUpgradeAllow(lp_player, "Frenzy", true);
         TechTreeUnitAllow(lp_player, "Hydralisk", true);
         TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel1", true);
         TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel2", true);
@@ -438,6 +457,8 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "hydraliskspeed", true);
     }
     else if (lp_name == "Lurker") {
+        TechTreeUpgradeAllow(lp_player, "DiggingClaws", true);
+        TechTreeUpgradeAllow(lp_player, "LurkerRange", true);
         TechTreeUnitAllow(lp_player, "LurkerMP", true);
         TechTreeUnitAllow(lp_player, "Hydralisk", true);
         TechTreeUnitAllow(lp_player, "LurkerMPEgg", true);
@@ -448,6 +469,7 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeAbilityAllow(lp_player, AbilityCommand("UpgradeToLurkerDenMP", 0), true);
     }
     else if (lp_name == "Infestor") {
+        TechTreeUpgradeAllow(lp_player, "MicrobialShroud", true);
         TechTreeUnitAllow(lp_player, "Infestor", true);
         TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel1", true);
         TechTreeUpgradeAllow(lp_player, "ZergMissileWeaponsLevel2", true);
@@ -489,6 +511,7 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "AnabolicSynthesis", true);
     }
     else if (lp_name == "Zealot") {
+        TechTreeUpgradeAllow(lp_player, "SunderingImpact", true);
         TechTreeUnitAllow(lp_player, "Zealot", true);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", false);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", false);
@@ -513,6 +536,8 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "WarpGateResearch", true);
     }
     else if (lp_name == "Adept") {
+        TechTreeUpgradeAllow(lp_player, "AmplifiedShielding", true);
+        TechTreeUpgradeAllow(lp_player, "PsionicAmplifiers", true);
         TechTreeUnitAllow(lp_player, "Adept", true);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", false);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", false);
@@ -523,6 +548,7 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "AdeptPiercingAttack", true);
     }
     else if (lp_name == "DarkTemplar") {
+        TechTreeUpgradeAllow(lp_player, "DarkTemplarBlinkUpgrade", true);
         TechTreeUnitAllow(lp_player, "DarkTemplar", true);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", false);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", false);
@@ -530,6 +556,7 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "WarpGateResearch", true);
     }
     else if (lp_name == "HighTemplar") {
+        TechTreeUpgradeAllow(lp_player, "HighTemplarKhaydarinAmulet", true);
         TechTreeUnitAllow(lp_player, "HighTemplar", true);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", false);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", false);
@@ -638,6 +665,7 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "TerranVehicleWeaponsLevel3", true);
     }
     else if (lp_name == "Thor") {
+        TechTreeUpgradeAllow(lp_player, "SmartServos", true);
         TechTreeUnitAllow(lp_player, "ThorAP", true);
         TechTreeUnitAllow(lp_player, "Medivac", true);
         TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
@@ -649,6 +677,7 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "StrikeCannons", true);
     }
     else if (lp_name == "Hellion") {
+        TechTreeUpgradeAllow(lp_player, "SmartServos", true);
         TechTreeUnitAllow(lp_player, "HellionTank", true);
         TechTreeUnitAllow(lp_player, "Hellion", true);
         TechTreeUnitAllow(lp_player, "Medivac", true);
@@ -661,6 +690,9 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "HighCapacityBarrels", true);
     }
     else if (lp_name == "Cyclone") {
+        TechTreeUpgradeAllow(lp_player, "CycloneRapidFireLaunchers", true);
+        TechTreeUpgradeAllow(lp_player, "CycloneLockOnRangeUpgrade", true);
+        TechTreeUpgradeAllow(lp_player, "HurricaneThrusters", true);
         TechTreeUnitAllow(lp_player, "Cyclone", true);
         TechTreeUnitAllow(lp_player, "Medivac", true);
         TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
@@ -689,6 +721,7 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "BansheeSpeed", true);
     }
     else if (lp_name == "Viking") {
+        TechTreeUpgradeAllow(lp_player, "SmartServos", true);
         TechTreeUnitAllow(lp_player, "VikingAssault", true);
         TechTreeUnitAllow(lp_player, "VikingFighter", true);
         TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel1", true);
@@ -711,6 +744,7 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "LiberatorAGRangeUpgrade", true);
     }
     else if (lp_name == "Raven") {
+        TechTreeUpgradeAllow(lp_player, "InterferenceMatrix", true);
         TechTreeUnitAllow(lp_player, "Raven", true);
         TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel1", true);
         TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel2", true);

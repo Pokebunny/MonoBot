@@ -41,7 +41,12 @@ only the Editor's compiler and a real game can prove them.
    their name beneath in their colour, "unit - player" on hover, and a Picks
    button that collapses it. It's shown to everyone, observers included.
 5. **End.** A team with no structures left, or no players left, loses. Every
-   game ends with Victory/Defeat.
+   game ends with Victory/Defeat. Typing **gg** opens a **concede vote** for
+   your team (your gg counts as yes; 20 s); when more than half of the team's
+   remaining players agree, the game ends for everyone at once. That's what
+   gets the result into every replay: a replay only records Victory/Defeat if
+   its recorder is still in the game when it ends. A failed vote locks the
+   team out for a minute.
 
 Unit rules are the old map's: only the pick's own upgrades (including ones
 newer than the old map, like Interference Matrix and Lunge), morph precursors
@@ -131,6 +136,9 @@ Run `MonoBattle.galaxy` on a 4v4 melee map through each mode, then check:
 - [ ] Only your pick (and its morph chain and upgrades) can be built
 - [ ] Resource trading is refused before 10:00 and works after
 - [ ] Killing a team's last structure ends the game for everyone
+- [ ] gg opens the concede vote for your team only; a majority ends the game,
+      a failed vote can't be restarted for a minute, and every player's replay
+      shows the result
 - [ ] The `MB_*` upgrades don't show anywhere in the UI or score screen
 - [ ] Hatcheries start with their usual larva (the old map added an extra
       larva-spawn effect; it's left out until we know it's needed)

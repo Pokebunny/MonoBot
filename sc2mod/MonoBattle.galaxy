@@ -42,6 +42,10 @@ const fixed MB_TRADE_LOCK_GAME_SECONDS = 840.0;
 const fixed MB_FLOATER_GRACE_GAME_SECONDS = 168.0;  // 2:00 on the clock
 const int MB_FLOATER_WARNING_SECONDS = 10;
 
+// Concede: "gg" opens a vote for the typer's team (see MB_OnChat).
+const int MB_CONCEDE_VOTE_SECONDS = 20;
+const fixed MB_CONCEDE_COOLDOWN_GAME_SECONDS = 84.0;  // 1:00 on the clock
+
 const int MB_MODE_BLIND = 1;
 const int MB_MODE_SINGLE = 2;
 const int MB_MODE_PICK_THREE = 3;
@@ -95,7 +99,17 @@ int[3] gv_teamUnitCount;
 int[3][5] gv_assignee;    // [team][unit slot] -> player
 int[3] gv_selectedSlot;   // captain's unit slot waiting for a player
 
-int[9] gv_floatSeconds;   // consecutive seconds a Terran has had only lifted-off buildings
+int[9] gv_floatSeconds;
+
+bool gv_ended;
+bool[3] gv_concedeOpen;
+fixed[3] gv_concedeAllowedAt;  // mission time the team may next start a vote
+bool[9] gv_concedeVoted;
+bool[9] gv_concedeYes;
+int[9] gv_concedeDialog;
+int[9] gv_concedeLabel;
+int[9] gv_concedeYesButton;
+int[9] gv_concedeNoButton;   // consecutive seconds a Terran has had only lifted-off buildings
 
 // Per-player pick panel
 int[9] gv_dialog;
@@ -115,6 +129,7 @@ bool[17] gv_picksHidden;  // per viewer, observers included
 //--------------------------------------------------------------------------------------------------
 void MB_StartBattle ();
 void MB_RefreshInfo ();
+void MB_ConcedeVote (int p, bool yes);
 
 //--------------------------------------------------------------------------------------------------
 // Small helpers
@@ -1619,6 +1634,16 @@ bool MB_OnClick (bool testConds, bool runActions) {
     int p;
     int i;
     p = EventPlayer();
+    if (p >= 1 && p <= 8 && gv_concedeDialog[p] != 0) {
+        if (EventDialogControl() == gv_concedeYesButton[p]) {
+            MB_ConcedeVote(p, true);
+            return true;
+        }
+        if (EventDialogControl() == gv_concedeNoButton[p]) {
+            MB_ConcedeVote(p, false);
+            return true;
+        }
+    }
     if (gv_picksToggle != 0 && EventDialogControl() == gv_picksToggle) {
         MB_TogglePicks(p);
         return true;
@@ -1736,6 +1761,10 @@ bool MB_TeamIsOut (int t) {
 
 void MB_EndGame (int winner) {
     int p;
+    if (gv_ended) {
+        return;
+    }
+    gv_ended = true;
     for (p = 1; p <= 8; p += 1) {
         if (MB_TeamOf(p) == winner) {
             MB_Marker(p, "Win");
@@ -1755,6 +1784,174 @@ void MB_EndGame (int winner) {
             }
         }
     }
+}
+
+//--------------------------------------------------------------------------------------------------
+// Concede vote: "gg" in chat during the battle opens a vote for the typer's team (their gg is a
+// yes). More than half of the team's remaining players saying yes ends the game at once, so every
+// player still in gets Victory/Defeat in their replay instead of a recording that stops when they
+// leave. A failed vote locks the team out for a minute.
+//--------------------------------------------------------------------------------------------------
+bool MB_IsGG (string message) {
+    int i;
+    string w;
+    for (i = 1; i <= 8; i += 1) {
+        w = StringCase(StringWord(message, i), false);
+        if (w == "gg" || w == "ggs" || w == "ggwp" || w == "gg!" || w == "gg." || w == "ggg") {
+            return true;
+        }
+    }
+    return false;
+}
+
+int MB_TeamPlaying (int t) {
+    int p;
+    int n;
+    n = 0;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) == t && MB_IsPlaying(p)) {
+            n += 1;
+        }
+    }
+    return n;
+}
+
+int MB_ConcedeCount (int t, bool votedOnly, bool yes) {
+    int p;
+    int n;
+    n = 0;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) == t && MB_IsPlaying(p) && (!votedOnly || gv_concedeVoted[p]) && gv_concedeYes[p] == yes) {
+            n += 1;
+        }
+    }
+    return n;
+}
+
+void MB_ConcedeDialog (int p) {
+    if (gv_concedeDialog[p] != 0) {
+        return;
+    }
+    gv_concedeDialog[p] = DialogCreate(380, 150, c_anchorTop, 0, 120, false);
+    gv_concedeLabel[p] = DialogControlCreate(gv_concedeDialog[p], c_triggerControlTypeLabel);
+    DialogControlSetSize(gv_concedeLabel[p], PlayerGroupAll(), 340, 50);
+    DialogControlSetPosition(gv_concedeLabel[p], PlayerGroupAll(), c_anchorTopLeft, 20, 20);
+    gv_concedeYesButton[p] = DialogControlCreate(gv_concedeDialog[p], c_triggerControlTypeButton);
+    DialogControlSetSize(gv_concedeYesButton[p], PlayerGroupAll(), 160, 50);
+    DialogControlSetPosition(gv_concedeYesButton[p], PlayerGroupAll(), c_anchorTopLeft, 20, 80);
+    DialogControlSetPropertyAsText(gv_concedeYesButton[p], c_triggerControlPropertyText, PlayerGroupAll(), MB_Text("Concede"));
+    gv_concedeNoButton[p] = DialogControlCreate(gv_concedeDialog[p], c_triggerControlTypeButton);
+    DialogControlSetSize(gv_concedeNoButton[p], PlayerGroupAll(), 160, 50);
+    DialogControlSetPosition(gv_concedeNoButton[p], PlayerGroupAll(), c_anchorTopLeft, 200, 80);
+    DialogControlSetPropertyAsText(gv_concedeNoButton[p], c_triggerControlPropertyText, PlayerGroupAll(), MB_Text("Keep playing"));
+}
+
+void MB_ConcedeShow (int t, string s) {
+    int p;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) == t && gv_concedeDialog[p] != 0) {
+            DialogControlSetPropertyAsText(gv_concedeLabel[p], c_triggerControlPropertyText, PlayerGroupSingle(p), MB_Text(s));
+        }
+    }
+}
+
+void MB_ConcedeVote (int p, bool yes) {
+    if (!gv_concedeOpen[MB_TeamOf(p)]) {
+        return;
+    }
+    gv_concedeVoted[p] = true;
+    gv_concedeYes[p] = yes;
+    if (gv_concedeDialog[p] != 0) {
+        DialogControlSetEnabled(gv_concedeYesButton[p], PlayerGroupSingle(p), false);
+        DialogControlSetEnabled(gv_concedeNoButton[p], PlayerGroupSingle(p), false);
+    }
+}
+
+void MB_RunConcedeVote (int t) {
+    int needed;
+    int left;
+    int p;
+    bool passed;
+    needed = MB_TeamPlaying(t) / 2 + 1;
+    passed = false;
+    left = MB_CONCEDE_VOTE_SECONDS;
+    while (left > 0 && !gv_ended) {
+        if (MB_ConcedeCount(t, true, true) >= needed) {
+            passed = true;
+            break;
+        }
+        if (MB_TeamPlaying(t) - MB_ConcedeCount(t, true, false) < needed) {
+            break;  // too many said no to pass
+        }
+        MB_ConcedeShow(t, "Concede the game? " + IntToString(MB_ConcedeCount(t, true, true)) + " of " + IntToString(needed) + " needed - " + IntToString(left) + " s");
+        Wait(1.0, c_timeReal);
+        left -= 1;
+    }
+    passed = passed || MB_ConcedeCount(t, true, true) >= needed;
+    gv_concedeOpen[t] = false;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) == t && gv_concedeDialog[p] != 0) {
+            DialogSetVisible(gv_concedeDialog[p], PlayerGroupSingle(p), false);
+        }
+    }
+    if (gv_ended) {
+        return;
+    }
+    if (passed) {
+        MB_Say(PlayerGroupAll(), MB_Text("Team " + IntToString(t) + " conceded."));
+        MB_EndGame(3 - t);
+    }
+    else {
+        MB_Say(GameAttributePlayersForTeam(t), MB_Text("The concede vote failed. Your team can vote again in a minute."));
+        gv_concedeAllowedAt[t] = GameGetMissionTime() + MB_CONCEDE_COOLDOWN_GAME_SECONDS;
+    }
+}
+
+bool MB_ConcedeVoteTeam1 (bool testConds, bool runActions) {
+    MB_RunConcedeVote(1);
+    return true;
+}
+
+bool MB_ConcedeVoteTeam2 (bool testConds, bool runActions) {
+    MB_RunConcedeVote(2);
+    return true;
+}
+
+bool MB_OnChat (bool testConds, bool runActions) {
+    int p;
+    int t;
+    int q;
+    p = EventPlayer();
+    t = MB_TeamOf(p);
+    if (t == 0 || gv_phase != MB_PHASE_BATTLE || gv_ended || !MB_IsGG(EventChatMessage(false))) {
+        return true;
+    }
+    if (gv_concedeOpen[t]) {
+        MB_ConcedeVote(p, true);
+        return true;
+    }
+    if (GameGetMissionTime() < gv_concedeAllowedAt[t]) {
+        return true;
+    }
+    gv_concedeOpen[t] = true;
+    for (q = 1; q <= 8; q += 1) {
+        if (MB_TeamOf(q) == t && MB_IsPlaying(q)) {
+            gv_concedeVoted[q] = false;
+            gv_concedeYes[q] = false;
+            MB_ConcedeDialog(q);
+            DialogControlSetEnabled(gv_concedeYesButton[q], PlayerGroupSingle(q), true);
+            DialogControlSetEnabled(gv_concedeNoButton[q], PlayerGroupSingle(q), true);
+            DialogSetVisible(gv_concedeDialog[q], PlayerGroupSingle(q), true);
+        }
+    }
+    MB_ConcedeVote(p, true);
+    if (t == 1) {
+        TriggerExecute(TriggerCreate("MB_ConcedeVoteTeam1"), false, false);
+    }
+    else {
+        TriggerExecute(TriggerCreate("MB_ConcedeVoteTeam2"), false, false);
+    }
+    return true;
 }
 
 // A Terran left with only lifted-off buildings is warned, then those buildings burn until they
@@ -1802,6 +1999,9 @@ bool MB_WatchBattle (bool testConds, bool runActions) {
     while (true) {
         Wait(1.0, c_timeGame);
         elapsed += 1.0;
+        if (gv_ended) {
+            return true;
+        }
         if (MB_TeamIsOut(1)) {
             MB_EndGame(2);
             return true;
@@ -1903,6 +2103,12 @@ void MB_Init () {
     TriggerAddEventMapInit(t);
     t = TriggerCreate("MB_OnClick");
     TriggerAddEventDialogControl(t, c_playerAny, c_invalidDialogControlId, c_triggerControlEventTypeClick);
+    t = TriggerCreate("MB_OnChat");
+    // Not exact: any message containing gg; MB_IsGG decides. Case-sensitive, as on the old map.
+    TriggerAddEventChatMessage(t, c_playerAny, "gg", false);
+    TriggerAddEventChatMessage(t, c_playerAny, "GG", false);
+    TriggerAddEventChatMessage(t, c_playerAny, "Gg", false);
+    TriggerAddEventChatMessage(t, c_playerAny, "gG", false);
     t = TriggerCreate("MB_OnUnitCreated");
     TriggerAddEventUnitCreated(t, null, null, null);
 }

@@ -457,6 +457,9 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "hydraliskspeed", true);
     }
     else if (lp_name == "Lurker") {
+        // Hydra speed and Lunge for the Hydras it morphs from; not their range (Grooved Spines).
+        TechTreeUpgradeAllow(lp_player, "EvolveMuscularAugments", true);
+        TechTreeUpgradeAllow(lp_player, "Frenzy", true);
         TechTreeUpgradeAllow(lp_player, "DiggingClaws", true);
         TechTreeUpgradeAllow(lp_player, "LurkerRange", true);
         TechTreeUnitAllow(lp_player, "LurkerMP", true);

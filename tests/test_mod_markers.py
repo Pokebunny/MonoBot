@@ -133,7 +133,7 @@ def test_mod_roster_and_markers_match_the_parser():
 
     script = open(os.path.join(SC2MOD, "MonoBattle.galaxy"), encoding="utf8").read()
     defined = set(re.findall(r'<CUpgrade id="MB_(\w+)"', open(os.path.join(SC2MOD, "UpgradeData.xml")).read()))
-    roster = re.findall(r'MB_AddUnit\(\d+, "(\w+)", "[^"]*", "(\w+)"\);', script)
+    roster = re.findall(r'MB_AddUnit\(\d+, "(\w+)", "[^"]*", "(\w+)", "[\w-]+"\);', script)
     races = {"Zerg": "Zerg", "Prot": "Protoss", "Terr": "Terran"}
     assert len(roster) == 42
     for name, race in roster:

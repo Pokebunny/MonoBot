@@ -36,7 +36,10 @@ only the Editor's compiler and a real game can prove them.
      Unassigned units go out at random.
 4. **Battle.** Each player's race is set to their pick's, their pick and its
    upgrades are unlocked, and a melee base spawns at their start location.
-   The clock starts at 0:00.
+   The clock starts at 0:00. The **picks panel** appears in the top-left
+   corner, as on the old map: a portrait per player (team 1 above team 2),
+   their name beneath in their colour, "unit - player" on hover, and a Picks
+   button that collapses it. It's shown to everyone, observers included.
 5. **End.** A team with no structures left, or no players left, loses. Every
    game ends with Victory/Defeat.
 
@@ -49,6 +52,11 @@ clock; balance is live LotV (Void Multi, no balance mod).
 
 Not ported: the stats bank (MonoBot holds the real history), votekick, the
 gg sound, the resource radial menu, the Tab stats screen.
+
+Wishlist (observers): a live pick-phase view for observers (the pick panels
+are per player today, so observers see nothing until the battle), and more
+caster-friendly overlays. Both wait on the observer test below showing how
+custom UI reaches observers.
 
 ## Replay markers
 
@@ -114,6 +122,10 @@ If race switching fails, the fallbacks are in the spec doc.
 Run `MonoBattle.galaxy` on a 4v4 melee map through each mode, then check:
 
 - [ ] Every mode's buttons, timers and info text behave as described above
+- [ ] The picks panel shows every portrait, name and hover text, sits clear of
+      the game's own top-left buttons, and the Picks button collapses it
+- [ ] An observer in the lobby, and a replay of the game, both show the picks
+      panel (it's shown to all, but observers' view of custom UI is unproven)
 - [ ] Only your pick (and its morph chain and upgrades) can be built
 - [ ] Resource trading is refused before 10:00 and works after
 - [ ] Killing a team's last structure ends the game for everyone

@@ -65,6 +65,7 @@ const int MB_BUTTONS = 20;
 string[43] gv_unitName;   // canonical name: marker suffix and MonoBot's name for the unit
 string[43] gv_unitLabel;  // shown to players
 string[43] gv_unitRace;   // "Zerg" | "Prot" | "Terr"
+string[43] gv_unitIcon;   // portrait texture
 
 int gv_mode;
 int gv_phase;
@@ -101,6 +102,13 @@ int[9] gv_dialog;
 int[9] gv_title;
 int[9] gv_info;
 int[9][21] gv_button;
+
+// Picks panel: everyone's unit in the top-left corner during the battle, as on the old map
+int gv_picksDialog;
+int gv_picksToggle;
+int[3][5] gv_picksPortrait;
+int[3][5] gv_picksName;
+bool[17] gv_picksHidden;  // per viewer, observers included
 
 //--------------------------------------------------------------------------------------------------
 // Prototypes
@@ -174,55 +182,56 @@ void MB_BuildTeams () {
 //--------------------------------------------------------------------------------------------------
 // Roster: index ranges by race (Zerg 1-13, Protoss 14-28, Terran 29-42) are relied on above.
 //--------------------------------------------------------------------------------------------------
-void MB_AddUnit (int i, string name, string label, string race) {
+void MB_AddUnit (int i, string name, string label, string race, string icon) {
     gv_unitName[i] = name;
     gv_unitLabel[i] = label;
     gv_unitRace[i] = race;
+    gv_unitIcon[i] = "Assets\\Textures\\btn-unit-" + icon + ".dds";
 }
 
 void MB_SetupRoster () {
-    MB_AddUnit(1, "Zergling", "Zergling", "Zerg");
-    MB_AddUnit(2, "Baneling", "Baneling", "Zerg");
-    MB_AddUnit(3, "Roach", "Roach", "Zerg");
-    MB_AddUnit(4, "Ravager", "Ravager", "Zerg");
-    MB_AddUnit(5, "Hydralisk", "Hydralisk", "Zerg");
-    MB_AddUnit(6, "Lurker", "Lurker", "Zerg");
-    MB_AddUnit(7, "Infestor", "Infestor", "Zerg");
-    MB_AddUnit(8, "SwarmHost", "Swarm Host", "Zerg");
-    MB_AddUnit(9, "Mutalisk", "Mutalisk", "Zerg");
-    MB_AddUnit(10, "Corruptor", "Corruptor", "Zerg");
-    MB_AddUnit(11, "BroodLord", "Brood Lord", "Zerg");
-    MB_AddUnit(12, "Ultralisk", "Ultralisk", "Zerg");
-    MB_AddUnit(13, "Viper", "Viper", "Zerg");
-    MB_AddUnit(14, "Zealot", "Zealot", "Prot");
-    MB_AddUnit(15, "Stalker", "Stalker", "Prot");
-    MB_AddUnit(16, "Sentry", "Sentry", "Prot");
-    MB_AddUnit(17, "Adept", "Adept", "Prot");
-    MB_AddUnit(18, "DarkTemplar", "Dark Templar", "Prot");
-    MB_AddUnit(19, "HighTemplar", "High Templar", "Prot");
-    MB_AddUnit(20, "Archon", "Archon", "Prot");
-    MB_AddUnit(21, "Immortal", "Immortal", "Prot");
-    MB_AddUnit(22, "Colossus", "Colossus", "Prot");
-    MB_AddUnit(23, "Disruptor", "Disruptor", "Prot");
-    MB_AddUnit(24, "Phoenix", "Phoenix", "Prot");
-    MB_AddUnit(25, "Carrier", "Carrier", "Prot");
-    MB_AddUnit(26, "VoidRay", "Void Ray", "Prot");
-    MB_AddUnit(27, "Tempest", "Tempest", "Prot");
-    MB_AddUnit(28, "Oracle", "Oracle", "Prot");
-    MB_AddUnit(29, "Marine", "Marine", "Terr");
-    MB_AddUnit(30, "Reaper", "Reaper", "Terr");
-    MB_AddUnit(31, "Marauder", "Marauder", "Terr");
-    MB_AddUnit(32, "Ghost", "Ghost", "Terr");
-    MB_AddUnit(33, "SiegeTank", "Siege Tank", "Terr");
-    MB_AddUnit(34, "Thor", "Thor", "Terr");
-    MB_AddUnit(35, "Hellion", "Hellion/Hellbat", "Terr");
-    MB_AddUnit(36, "Cyclone", "Cyclone", "Terr");
-    MB_AddUnit(37, "WidowMine", "Widow Mine", "Terr");
-    MB_AddUnit(38, "Banshee", "Banshee", "Terr");
-    MB_AddUnit(39, "Viking", "Viking", "Terr");
-    MB_AddUnit(40, "Liberator", "Liberator", "Terr");
-    MB_AddUnit(41, "Raven", "Raven", "Terr");
-    MB_AddUnit(42, "Battlecruiser", "Battlecruiser", "Terr");
+    MB_AddUnit(1, "Zergling", "Zergling", "Zerg", "zerg-zergling");
+    MB_AddUnit(2, "Baneling", "Baneling", "Zerg", "zerg-baneling");
+    MB_AddUnit(3, "Roach", "Roach", "Zerg", "zerg-roach");
+    MB_AddUnit(4, "Ravager", "Ravager", "Zerg", "zerg-ravager");
+    MB_AddUnit(5, "Hydralisk", "Hydralisk", "Zerg", "zerg-hydralisk");
+    MB_AddUnit(6, "Lurker", "Lurker", "Zerg", "zerg-lurker");
+    MB_AddUnit(7, "Infestor", "Infestor", "Zerg", "zerg-infestor");
+    MB_AddUnit(8, "SwarmHost", "Swarm Host", "Zerg", "zerg-swarmhost");
+    MB_AddUnit(9, "Mutalisk", "Mutalisk", "Zerg", "zerg-mutalisk");
+    MB_AddUnit(10, "Corruptor", "Corruptor", "Zerg", "zerg-corruptor");
+    MB_AddUnit(11, "BroodLord", "Brood Lord", "Zerg", "zerg-broodlord");
+    MB_AddUnit(12, "Ultralisk", "Ultralisk", "Zerg", "zerg-ultralisk");
+    MB_AddUnit(13, "Viper", "Viper", "Zerg", "zerg-viper");
+    MB_AddUnit(14, "Zealot", "Zealot", "Prot", "protoss-zealot");
+    MB_AddUnit(15, "Stalker", "Stalker", "Prot", "protoss-stalker");
+    MB_AddUnit(16, "Sentry", "Sentry", "Prot", "protoss-sentry");
+    MB_AddUnit(17, "Adept", "Adept", "Prot", "protoss-adept");
+    MB_AddUnit(18, "DarkTemplar", "Dark Templar", "Prot", "protoss-darktemplar");
+    MB_AddUnit(19, "HighTemplar", "High Templar", "Prot", "protoss-hightemplar");
+    MB_AddUnit(20, "Archon", "Archon", "Prot", "protoss-archon");
+    MB_AddUnit(21, "Immortal", "Immortal", "Prot", "protoss-immortal");
+    MB_AddUnit(22, "Colossus", "Colossus", "Prot", "protoss-colossus");
+    MB_AddUnit(23, "Disruptor", "Disruptor", "Prot", "protoss-disruptor");
+    MB_AddUnit(24, "Phoenix", "Phoenix", "Prot", "protoss-phoenix");
+    MB_AddUnit(25, "Carrier", "Carrier", "Prot", "protoss-carrier");
+    MB_AddUnit(26, "VoidRay", "Void Ray", "Prot", "protoss-warpray");
+    MB_AddUnit(27, "Tempest", "Tempest", "Prot", "protoss-tempest");
+    MB_AddUnit(28, "Oracle", "Oracle", "Prot", "protoss-oracle");
+    MB_AddUnit(29, "Marine", "Marine", "Terr", "terran-marine");
+    MB_AddUnit(30, "Reaper", "Reaper", "Terr", "terran-reaper");
+    MB_AddUnit(31, "Marauder", "Marauder", "Terr", "terran-marauder");
+    MB_AddUnit(32, "Ghost", "Ghost", "Terr", "terran-ghost");
+    MB_AddUnit(33, "SiegeTank", "Siege Tank", "Terr", "terran-siegetank");
+    MB_AddUnit(34, "Thor", "Thor", "Terr", "terran-thor");
+    MB_AddUnit(35, "Hellion", "Hellion/Hellbat", "Terr", "terran-hellion");
+    MB_AddUnit(36, "Cyclone", "Cyclone", "Terr", "terran-cyclone");
+    MB_AddUnit(37, "WidowMine", "Widow Mine", "Terr", "terran-widowmine");
+    MB_AddUnit(38, "Banshee", "Banshee", "Terr", "terran-banshee");
+    MB_AddUnit(39, "Viking", "Viking", "Terr", "terran-vikingfighter");
+    MB_AddUnit(40, "Liberator", "Liberator", "Terr", "terran-liberator");
+    MB_AddUnit(41, "Raven", "Raven", "Terr", "terran-raven");
+    MB_AddUnit(42, "Battlecruiser", "Battlecruiser", "Terr", "terran-battlecruiser");
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -1514,12 +1523,69 @@ void MB_RefreshInfo () {
 }
 
 //--------------------------------------------------------------------------------------------------
+// Picks panel: a portrait per player in the top-left corner, team 1 above team 2, the player's name
+// beneath in their colour and "unit - player" on hover. Shown to everyone, observers included; the
+// Picks button collapses it for whoever presses it.
+//--------------------------------------------------------------------------------------------------
+void MB_CreatePicksPanel () {
+    int t;
+    int k;
+    int p;
+    int c;
+    gv_picksDialog = DialogCreate(300, 180, c_anchorTopLeft, 0, 45, false);
+    DialogSetImageVisible(gv_picksDialog, false);
+    gv_picksToggle = DialogControlCreate(gv_picksDialog, c_triggerControlTypeButton);
+    DialogControlSetSize(gv_picksToggle, PlayerGroupAll(), 64, 30);
+    DialogControlSetPosition(gv_picksToggle, PlayerGroupAll(), c_anchorTopLeft, 0, 0);
+    DialogControlSetPropertyAsText(gv_picksToggle, c_triggerControlPropertyText, PlayerGroupAll(), MB_Text("Picks"));
+    for (t = 1; t <= 2; t += 1) {
+        for (k = 1; k <= gv_teamSize[t]; k += 1) {
+            p = gv_teamPlayers[t][k];
+            if (gv_pick[p] == 0) {
+                continue;
+            }
+            c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
+            DialogControlSetSize(c, PlayerGroupAll(), 48, 48);
+            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 70 + (k - 1) * 58, 4 + (t - 1) * 74);
+            DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), gv_unitIcon[gv_pick[p]]);
+            DialogControlSetPropertyAsText(c, c_triggerControlPropertyTooltip, PlayerGroupAll(), MB_Text(gv_unitLabel[gv_pick[p]] + " - ") + MB_Name(p));
+            DialogControlSetPropertyAsBool(c, c_triggerControlPropertyAcceptMouseTarget, PlayerGroupAll(), true);
+            gv_picksPortrait[t][k] = c;
+            c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeLabel);
+            DialogControlSetSize(c, PlayerGroupAll(), 56, 20);
+            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 66 + (k - 1) * 58, 52 + (t - 1) * 74);
+            DialogControlSetPropertyAsText(c, c_triggerControlPropertyText, PlayerGroupAll(), TextWithColor(MB_Name(p), ColorFromIndex(PlayerGetColorIndex(p, false), c_teamColorDiffuse)));
+            gv_picksName[t][k] = c;
+        }
+    }
+    DialogSetVisible(gv_picksDialog, PlayerGroupAll(), true);
+}
+
+void MB_TogglePicks (int viewer) {
+    int t;
+    int k;
+    gv_picksHidden[viewer] = !gv_picksHidden[viewer];
+    for (t = 1; t <= 2; t += 1) {
+        for (k = 1; k <= 4; k += 1) {
+            if (gv_picksPortrait[t][k] != 0) {
+                DialogControlSetVisible(gv_picksPortrait[t][k], PlayerGroupSingle(viewer), !gv_picksHidden[viewer]);
+                DialogControlSetVisible(gv_picksName[t][k], PlayerGroupSingle(viewer), !gv_picksHidden[viewer]);
+            }
+        }
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
 // Clicks
 //--------------------------------------------------------------------------------------------------
 bool MB_OnClick (bool testConds, bool runActions) {
     int p;
     int i;
     p = EventPlayer();
+    if (gv_picksToggle != 0 && EventDialogControl() == gv_picksToggle) {
+        MB_TogglePicks(p);
+        return true;
+    }
     if (p < 1 || p > 8) {
         return true;
     }
@@ -1744,6 +1810,7 @@ void MB_StartBattle () {
         MeleeInitResourcesForPlayer(p, race);
         MeleeInitUnitsForPlayer(p, race, PlayerStartLocation(p));
     }
+    MB_CreatePicksPanel();
     // Hatcheries spawn after the pick phase rather than at load, so their creep catches up fast.
     CreepSetSpeed(c_creepSpeedGrowth, 1000.0);
     MB_SetTrading(false);

@@ -387,8 +387,10 @@ def test_next_up_names_the_units_still_missing():
     # Units the map never deals must never be demanded.
     for unreachable in ("Medivac", "Observer", "Overseer", "WarpPrism", "Mothership", "Viper"):
         assert unreachable not in missing["royal_flush"]
+    # Queen and Viper share a slot, named as one.
+    assert "Queen/Viper" in missing["royal_flush"] and "Queen" not in missing["royal_flush"]
     # Race-scoped badges list only that race's units.
-    assert all(UNIT_RACE[u] == "Zerg" for u in missing["zoo_keeper"])
+    assert all(UNIT_RACE[u.split("/")[0]] == "Zerg" for u in missing["zoo_keeper"])
     # A pure counter has nothing to name.
     assert missing["regular"] == []
 
@@ -403,6 +405,19 @@ def test_next_up_can_guarantee_an_answerable_entry():
     ensured = book.next_up("A1", limit=3, ensure_detail=True)
     assert len(ensured) == 4
     assert ensured[-1][3], "the appended entry must be one that names what's left"
+
+
+def test_viper_fills_the_queen_slot():
+    """The mod swapped Queen for Viper: either one completes that slot, so
+    every roster badge stays reachable from games on either map."""
+    players = [_player("A1", 1, pick="Viper")] + [_player(f"A{i}", 1) for i in range(2, 5)]
+    players += [_player("B1", 2, pick="Queen")] + [_player(f"B{i}", 2) for i in range(2, 5)]
+    book = _book([_match(players=players)])
+    missing = {spec.key: names for spec, _, _, names in book.next_up("A1", limit=50)}
+    assert "Queen/Viper" not in missing["royal_flush"]  # won with Viper
+    assert len(missing["royal_flush"]) == 41
+    assert "Queen/Viper" not in missing["exterminator"]  # beat a Queen
+    assert len(missing["exterminator"]) == 40  # beat Queen and Zergling
 
 
 def test_pick_pool_matches_the_roster_achievements_promise():

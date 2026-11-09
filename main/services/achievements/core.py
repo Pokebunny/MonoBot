@@ -248,10 +248,11 @@ class Tally:
             self.loss_streak += 1
 
         if player.pick:
-            self.units_played.add(player.pick)
+            slot = collection_slot(player.pick)
+            self.units_played.add(slot)
             if won:
-                self.units_won.add(player.pick)
-                self.units_won_by_race.setdefault(player.race, set()).add(player.pick)
+                self.units_won.add(slot)
+                self.units_won_by_race.setdefault(player.race, set()).add(slot)
                 n = self._unit_win_counts.get(player.pick, 0) + 1
                 self._unit_win_counts[player.pick] = n
                 self.best_unit_wins = max(self.best_unit_wins, n)
@@ -265,7 +266,7 @@ class Tally:
             self.races_won.add(player.race)
             if ctx.map_name:  # games whose terrain isn't resolved simply don't count
                 self.maps_won.add(ctx.map_name)
-            self.units_beaten.update(q.pick for q in match.players if q.team != player.team and q.pick)
+            self.units_beaten.update(collection_slot(q.pick) for q in match.players if q.team != player.team and q.pick)
             team = match.team(player.team)
             if len(team) >= 3:
                 team_races = {q.race for q in team}
@@ -444,13 +445,28 @@ def _career_len(attr: str, target: int) -> tuple[Callable, Callable]:
     )
 
 
+# The MonoBattle mod (sc2mod/) swapped Queen out of the pick pool for Viper. For
+# the unit-collection badges the two are one slot, so "all 42" stays reachable
+# from games on either map.
+_COLLECTION_SLOTS = {"Viper": "Queen"}
+_SLOT_LABELS = {"Queen": "Queen/Viper"}
+
+
+def collection_slot(unit: str) -> str:
+    return _COLLECTION_SLOTS.get(unit, unit)
+
+
+def _slot_labels(units) -> list[str]:
+    return sorted(_SLOT_LABELS.get(u, u) for u in units)
+
+
 def _career_set(attr: str, universe, target: int) -> tuple[Callable, Callable, Callable]:
     """_career_len that also names what's missing. `target` may be below
     len(universe) (a 25-of-42 rung)."""
     return (
         lambda h: len(getattr(h.career, attr)) >= target,
         lambda h: (len(getattr(h.career, attr)), target),
-        lambda h: sorted(set(universe) - getattr(h.career, attr)),
+        lambda h: _slot_labels(set(universe) - getattr(h.career, attr)),
     )
 
 
@@ -472,5 +488,5 @@ def _race_wins(race: str, target: int) -> tuple[Callable, Callable, Callable]:
     return (
         lambda h: len(h.career.units_won_by_race.get(race, set())) >= target,
         lambda h: (len(h.career.units_won_by_race.get(race, set())), target),
-        lambda h: sorted(roster - h.career.units_won_by_race.get(race, set())),
+        lambda h: _slot_labels(roster - h.career.units_won_by_race.get(race, set())),
     )

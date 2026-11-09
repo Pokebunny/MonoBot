@@ -1788,7 +1788,7 @@ void MB_EndGame (int winner) {
 
 //--------------------------------------------------------------------------------------------------
 // Concede vote: "gg" in chat during the battle opens a vote for the typer's team (their gg is a
-// yes). More than half of the team's remaining players saying yes ends the game at once, so every
+// yes). Every one of the team's remaining players saying yes ends the game at once, so every
 // player still in gets Victory/Defeat in their replay instead of a recording that stops when they
 // leave. A failed vote locks the team out for a minute.
 //--------------------------------------------------------------------------------------------------
@@ -1872,22 +1872,23 @@ void MB_RunConcedeVote (int t) {
     int left;
     int p;
     bool passed;
-    needed = MB_TeamPlaying(t) / 2 + 1;
     passed = false;
     left = MB_CONCEDE_VOTE_SECONDS;
     while (left > 0 && !gv_ended) {
+        // Unanimous among whoever is still in: anyone leaving mid-vote lowers the bar.
+        needed = MB_TeamPlaying(t);
         if (MB_ConcedeCount(t, true, true) >= needed) {
             passed = true;
             break;
         }
-        if (MB_TeamPlaying(t) - MB_ConcedeCount(t, true, false) < needed) {
-            break;  // too many said no to pass
+        if (MB_ConcedeCount(t, true, false) > 0) {
+            break;  // one no ends it
         }
         MB_ConcedeShow(t, "Concede the game? " + IntToString(MB_ConcedeCount(t, true, true)) + " of " + IntToString(needed) + " needed - " + IntToString(left) + " s");
         Wait(1.0, c_timeReal);
         left -= 1;
     }
-    passed = passed || MB_ConcedeCount(t, true, true) >= needed;
+    passed = passed || MB_ConcedeCount(t, true, true) >= MB_TeamPlaying(t);
     gv_concedeOpen[t] = false;
     for (p = 1; p <= 8; p += 1) {
         if (MB_TeamOf(p) == t && gv_concedeDialog[p] != 0) {

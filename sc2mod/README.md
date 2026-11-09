@@ -42,8 +42,9 @@ only the Editor's compiler and a real game can prove them.
    button that collapses it. It's shown to everyone, observers included.
 5. **End.** A team with no structures left, or no players left, loses. Every
    game ends with Victory/Defeat. Typing **gg** opens a **concede vote** for
-   your team (your gg counts as yes; 20 s); when more than half of the team's
-   remaining players agree, the game ends for everyone at once. That's what
+   your team (your gg counts as yes; 20 s); when every remaining player on the
+   team agrees, the game ends for everyone at once. One "Keep playing" ends
+   the vote. That's what
    gets the result into every replay: a replay only records Victory/Defeat if
    its recorder is still in the game when it ends. A failed vote locks the
    team out for a minute.
@@ -136,7 +137,7 @@ Run `MonoBattle.galaxy` on a 4v4 melee map through each mode, then check:
 - [ ] Only your pick (and its morph chain and upgrades) can be built
 - [ ] Resource trading is refused before 10:00 and works after
 - [ ] Killing a team's last structure ends the game for everyone
-- [ ] gg opens the concede vote for your team only; a majority ends the game,
+- [ ] gg opens the concede vote for your team only; all yes ends the game,
       a failed vote can't be restarted for a minute, and every player's replay
       shows the result
 - [ ] The `MB_*` upgrades don't show anywhere in the UI or score screen

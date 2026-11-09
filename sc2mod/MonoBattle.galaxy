@@ -237,7 +237,8 @@ void MB_SetupRoster () {
 //--------------------------------------------------------------------------------------------------
 // Tech: everything army-related off, then the pick's unit, morph chain and own upgrades back on.
 // Ported from the old arcade map. Queens stay buildable by every Zerg with no cap; Ravens stay
-// buildable by every Terran but can't use abilities unless picked; Medivacs are transport only.
+// buildable by every Terran but can't use abilities unless picked; Medivacs can boost but
+// never heal (Rapid Reignition stays off).
 //--------------------------------------------------------------------------------------------------
 void MB_DisallowEverything (int lp_player) {
     TechTreeUnitAllow(lp_player, "Marine", false);
@@ -377,7 +378,6 @@ void MB_DisallowEverything (int lp_player) {
     TechTreeUpgradeAllow(lp_player, "zerglingmovementspeed", false);
     TechTreeUpgradeAllow(lp_player, "ObverseIncubation", false);
     TechTreeAbilityAllow(lp_player, AbilityCommand("MedivacHeal", 0), false);
-    TechTreeAbilityAllow(lp_player, AbilityCommand("MedivacSpeedBoost", 0), false);
     TechTreeAbilityAllow(lp_player, AbilityCommand("ArmSiloWithNuke", 0), false);
     TechTreeAbilityAllow(lp_player, AbilityCommand("ArchonWarp", 0), false);
     TechTreeAbilityAllow(lp_player, AbilityCommand("ArchonWarp", 1), false);

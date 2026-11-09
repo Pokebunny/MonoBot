@@ -44,10 +44,11 @@ only the Editor's compiler and a real game can prove them.
    game ends with Victory/Defeat.
 
 Unit rules are the old map's: only the pick's own upgrades, morph precursors
-can't attack (e.g. a Baneling player's Zerglings), Medivacs are transport
-only, Ravens are shared but can't use abilities unless picked. Changes from
+can't attack (e.g. a Baneling player's Zerglings), Medivacs never heal,
+Ravens are shared but can't use abilities unless picked. Changes from
 the old map: **Viper** is pickable and **Queen** isn't; Queens are shared and
-uncapped; Tier Draft is gone; **no resource trading until 10:00** on the
+uncapped; Medivacs get Afterburners (Rapid Reignition stays off); Tier Draft
+is gone; **no resource trading until 10:00** on the
 clock; balance is live LotV (Void Multi, no balance mod).
 
 Not ported: the stats bank (MonoBot holds the real history), votekick, the

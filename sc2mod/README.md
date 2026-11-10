@@ -8,6 +8,7 @@ replay. The design and the reasons behind it are in the map spec doc.
 | File | What it is |
 | --- | --- |
 | `MonoBattle.galaxy` | The whole mod: vote, four pick modes, unit rules, battle start, ending, trade lock |
+| `Attributes`, `GameStrings.txt` | The one lobby setting, **Pick mode** (host only): Vote in game (default), or a fixed mode |
 | `UpgradeData.xml` | The replay markers (135 no-effect upgrades), generated from the script's roster |
 | `RaceSwapTest.galaxy` | A throwaway test mod for the one thing no existing mod proved: switching race mid-game |
 | `lint_galaxy.py` | Static checks for the scripts (calls, argument counts, constants, Galaxy's locals-first rule) |
@@ -20,8 +21,10 @@ only the Editor's compiler and a real game can prove them.
 1. **Load.** The map's own melee setup runs, then the mod pauses the game
    clock, removes every player's starting units, turns off melee
    victory/defeat and locks all army tech.
-2. **Vote** (14 s): Blind Random, Single Draft, Pick Three or Captains Draft.
-   Most votes wins; ties are random.
+2. **Mode.** The host's **Pick mode** lobby setting decides. On *Vote in
+   game* (the default), everyone votes for 14 s: Blind Random, Single Draft,
+   Pick Three or Captains Draft; most votes wins, ties are random. Any other
+   setting skips the vote and plays that mode.
 3. **Pick phase**, in the chosen mode:
    - *Blind Random* (30 s): pick a race button. Random gives one repick, always
      a different unit. Allies see each other's units; enemies don't.
@@ -101,9 +104,17 @@ Menu names below are from memory of the SC2 Editor and may differ slightly.
    `<mod>.SC2Mod/Base.SC2Data/GameData/UpgradeData.xml`. If the Editor doesn't
    list the `MB_*` upgrades when reopened, create any upgrade in the Data
    module, save, and replace the file again.
-4. **Compile.** Save. Fix anything the Editor reports and tell MonoBot's
+4. **Lobby setting.** With the mod still saved as a folder, copy `Attributes`
+   to `<mod>.SC2Mod/Attributes`, add the lines of `GameStrings.txt` to
+   `<mod>.SC2Mod/enUS.SC2Data/LocalizedData/GameStrings.txt`, and make sure
+   `<mod>.SC2Mod/ComponentList.SC2Components` lists
+   `<DataComponent Type="attr">Attributes</DataComponent>` and the enUS
+   `text` component. If the Editor rejects the file, recreate the setting in
+   its lobby settings screen (Map/Mod → Game Variants / Attributes): one
+   host-only global setting, id 1, values 1–5 in the order above, default 1.
+5. **Compile.** Save. Fix anything the Editor reports and tell MonoBot's
    maintainers (or paste the errors back to Claude).
-5. **Test** on a 4v4 melee map (set one as the map used for testing mods in
+6. **Test** on a 4v4 melee map (set one as the map used for testing mods in
    the Editor's preferences), then publish as an extension mod.
 
 ## Test 1: race swap (do this first)
@@ -129,6 +140,8 @@ If race switching fails, the fallbacks are in the spec doc.
 
 Run `MonoBattle.galaxy` on a 4v4 melee map through each mode, then check:
 
+- [ ] The lobby shows a host-only Pick mode setting; Vote in game runs the
+      vote, and each fixed mode skips it and announces "set by the host"
 - [ ] Every mode's buttons, timers and info text behave as described above
 - [ ] The picks panel shows every portrait, name and hover text, sits clear of
       the game's own top-left buttons, and the Picks button collapses it

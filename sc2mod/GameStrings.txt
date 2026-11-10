@@ -1,0 +1,8 @@
+Attribute001/Name=Pick mode
+Attribute001/Desc=How units are picked. Vote lets the players choose in game.
+Attribute001/Value001/Name=Vote in game
+Attribute001/Value001/Desc=Everyone votes on the mode when the game starts
+Attribute001/Value002/Name=Blind Random
+Attribute001/Value003/Name=Single Draft
+Attribute001/Value004/Name=Pick Three
+Attribute001/Value005/Name=Captains Draft

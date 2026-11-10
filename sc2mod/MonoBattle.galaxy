@@ -1012,6 +1012,25 @@ int MB_VoteResult () {
     return tied[RandomInt(1, n)];
 }
 
+// The host's "Pick mode" lobby setting (Attributes, id 1): 0 = vote in game.
+int MB_LobbyMode () {
+    string value;
+    value = GameAttributeGameValue("1");
+    if (value == "0002") {
+        return MB_MODE_BLIND;
+    }
+    if (value == "0003") {
+        return MB_MODE_SINGLE;
+    }
+    if (value == "0004") {
+        return MB_MODE_PICK_THREE;
+    }
+    if (value == "0005") {
+        return MB_MODE_CAPTAINS;
+    }
+    return 0;
+}
+
 void MB_RunVote () {
     int left;
     gv_phase = MB_PHASE_VOTE;
@@ -2081,7 +2100,14 @@ bool MB_Main (bool testConds, bool runActions) {
             MB_CreatePanel(p);
         }
     }
-    MB_RunVote();
+    gv_mode = MB_LobbyMode();
+    if (gv_mode == 0) {
+        MB_RunVote();
+    }
+    else {
+        MB_MarkerAll(MB_ModeMarker(gv_mode));
+        MB_Say(PlayerGroupAll(), MB_Text(MB_ModeName(gv_mode) + ", set by the host."));
+    }
     if (gv_mode == MB_MODE_BLIND) {
         MB_RunBlind();
     }

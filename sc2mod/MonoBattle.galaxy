@@ -77,7 +77,6 @@ int gv_phase;
 int[9] gv_pick;           // roster index, 0 = none yet
 bool[9] gv_locked;
 int[9] gv_rolls;          // Blind Random rolls taken
-int[9] gv_raceChoice;     // Blind Random: 1 Random, 2 Terran, 3 Zerg, 4 Protoss
 int[9][4] gv_offer;       // Pick Three offers, [player][1..3]
 int[9] gv_vote;
 
@@ -99,7 +98,7 @@ int[3] gv_teamUnitCount;
 int[3][5] gv_assignee;    // [team][unit slot] -> player
 int[3] gv_selectedSlot;   // captain's unit slot waiting for a player
 
-int[9] gv_floatSeconds;
+int[9] gv_floatSeconds;   // consecutive seconds a Terran has had only lifted-off buildings
 
 bool gv_ended;
 bool[3] gv_concedeOpen;
@@ -109,7 +108,7 @@ bool[9] gv_concedeYes;
 int[9] gv_concedeDialog;
 int[9] gv_concedeLabel;
 int[9] gv_concedeYesButton;
-int[9] gv_concedeNoButton;   // consecutive seconds a Terran has had only lifted-off buildings
+int[9] gv_concedeNoButton;
 
 // Observer panel: the whole pick phase, live, for everyone not on a team
 playergroup gv_observers;
@@ -1104,7 +1103,6 @@ void MB_BlindClick (int p, int i) {
         return;
     }
     if (gv_rolls[p] == 0) {
-        gv_raceChoice[p] = i;
         MB_Roll(p, i);
         gv_locked[p] = (i != 1);
     }
@@ -1267,7 +1265,7 @@ int MB_RandomFreeSlot () {
 }
 
 // Turn order A-B-B-A-A-B-B-A by team, players shuffled within each team; the first team is random.
-// `slots` turns per team (4 for Single Draft's one each; Captains Draft repeats its captain).
+// One turn per player; in Captains Draft every one of a team's turns is its captain's.
 void MB_BuildOrder (bool captainsOnly) {
     int first;
     int[9] pattern;
@@ -1374,21 +1372,35 @@ void MB_RunSingle () {
 // Captains Draft: volunteers become captains; captains draft their team's units from the shared
 // pool in snake order, then hand them out to their players.
 //--------------------------------------------------------------------------------------------------
+// A random volunteer still in the game, else a random player still in, else anyone on the team
+// (a captain who has left would leave the whole team's draft to chance).
 void MB_ChooseCaptains () {
     int t;
     int k;
+    int p;
     int n;
+    int m;
     int[5] volunteers;
+    int[5] present;
     for (t = 1; t <= 2; t += 1) {
         n = 0;
+        m = 0;
         for (k = 1; k <= gv_teamSize[t]; k += 1) {
-            if (gv_optIn[gv_teamPlayers[t][k]]) {
-                n += 1;
-                volunteers[n] = gv_teamPlayers[t][k];
+            p = gv_teamPlayers[t][k];
+            if (MB_IsPlaying(p)) {
+                m += 1;
+                present[m] = p;
+                if (gv_optIn[p]) {
+                    n += 1;
+                    volunteers[n] = p;
+                }
             }
         }
         if (n > 0) {
             gv_captain[t] = volunteers[RandomInt(1, n)];
+        }
+        else if (m > 0) {
+            gv_captain[t] = present[RandomInt(1, m)];
         }
         else if (gv_teamSize[t] > 0) {
             gv_captain[t] = gv_teamPlayers[t][RandomInt(1, gv_teamSize[t])];

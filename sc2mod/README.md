@@ -153,6 +153,8 @@ Run `MonoBattle.galaxy` on a 4v4 melee map through each mode, then check:
 - [ ] An observer sees the observer panel through the whole pick phase, in
       every mode, and players don't; note what a replay viewer sees
 - [ ] Only your pick (and its morph chain and upgrades) can be built
+- [ ] Morph precursors can't attack (e.g. a Baneling player's Zerglings): ported
+      as-is from the old map, it relies on the unit-created event for trained units
 - [ ] Resource trading is refused before 10:00 and works after
 - [ ] Killing a team's last structure ends the game for everyone
 - [ ] gg opens the concede vote for your team only; all yes ends the game,

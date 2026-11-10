@@ -111,6 +111,13 @@ int[9] gv_concedeLabel;
 int[9] gv_concedeYesButton;
 int[9] gv_concedeNoButton;   // consecutive seconds a Terran has had only lifted-off buildings
 
+// Observer panel: the whole pick phase, live, for everyone not on a team
+playergroup gv_observers;
+int gv_obsDialog;
+int gv_obsTitle;
+int gv_obsInfo;
+int[9] gv_firstRoll;      // Blind Random: the unit a repick replaced
+
 // Per-player pick panel
 int[9] gv_dialog;
 int[9] gv_title;
@@ -129,6 +136,7 @@ bool[17] gv_picksHidden;  // per viewer, observers included
 //--------------------------------------------------------------------------------------------------
 void MB_StartBattle ();
 void MB_RefreshInfo ();
+void MB_ObserverTitle (text t);
 void MB_ConcedeVote (int p, bool yes);
 
 //--------------------------------------------------------------------------------------------------
@@ -884,6 +892,7 @@ void MB_TitleAll (text t) {
             MB_SetTitle(p, t);
         }
     }
+    MB_ObserverTitle(t);
 }
 
 int MB_ButtonIndex (int p, int control) {
@@ -1035,6 +1044,7 @@ void MB_RunVote () {
     int left;
     gv_phase = MB_PHASE_VOTE;
     MB_ShowVotes();
+    MB_RefreshInfo();
     left = MB_VOTE_SECONDS;
     while (left > 0 && !MB_AllVoted()) {
         MB_TitleAll(MB_Text("Vote for a mode - " + IntToString(left) + " s"));
@@ -1066,6 +1076,9 @@ void MB_Roll (int p, int raceChoice) {
         else {
             u = RandomInt(1, MB_UNITS);
         }
+    }
+    if (gv_rolls[p] == 0) {
+        gv_firstRoll[p] = u;
     }
     gv_pick[p] = u;
     gv_rolls[p] += 1;
@@ -1486,6 +1499,7 @@ void MB_RunCaptains () {
             MB_SetButton(p, 1, "I'll captain", true);
         }
     }
+    MB_RefreshInfo();
     left = MB_OPT_IN_SECONDS;
     while (left > 0) {
         MB_TitleAll(MB_Text("Captains Draft - volunteer to captain - " + IntToString(left) + " s"));
@@ -1570,6 +1584,111 @@ text MB_SingleLines () {
     return s;
 }
 
+//--------------------------------------------------------------------------------------------------
+// Observer panel: everyone in the game who isn't on a team (observers, and whoever else holds a
+// slot without a team) sees the whole pick phase as it happens, both teams, nothing hidden. It
+// closes at battle start, where the picks panel takes over.
+//--------------------------------------------------------------------------------------------------
+void MB_CreateObserverPanel () {
+    int p;
+    gv_observers = PlayerGroupEmpty();
+    for (p = 1; p <= 15; p += 1) {
+        if (MB_TeamOf(p) == 0 && MB_IsPlaying(p)) {
+            PlayerGroupAdd(gv_observers, p);
+        }
+    }
+    if (PlayerGroupCount(gv_observers) == 0) {
+        return;
+    }
+    gv_obsDialog = DialogCreate(560, 460, c_anchorTopRight, 10, 60, false);
+    gv_obsTitle = DialogControlCreate(gv_obsDialog, c_triggerControlTypeLabel);
+    DialogControlSetSize(gv_obsTitle, PlayerGroupAll(), 520, 36);
+    DialogControlSetPosition(gv_obsTitle, PlayerGroupAll(), c_anchorTopLeft, 20, 20);
+    gv_obsInfo = DialogControlCreate(gv_obsDialog, c_triggerControlTypeLabel);
+    DialogControlSetSize(gv_obsInfo, PlayerGroupAll(), 520, 390);
+    DialogControlSetPosition(gv_obsInfo, PlayerGroupAll(), c_anchorTopLeft, 20, 60);
+    DialogSetVisible(gv_obsDialog, gv_observers, true);
+}
+
+void MB_ObserverTitle (text t) {
+    if (gv_obsDialog != 0) {
+        DialogControlSetPropertyAsText(gv_obsTitle, c_triggerControlPropertyText, gv_observers, t);
+    }
+}
+
+// One player's state in the vote, Blind Random, Pick Three or the captain opt-in.
+text MB_ObserverLine (int p) {
+    string s;
+    s = ": ";
+    if (gv_phase == MB_PHASE_VOTE) {
+        if (gv_vote[p] != 0) {
+            s = s + "votes " + MB_ModeName(gv_vote[p]);
+        }
+        else {
+            s = s + "-";
+        }
+    }
+    else if (gv_phase == MB_PHASE_BLIND) {
+        if (gv_rolls[p] == 0) {
+            s = s + "choosing a race";
+        }
+        else if (gv_rolls[p] > 1) {
+            s = s + gv_unitLabel[gv_firstRoll[p]] + " -> " + gv_unitLabel[gv_pick[p]] + " (repick)";
+        }
+        else {
+            s = s + gv_unitLabel[gv_pick[p]];
+            if (!gv_locked[p]) {
+                s = s + " (may repick)";
+            }
+        }
+    }
+    else if (gv_phase == MB_PHASE_PICK_THREE && gv_offer[p][1] != 0) {
+        s = s + gv_unitLabel[gv_offer[p][1]] + " / " + gv_unitLabel[gv_offer[p][2]] + " / " + gv_unitLabel[gv_offer[p][3]];
+        if (gv_pick[p] != 0) {
+            s = s + " -> " + gv_unitLabel[gv_pick[p]];
+        }
+    }
+    else if (gv_phase == MB_PHASE_OPT_IN) {
+        if (gv_optIn[p]) {
+            s = s + "volunteered";
+        }
+        else {
+            s = s + "-";
+        }
+    }
+    return MB_Name(p) + MB_Text(s + "<n/>");
+}
+
+void MB_RefreshObserver () {
+    text s;
+    int t;
+    int k;
+    if (gv_obsDialog == 0) {
+        return;
+    }
+    s = MB_Text("");
+    if (gv_phase == MB_PHASE_SINGLE) {
+        s = MB_SingleLines();
+    }
+    else if (gv_phase == MB_PHASE_CAPTAIN_DRAFT) {
+        s = MB_Text("Captains: ") + MB_Name(gv_captain[1]) + MB_Text(" / ") + MB_Name(gv_captain[2]) + MB_Text("<n/>") + MB_DraftLines();
+    }
+    else if (gv_phase == MB_PHASE_ASSIGN) {
+        for (t = 1; t <= 2; t += 1) {
+            s = s + MB_Text("Team " + IntToString(t) + "<n/>") + MB_AssignLines(t);
+        }
+    }
+    else {
+        for (t = 1; t <= 2; t += 1) {
+            s = s + MB_Text("Team " + IntToString(t) + "<n/>");
+            for (k = 1; k <= gv_teamSize[t]; k += 1) {
+                s = s + MB_ObserverLine(gv_teamPlayers[t][k]);
+            }
+        }
+    }
+    DialogControlSetPropertyAsText(gv_obsInfo, c_triggerControlPropertyText, gv_observers, s);
+}
+
 void MB_RefreshInfo () {
     int p;
     int t;
@@ -1591,6 +1710,7 @@ void MB_RefreshInfo () {
             MB_SetInfo(p, MB_Text("Your team's units:<n/>") + MB_AssignLines(t));
         }
     }
+    MB_RefreshObserver();
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -1677,6 +1797,7 @@ bool MB_OnClick (bool testConds, bool runActions) {
     if (gv_phase == MB_PHASE_VOTE && i <= 4) {
         gv_vote[p] = i;
         MB_ShowVotes();
+        MB_RefreshInfo();
     }
     else if (gv_phase == MB_PHASE_BLIND) {
         MB_BlindClick(p, i);
@@ -1691,6 +1812,7 @@ bool MB_OnClick (bool testConds, bool runActions) {
     else if (gv_phase == MB_PHASE_OPT_IN && i == 1) {
         gv_optIn[p] = true;
         MB_SetButton(p, 1, "You volunteered", false);
+        MB_RefreshInfo();
     }
     else if (gv_phase == MB_PHASE_ASSIGN) {
         MB_AssignClick(p, i);
@@ -2050,6 +2172,9 @@ void MB_StartBattle () {
             DialogDestroy(gv_dialog[p]);
         }
     }
+    if (gv_obsDialog != 0) {
+        DialogDestroy(gv_obsDialog);
+    }
     gv_phase = MB_PHASE_BATTLE;
     for (p = 1; p <= 8; p += 1) {
         u = gv_pick[p];
@@ -2100,6 +2225,7 @@ bool MB_Main (bool testConds, bool runActions) {
             MB_CreatePanel(p);
         }
     }
+    MB_CreateObserverPanel();
     gv_mode = MB_LobbyMode();
     if (gv_mode == 0) {
         MB_RunVote();

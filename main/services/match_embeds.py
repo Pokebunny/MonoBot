@@ -235,11 +235,8 @@ def leaderboard(
     lines = []
     for i, r in enumerate(ratings[start : start + BOARD_PAGE_SIZE], start + 1):
         shown = display_names.get(r.handle, r.name)
-        record = f"{r.wins}-{r.losses}, {100 * r.wins / r.games:.0f}%"
-        if raw:
-            lines.append(f"`{i:>2}` **{shown}** — **{r.raw_rating}** ({record} · rated {r.display_rating})")
-        else:
-            lines.append(f"`{i:>2}` **{shown}** — **{r.display_rating}** ({record})")
+        rating = r.raw_rating if raw else r.display_rating
+        lines.append(f"`{i:>2}` **{shown}** — **{rating}** ({r.wins}-{r.losses}, {100 * r.wins / r.games:.0f}%)")
     subject = pick or race
     title = f"{subject} Leaderboard" if subject else "Monobattle Leaderboard"
     mode_label = _PICK_MODE_LABELS.get(mode, mode) if mode else None

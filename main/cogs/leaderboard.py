@@ -52,6 +52,7 @@ _UNIT_RAW_WORDS = {"raw", "winrate", "wins", "rate", "record"}
 
 # Words that turn !leaderboard into the count of unit-board #1s.
 _KING_WORDS = {"kings", "king", "crowns", "crown"}
+_MMR_WORDS = {"mmr", "raw"}
 
 # Words that turn !leaderboard into one race's board.
 _RACES = {
@@ -319,7 +320,8 @@ class Leaderboard(CommunityCog):
         help="show the rating leaderboard — add a race (!leaderboard zerg), a unit (!leaderboard marine), "
         "a pick mode (br / blind random, sd / single draft), "
         "'kings' for who tops the most unit boards, "
-        "a season (s1) or seasons rated as one (s2+s3), 'career' for all-time, or 'units' to rate unit picks (all-time, or !leaderboard units s3)",
+        "a season (s1) or seasons rated as one (s2+s3), 'career' for all-time, "
+        "'mmr' for raw matchmaking rating with no confidence penalty, or 'units' to rate unit picks (all-time, or !leaderboard units s3)",
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def leaderboard(self, ctx, *, query: str = ""):
@@ -330,6 +332,8 @@ class Leaderboard(CommunityCog):
         if any(token.lower() in _UNIT_WORDS for token in query.split()):
             await self._unit_board(ctx, query)
             return
+        raw = any(token.lower() in _MMR_WORDS for token in query.split())
+        query = " ".join(t for t in query.split() if t.lower() not in _MMR_WORDS)
         mode, query = _find_mode(query)
         pick, query = _find_pick(query, self.store.picks() | set(RUSH_BOARDS))
         min_games, race, season_query = self._parse_board_query(query)
@@ -358,6 +362,8 @@ class Leaderboard(CommunityCog):
         else:
             book = self._book_for(season, career, by_race=race is not None, mode=mode)
             everyone = book.leaderboard(min_games=1, race=race)
+        if raw:
+            everyone = sorted(everyone, key=lambda r: r.mu, reverse=True)
         board = [r for r in everyone if r.games >= min_games]
         hidden = len(everyone) - len(board)
         names = {r.handle: self._shown_name(ctx, r.handle, r.name) for r in board}
@@ -366,7 +372,7 @@ class Leaderboard(CommunityCog):
         final = season is not None and season.ended_at is not None
         view = PagedBoardView(
             lambda page: match_embeds.leaderboard(
-                board, page, min_games, names, hidden, label, final, race, pick, mode
+                board, page, min_games, names, hidden, label, final, race, pick, mode, raw
             ),
             match_embeds.page_count(board),
         )

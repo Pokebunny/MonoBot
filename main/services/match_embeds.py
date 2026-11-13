@@ -223,10 +223,11 @@ def leaderboard(
     race: str | None = None,
     pick: str | None = None,
     mode: str | None = None,
+    raw: bool = False,
 ) -> discord.Embed:
     """display_names: handle -> Discord name (else the SC2 name). `season` is
     shown so a reset ladder never looks like lost history; `race`, `pick` and
-    `mode` title the narrower boards."""
+    `mode` title the narrower boards. `raw` shows raw_rating (the caller sorts)."""
     display_names = display_names or {}
     pages = page_count(ratings)
     page = max(0, min(page, pages - 1))
@@ -234,14 +235,18 @@ def leaderboard(
     lines = []
     for i, r in enumerate(ratings[start : start + BOARD_PAGE_SIZE], start + 1):
         shown = display_names.get(r.handle, r.name)
-        lines.append(
-            f"`{i:>2}` **{shown}** — **{r.display_rating}** ({r.wins}-{r.losses}, {100 * r.wins / r.games:.0f}%)"
-        )
+        record = f"{r.wins}-{r.losses}, {100 * r.wins / r.games:.0f}%"
+        if raw:
+            lines.append(f"`{i:>2}` **{shown}** — **{r.raw_rating}** ({record} · rated {r.display_rating})")
+        else:
+            lines.append(f"`{i:>2}` **{shown}** — **{r.display_rating}** ({record})")
     subject = pick or race
     title = f"{subject} Leaderboard" if subject else "Monobattle Leaderboard"
     mode_label = _PICK_MODE_LABELS.get(mode, mode) if mode else None
     if mode_label:
         title += f" ({mode_label})"
+    if raw:
+        title += " (Raw MMR)"
     if season is not None:
         title += f" — {season}"
     embed = discord.Embed(title=title, color=ACCENT)
@@ -255,13 +260,15 @@ def leaderboard(
     embed.description = "\n".join(lines) or empty
     note = f"min {min_games} games · " if min_games > 1 else ""
     words = [w for w in (subject and subject.lower(), _MODE_WORDS.get(mode)) if w]
-    show_all = " ".join(["!leaderboard", *words, "1"])
+    show_all = " ".join(["!leaderboard", *(["mmr"] if raw else []), *words, "1"])
     more = f" · {hidden} more below the minimum ({show_all} shows all)" if hidden else ""
     closed = "Final standings · " if final else ""
     games = RUSH_GAMES.get(pick, f"Games on {pick} only")
     how = f"\n{games}, against everyone else's overall rating" if pick else ""
     if mode_label:
         how += f"\n{mode_label} games only"
+    if raw:
+        how += "\nBest estimate of skill, without the deduction for uncertainty — new players can sit high on few games"
     embed.set_footer(text=f"{closed}{note}Page {page + 1}/{pages}{more}{how}")
     return embed
 

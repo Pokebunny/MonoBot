@@ -63,7 +63,7 @@ class LinkResult(NamedTuple):
 
 
 class Season(NamedTuple):
-    id: int
+    id: int | None  # None for a span of seasons (find_season "s2+s3")
     name: str
     started_at: str  # ISO, inclusive
     ended_at: str | None  # ISO, exclusive; None = still running
@@ -1318,11 +1318,28 @@ class MatchStore:
         return self.all_matches(since=season.started_at, until=season.ended_at)
 
     def find_season(self, query: str) -> Season | None:
-        """ "Season 1", "1", "s1" or "#1", any case."""
+        """ "Season 1", "1", "s1" or "#1", any case. "s2+s3" is one unbroken
+        window from the first's start to the last's end, rated as a single
+        season (the later resets never happen); "s1+s3" takes in s2 too."""
         q = query.strip().lower()
         if not q:
             return None
         seasons = self.seasons()
+        if "+" in q and not any(s.name.lower() == q for s in seasons):
+            parts = [self.find_season(part) for part in q.split("+")]
+            if not parts or None in parts:
+                return None
+            ids = [s.id for s in seasons]
+            lo, hi = min(ids.index(s.id) for s in parts), max(ids.index(s.id) for s in parts)
+            first, last = seasons[lo], seasons[hi]
+            if lo == hi:
+                return first
+            # No row behind it, so no id: nothing may mistake it for a real season.
+            return first._replace(
+                id=None,
+                name=" + ".join(s.name for s in seasons[lo : hi + 1]),
+                ended_at=last.ended_at,
+            )
         for s in seasons:
             if s.name.lower() == q:
                 return s

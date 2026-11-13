@@ -69,6 +69,11 @@ _MODES = {
 }
 
 
+def _continues_season(season_words: list[str]) -> bool:
+    """A number right after 'season' or a '+' names a season, not min_games."""
+    return bool(season_words) and (season_words[-1].lower() == "season" or season_words[-1].endswith("+"))
+
+
 def _find_mode(query: str) -> tuple[str | None, str]:
     """A pick mode named anywhere in a board query, and the query without it."""
     tokens = query.split()
@@ -310,11 +315,11 @@ def _text(content: str) -> dict:
 class Leaderboard(CommunityCog):
     @commands.hybrid_command(
         aliases=["ladder"],
-        description="show the rating leaderboard (a race, a unit, a mode like br/sd, a season like s1, career, or units)",
+        description="show the rating leaderboard (race, unit, mode like br/sd, season like s1 or s2+s3, career, units)",
         help="show the rating leaderboard — add a race (!leaderboard zerg), a unit (!leaderboard marine), "
         "a pick mode (br / blind random, sd / single draft), "
         "'kings' for who tops the most unit boards, "
-        "a season (s1), 'career' for all-time, or 'units' to rate unit picks (all-time, or !leaderboard units s3)",
+        "a season (s1) or seasons rated as one (s2+s3), 'career' for all-time, or 'units' to rate unit picks (all-time, or !leaderboard units s3)",
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def leaderboard(self, ctx, *, query: str = ""):
@@ -370,12 +375,12 @@ class Leaderboard(CommunityCog):
     @staticmethod
     def _parse_board_query(query: str) -> tuple[int, str | None, str]:
         """Split '[min_games] [race] [season]'. A bare number is min_games (the
-        footer says so); a season is 's1' or 'season 3'."""
+        footer says so); a season is 's1', 'season 3' or 's2+s3'."""
         min_games, race, season_words = DEFAULT_MIN_GAMES, None, []
         for token in query.split():
             if token.lower() in _RACES:
                 race = _RACES[token.lower()]
-            elif token.isdigit() and not (season_words and season_words[-1].lower() == "season"):
+            elif token.isdigit() and not _continues_season(season_words):
                 min_games = int(token)
             else:
                 season_words.append(token)
@@ -387,12 +392,14 @@ class Leaderboard(CommunityCog):
         season = self.store.find_season(query)
         if season is None:
             known = ", ".join(s.name for s in self.store.seasons())
-            await ctx.send(f"No season called **{query}**. Seasons so far: {known}.")
+            await ctx.send(
+                f"No season called **{query}**. Seasons so far: {known}. Join them with + (s2+s3) to rate them as one."
+            )
         return season
 
     def _book_for(self, season, career: bool, by_race: bool = False, mode: str | None = None):
         """The open season from the cache; anything else built on demand (~50ms)."""
-        if not career and not by_race and mode is None and season is not None and season.ended_at is None:
+        if not career and not by_race and mode is None and season == self.store.current_season():
             return self.ratings.book()
         return season_book(self.store, None if career else season, by_race, mode)
 
@@ -868,7 +875,7 @@ class Leaderboard(CommunityCog):
             word = token.lower()
             if word in _UNIT_WORDS:
                 continue
-            if word.isdigit() and not (season_words and season_words[-1].lower() == "season"):
+            if word.isdigit() and not _continues_season(season_words):
                 min_games = max(1, int(word))
             elif word in _UNIT_RAW_WORDS:
                 raw = True

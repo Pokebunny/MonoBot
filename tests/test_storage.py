@@ -651,6 +651,19 @@ def test_find_season_accepts_what_people_type(store):
     assert store.find_season("") is None
 
 
+def test_season_span_is_one_unbroken_window(store):
+    store.start_season("Season 2")
+    store.start_season("Season 3")
+    s1, s2, s3 = store.seasons()
+    span = store.find_season("s2+s3")
+    assert (span.name, span.started_at, span.ended_at) == ("Season 2 + Season 3", s2.started_at, None)
+    assert span.id is None and span != store.current_season()
+    assert store.find_season("season 1 + 3").name == "Season 1 + Season 2 + Season 3"
+    assert store.find_season("s3+s1").ended_at is None
+    assert store.find_season("s2+s2") == s2
+    assert store.find_season("s2+s9") is None
+
+
 def test_season_containing_uses_played_at_not_upload_time(store):
     """A replay from last season uploaded today scores against last season."""
     store.ingest(_match(played_at=_at(0)), hash_replay(b"old"))
@@ -1005,3 +1018,20 @@ def test_migration_drops_replay_channels(tmp_path):
     s = MatchStore(path)
     assert s._conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'replay_channels'").fetchone() is None
     s.close()
+
+
+def test_season_span_skips_the_later_reset(store):
+    """s1+s2 rates both seasons as one walk: Season 2's games build on Season
+    1's ratings instead of starting over."""
+    from services.rating import season_book
+
+    for i in range(3):
+        store.ingest(_match(played_at=_at(i)), hash_replay(f"c{i}".encode()))
+    s2 = store.start_season("Season 2")
+    store.ingest(_match(played_at=_after_now(), file_name="new.SC2Replay"), hash_replay(b"new"))
+
+    span = season_book(store, store.find_season("s1+s2"))
+    walked = RatingBook.from_matches(m for _, m in store.all_matches())
+    assert span.rating_for("h-A0") == walked.rating_for("h-A0")
+    assert span.rating_for("h-A0").games == 4
+    assert season_book(store, s2).rating_for("h-A0").games == 1

@@ -37,7 +37,9 @@ def predict_win_probability(team1: list[tuple[float, float]], team2: list[tuple[
     return _model.predict_win([t1, t2])[0]
 
 
-DEFAULT_DISPLAY = PlayerRating(handle="", name="", mu=DEFAULT_MU, sigma=DEFAULT_SIGMA).display_rating
+_FRESH = PlayerRating(handle="", name="", mu=DEFAULT_MU, sigma=DEFAULT_SIGMA)
+DEFAULT_DISPLAY = _FRESH.display_rating
+DEFAULT_RAW = _FRESH.raw_rating
 
 # Soft reset: mu keeps SOFT_RESET_CARRYOVER of its distance from the prior;
 # sigma rises to SOFT_RESET_SIGMA, never falls. Chosen by

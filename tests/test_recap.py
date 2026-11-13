@@ -104,6 +104,23 @@ def test_split_sessions_breaks_at_long_gaps():
     assert split_sessions([]) == []
 
 
+def test_raw_recap_reports_mu_moves_without_the_uncertainty_deduction():
+    from services.rating import RatingBook
+
+    history = _numbered([_match(1, 0), _match(2, 30), _match(1, 60), _match(1, 90)])
+    session = history[1:]
+    raw = build_recap(session, history, {}, [], raw=True)
+    a1 = next(p for p in raw.players if p.handle == "A1")
+    before = RatingBook.from_matches(m for _, m in history[:1]).rating_for("A1")
+    after = RatingBook.from_matches(m for _, m in history).rating_for("A1")
+    assert (a1.rating_before, a1.rating_after) == (before.raw_rating, after.raw_rating)
+    # Every game shrinks sigma, so the hedged rating gains more than the raw one.
+    hedged = next(p for p in build_recap(session, history, {}, []).players if p.handle == "A1")
+    assert hedged.rating_change > a1.rating_change
+    embed = match_embeds.session_recap(raw, {}, datetime.UTC, "Recap")
+    assert "raw MMR" in embed.footer.text and f"{a1.rating_change:+d}" in embed.description
+
+
 def test_recap_by_number_posts_one_session_without_pages(tmp_path):
     import asyncio
     from types import SimpleNamespace
@@ -128,4 +145,8 @@ def test_recap_by_number_posts_one_session_without_pages(tmp_path):
     assert sent[0].embed.footer.text.startswith("Session 1/2") and "view" not in vars(sent[0])
     asyncio.run(cog.recap.callback(cog, ctx, 3))
     assert "no session 3" in sent[1].content
+    asyncio.run(cog.recap.callback(cog, ctx, 1, "MMR"))
+    assert "raw MMR" in sent[2].embed.footer.text
+    asyncio.run(cog.recap.callback(cog, ctx, 1, "elo"))
+    assert "Unknown option" in sent[3].content
     store.close()

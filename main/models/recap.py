@@ -34,3 +34,4 @@ class SessionRecap(BaseModel):
     ended_at: datetime.datetime  # last game's played_at (UTC)
     games: int  # decided games
     players: list[PlayerRecap]
+    raw: bool = False  # ratings are raw_rating, not display_rating

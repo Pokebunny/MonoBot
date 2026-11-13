@@ -905,7 +905,8 @@ def session_recap(recap: SessionRecap, names: dict[str, str], tz: datetime.tzinf
     highlights = _recap_highlights(players, names)
     if highlights:
         embed.add_field(name="Highlights", value="\n".join(highlights), inline=False)
-    embed.set_footer(text="Rating is this season's ladder rating · ⭐ = game MVP (most value destroyed)")
+    kind = "raw MMR (no uncertainty deduction)" if recap.raw else "this season's ladder rating"
+    embed.set_footer(text=f"Rating is {kind} · ⭐ = game MVP (most value destroyed)")
     return embed
 
 

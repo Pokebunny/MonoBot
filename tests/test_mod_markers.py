@@ -52,6 +52,19 @@ def test_read_markers():
     assert markers.results == {1: True, 2: False}
 
 
+def test_markers_find_players_across_open_slots():
+    """Players in slots 1, 2, 5, 6: sc2reader numbers them 1-4 and can't name
+    game players 5 and 6, so their markers go through the lobby slot."""
+    known = type("Player", (), {"pid": 2})()
+    named = _marker("MB_Pick_Marine", pid=2)
+    named.player = known
+    markers = replay_parser._read_markers(
+        [named, _marker("MB_Pick_Roach", pid=5), _marker("MB_Win", pid=6)], {1: 1, 2: 2, 5: 3, 6: 4}
+    )
+    assert markers.picks == {2: "Marine", 3: "Roach"}
+    assert markers.results == {4: True}
+
+
 @pytest.fixture(scope="module")
 def plain():
     return replay_parser.parse_replay(UNRECORDED)

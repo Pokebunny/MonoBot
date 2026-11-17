@@ -625,14 +625,21 @@ class _Markers:
     results: dict[int, bool] = field(default_factory=dict)  # won?
 
 
-def _read_markers(events) -> _Markers | None:
-    """The mod's markers, or None for a game played without the mod."""
+def _read_markers(events, slot_pids: dict[int, int] | None = None) -> _Markers | None:
+    """The mod's markers, or None for a game played without the mod.
+
+    A marker's pid is the game's player id, which is the lobby slot + 1.
+    sc2reader numbers players without gaps instead, so when slots are left
+    open (players in slots 1, 2, 5, 6) it can't name the player; slot_pids
+    ({slot + 1: sc2reader pid}) does."""
     markers = None
     for e in events:
         if type(e).__name__ != "UpgradeCompleteEvent" or not e.upgrade_type_name.startswith(_MARKER_PREFIX):
             continue
         markers = markers or _Markers()
         name = e.upgrade_type_name.removeprefix(_MARKER_PREFIX)
+        player = getattr(e, "player", None)
+        pid = player.pid if player is not None else (slot_pids or {}).get(e.pid, e.pid)
         if name == "Version":
             markers.version = max(markers.version, e.count)
         elif name in _MARKER_MODES:
@@ -640,17 +647,17 @@ def _read_markers(events) -> _Markers | None:
         elif name == "Start":
             markers.start = e.second if markers.start is None else min(markers.start, e.second)
         elif name.startswith("Pick_"):
-            markers.picks[e.pid] = name.removeprefix("Pick_")
+            markers.picks[pid] = name.removeprefix("Pick_")
         elif name.startswith("Offer_"):
-            markers.offers[e.pid].append(name.removeprefix("Offer_"))
+            markers.offers[pid].append(name.removeprefix("Offer_"))
         elif name in ("Win", "Loss"):
-            markers.results[e.pid] = name == "Win"
+            markers.results[pid] = name == "Win"
     return markers
 
 
 def parse_replay(path: str) -> MonobattleMatch:
     replay = sc2reader.load_replay(path, load_level=4)
-    markers = _read_markers(replay.events)
+    markers = _read_markers(replay.events, {p.sid + 1: p.pid for p in replay.players})
     if markers is not None and markers.start is not None:
         game_start = markers.start
     else:

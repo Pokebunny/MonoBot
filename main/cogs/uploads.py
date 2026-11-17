@@ -22,6 +22,8 @@ MAX_REPLAY_BYTES = 10 * 1024 * 1024
 # sc2reader takes ~1-2s of CPU a replay; don't let a burst starve the bot.
 MAX_CONCURRENT_PARSES = 2
 BAD_TOKEN = {"error": "unknown token; get a new one with /uploadtoken"}
+UPLOADER_DOWNLOAD = "https://raw.githubusercontent.com/Pokebunny/MonoBot/main/uploader/monobot_uploader.py"
+UPLOADER_README = "https://github.com/Pokebunny/MonoBot/blob/main/uploader/README.md"
 
 
 def upload_community(client):
@@ -126,8 +128,9 @@ class Uploads(commands.Cog):
         text = (
             "Your replay uploader token (it replaces any earlier one; keep it private):\n"
             f"```\npython monobot_uploader.py --server {server} --token {token}\n```"
-            "Get the uploader from the MonoBot repo's `uploader/` folder. "
-            "`/uploadtoken revoke` turns the token off."
+            f"Download the uploader (right-click → Save link as): <{UPLOADER_DOWNLOAD}>\n"
+            f"Setup help: <{UPLOADER_README}>\n"
+            "Run the command in the folder you saved it to. `/uploadtoken revoke` turns the token off."
         )
         if ctx.interaction is not None:
             await ctx.send(text, ephemeral=True)

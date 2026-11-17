@@ -2064,7 +2064,7 @@ void MB_CreatePicksPanel () {
             DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 38 + (k - 1) * MB_PORTRAIT_PITCH, (t - 1) * MB_PORTRAIT_PITCH);
             DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), "Assets\\Textures\\white32.dds");
             DialogControlSetPropertyAsColor(c, c_triggerControlPropertyColor, PlayerGroupAll(), ColorFromIndex(PlayerGetColorIndex(p, false), c_teamColorDiffuse));
-            DialogControlFadeTransparency(c, PlayerGroupAll(), 0.0, 90.0);  // a light tint: 10% colour (testing)
+            DialogControlFadeTransparency(c, PlayerGroupAll(), 0.0, 85.0);  // a light tint: 15% colour (testing)
             gv_picksBack[t][k] = c;
             c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
             DialogControlSetSize(c, PlayerGroupAll(), MB_PORTRAIT, MB_PORTRAIT);

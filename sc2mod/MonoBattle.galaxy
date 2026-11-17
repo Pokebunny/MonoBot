@@ -2556,6 +2556,9 @@ void MB_StartBattle () {
 //--------------------------------------------------------------------------------------------------
 bool MB_Main (bool testConds, bool runActions) {
     int p;
+    // The engine's 3-2-1 start countdown (GameUI.SC2Layout). Its pause can't be skipped, only hidden.
+    DialogControlSetVisible(DialogControlHookupStandard(c_triggerControlTypeFlash,
+        "UIContainer/FullscreenUpperContainer/GameStartCountdownPanel/FlashFrame"), PlayerGroupAll(), false);
     MB_ClearMeleeStart();
     GameSetMissionTimePaused(true);
     MB_SetupRoster();

@@ -2183,12 +2183,21 @@ void MB_DisableMelee (int p) {
 // The map's melee setup can run after the mod starts, and would then spawn bases and re-enable
 // melee victory/defeat behind it. Wait (up to 5 s) until a player's starting units exist, give the
 // setup a moment to finish, then take over.
+// Melee's starting minerals arrive at load; left alone, they could be traded during the pick phase.
+void MB_ZeroResources (int p) {
+    PlayerModifyPropertyInt(p, c_playerPropMinerals, c_playerPropOperSetTo, 0);
+    PlayerModifyPropertyInt(p, c_playerPropVespene, c_playerPropOperSetTo, 0);
+}
+
 void MB_ClearMeleeStart () {
     int p;
     fixed waited;
     bool spawned;
     waited = 0.0;
     spawned = false;
+    for (p = 1; p <= 8; p += 1) {
+        MB_ZeroResources(p);
+    }
     while (waited < 5.0 && !spawned) {
         Wait(0.25, c_timeGame);
         waited += 0.25;
@@ -2202,6 +2211,7 @@ void MB_ClearMeleeStart () {
     for (p = 1; p <= 8; p += 1) {
         MB_DisableMelee(p);
         MB_RemovePlayerUnits(p);
+        MB_ZeroResources(p);
     }
 }
 
@@ -2589,6 +2599,7 @@ void MB_StartBattle () {
         race = gv_unitRace[u];
         PlayerSetRace(p, race);
         MB_Unlock(p, gv_unitName[u]);
+        MB_ZeroResources(p);  // whatever was traded in the pick phase anyway
         MeleeInitResourcesForPlayer(p, race);
         MeleeInitUnitsForPlayer(p, race, PlayerStartLocation(p));
     }

@@ -166,8 +166,8 @@ async def settle_copy(client, community, match, team: int) -> None:
 
 
 class ApproveGameView(ExpiringView):
-    """Lets a player or admin keep a rejected game anyway (still subject to
-    the rating gate)."""
+    """Lets an admin keep a rejected game anyway (still subject to the rating
+    gate). Admins only: players could otherwise approve their own junk games."""
 
     def __init__(self, cog: "Replays", match, data: bytes, file_hash: str, uploader: discord.abc.User):
         super().__init__()
@@ -177,19 +177,10 @@ class ApproveGameView(ExpiringView):
         self.file_hash = file_hash
         self.uploader = uploader
 
-    def _may_approve(self, interaction: discord.Interaction) -> bool:
-        if is_admin(interaction.client, interaction.guild, interaction.user):
-            return True
-        handles = set(self.cog.store.handles_for(str(interaction.user.id)))
-        return any(p.toon_handle in handles for p in self.match.players)
-
-    @discord.ui.button(label="Record anyway", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Record anyway (admins)", style=discord.ButtonStyle.secondary)
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self._may_approve(interaction):
-            await interaction.response.send_message(
-                "Only a player who was in this game (with a linked SC2 name) or an admin can record it.",
-                ephemeral=True,
-            )
+        if not is_admin(interaction.client, interaction.guild, interaction.user):
+            await interaction.response.send_message("Only an admin can record a rejected game.", ephemeral=True)
             return
         self.stop()
         button.disabled = True

@@ -844,12 +844,12 @@ bool MB_OnUnitCreated (bool testConds, bool runActions) {
 }
 
 //--------------------------------------------------------------------------------------------------
-// Pick panel, one per player, 1000 x 750:
+// Pick panel, one per player, 1000 wide and as tall as the phase needs (MB_Layout):
 //   title                                  y  30
 //   up to 4 text buttons, centred          y  80   actions and non-unit choices
-//   up to 20 unit cards, 5 x 4             y 150   icon (56) with its name on a button beneath
-//   two team strips                        y 560   a unit icon and a player name per slot
-//   one info line                          y 700
+//   0-4 rows of unit cards, 5 per row      y 150   icon (56) with its name on a button beneath
+//   0-2 team strips                        below   a unit icon and a player name per slot
+//   one info line                          below
 // Clicking a card's icon or its name picks it. Taken units go grey; the current choice's name is
 // green.
 //--------------------------------------------------------------------------------------------------
@@ -918,6 +918,26 @@ void MB_CreatePanel (int p) {
     DialogControlSetSize(gv_info[p], PlayerGroupAll(), 920, 30);
     DialogControlSetPosition(gv_info[p], PlayerGroupAll(), c_anchorTopLeft, 40, 700);
     DialogSetVisible(gv_dialog[p], PlayerGroupSingle(p), true);
+}
+
+// Fit the panel to a phase: how many rows of cards and of team strips it shows.
+void MB_Layout (int p, int cardRows, int stripRows) {
+    int y;
+    int r;
+    int k;
+    y = 150 + cardRows * 102;
+    if (cardRows == 0) {
+        y = 146;
+    }
+    for (r = 1; r <= 2; r += 1) {
+        for (k = 1; k <= 4; k += 1) {
+            DialogControlSetPosition(gv_stripIcon[p][r][k], PlayerGroupAll(), c_anchorTopLeft, 20 + (k - 1) * 240, y + (r - 1) * 64);
+            DialogControlSetPosition(gv_stripName[p][r][k], PlayerGroupAll(), c_anchorTopLeft, 70 + (k - 1) * 240, y + 10 + (r - 1) * 64);
+        }
+    }
+    y = y + stripRows * 64;
+    DialogControlSetPosition(gv_info[p], PlayerGroupAll(), c_anchorTopLeft, 40, y);
+    DialogSetSize(gv_dialog[p], 1000, y + 50);
 }
 
 void MB_SetTitle (int p, text t) {
@@ -1086,6 +1106,7 @@ void MB_ShowVotes () {
     int m;
     for (p = 1; p <= 8; p += 1) {
         if (MB_TeamOf(p) != 0) {
+            MB_Layout(p, 0, 0);
             for (m = 1; m <= 4; m += 1) {
                 MB_SetButton(p, m, MB_ModeName(m) + " (" + IntToString(MB_VoteCount(m)) + ")", true);
             }
@@ -1205,12 +1226,14 @@ void MB_BlindButtons (int p) {
     MB_HideButtons(p);
     MB_HideCards(p);
     if (gv_rolls[p] == 0) {
+        MB_Layout(p, 0, 1);
         MB_SetButton(p, 1, "Random + repick", true);
         MB_SetButton(p, 2, "Terran", true);
         MB_SetButton(p, 3, "Zerg", true);
         MB_SetButton(p, 4, "Protoss", true);
         return;
     }
+    MB_Layout(p, 1, 1);
     MB_SetCard(p, 3, gv_pick[p], MB_CARD_SHOWN);
     if (gv_locked[p]) {
         MB_SetButton(p, 2, "Locked in", false);
@@ -1302,6 +1325,7 @@ void MB_DealOffers (int t) {
 void MB_PickThreeButtons (int p) {
     int i;
     int state;
+    MB_Layout(p, 1, 1);
     MB_HideButtons(p);
     MB_HideCards(p);
     for (i = 1; i <= 3; i += 1) {
@@ -1402,6 +1426,7 @@ void MB_PoolButtons () {
     int i;
     for (p = 1; p <= 8; p += 1) {
         if (MB_TeamOf(p) != 0) {
+            MB_Layout(p, 4, 2);
             MB_HideButtons(p);
             for (i = 1; i <= MB_POOL_SIZE; i += 1) {
                 if (gv_poolTaken[i]) {
@@ -1584,6 +1609,7 @@ void MB_AssignButtons (int t) {
     c = gv_captain[t];
     for (k = 1; k <= gv_teamSize[t]; k += 1) {
         q = gv_teamPlayers[t][k];
+        MB_Layout(q, 1, 1);
         MB_HideButtons(q);
         MB_HideCards(q);
         for (s = 1; s <= gv_teamUnitCount[t]; s += 1) {
@@ -1680,6 +1706,7 @@ void MB_RunCaptains () {
     gv_phase = MB_PHASE_OPT_IN;
     for (p = 1; p <= 8; p += 1) {
         if (MB_TeamOf(p) != 0) {
+            MB_Layout(p, 0, 0);
             MB_HideButtons(p);
             MB_HideCards(p);
             MB_SetButton(p, 2, "I'll captain", true);

@@ -251,6 +251,25 @@ def test_confirm_winner(store):
     assert store.pending_confirmations(MIN_WINNER_CONFIDENCE, MIN_DURATION_SECONDS) == []
 
 
+def test_changed_winner_reads_its_own_comeback(store):
+    m = _match(winning_team=2, confidence=0.6, method="inferred:army")
+    m.comeback_deficit, m.team_deficits = 24000, {1: 4000, 2: 24000}
+    r = store.ingest(m, hash_replay(b"flip"))
+    store.confirm_winner(r.match_id, 1)
+    assert store.get_match(r.match_id).comeback_deficit == 4000
+    # A reparse keeps the confirmed winner's comeback, not the parsed one's.
+    store.refresh_parse(m, hash_replay(b"flip"))
+    assert store.get_match(r.match_id).comeback_deficit == 4000
+
+
+def test_changed_winner_drops_a_comeback_parsed_before_team_deficits(store):
+    m = _match(winning_team=2, confidence=0.6, method="inferred:army")
+    m.comeback_deficit = 24000
+    r = store.ingest(m, hash_replay(b"old"))
+    store.confirm_winner(r.match_id, 1)
+    assert store.get_match(r.match_id).comeback_deficit is None
+
+
 def test_pending_excludes_short_and_confident(store):
     store.ingest(_match(winning_team=None, confidence=0.0, duration=60, played_at=_at(0)), hash_replay(b"short"))
     store.ingest(_match(played_at=_at(20)), hash_replay(b"decided"))

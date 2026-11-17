@@ -84,7 +84,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS matches (
     winner_confidence REAL NOT NULL,
     winner_method TEXT NOT NULL,
     comeback_deficit INTEGER,
+    team_deficits TEXT,
     lead_changes INTEGER,
     remake_called INTEGER,
     approved INTEGER NOT NULL DEFAULT 0,
@@ -487,6 +488,13 @@ def _migration_20_remake_called(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE matches ADD COLUMN remake_called INTEGER")
 
 
+def _migration_21_team_deficits(conn: sqlite3.Connection) -> None:
+    """MonobattleMatch.team_deficits; NULL until reparsed (reparse_stored.py)."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(matches)")}
+    if "team_deficits" not in cols:
+        conn.execute("ALTER TABLE matches ADD COLUMN team_deficits TEXT")
+
+
 # Global Discord links, in the home DB. Other stores ATTACH it as LINKS_SCHEMA
 # and read it unqualified (their own DB has no such table). "{s}" is the
 # schema prefix: "" in the home DB, "links." when attached.
@@ -556,6 +564,7 @@ _MIGRATIONS = {
     18: _migration_18_merge_duplicate_recordings,
     19: _migration_19_drop_replay_channels,
     20: _migration_20_remake_called,
+    21: _migration_21_team_deficits,
 }
 
 
@@ -693,9 +702,9 @@ class MatchStore:
                 """INSERT INTO matches
                    (file_hash, content_key, file_name, map_name, map_hash, played_at, game_seed, duration_seconds,
                     game_type, pick_mode, pick_phase_seconds, winning_team,
-                    winner_confidence, winner_method, comeback_deficit, lead_changes, remake_called, approved,
-                    uploaded_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    winner_confidence, winner_method, comeback_deficit, team_deficits, lead_changes, remake_called,
+                    approved, uploaded_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (file_hash, key, *self._match_columns(match), uploaded_by),
             )
         except sqlite3.IntegrityError:
@@ -782,6 +791,7 @@ class MatchStore:
             match.winner_confidence,
             match.winner_method,
             match.comeback_deficit,
+            json.dumps(match.team_deficits) if match.team_deficits else None,
             match.lead_changes,
             None if match.remake_called is None else int(match.remake_called),
             int(match.approved),
@@ -832,7 +842,8 @@ class MatchStore:
                  file_hash = ?, content_key = ?, file_name = ?, map_name = ?, map_hash = ?, played_at = ?,
                  game_seed = ?, duration_seconds = ?, game_type = ?, pick_mode = ?, pick_phase_seconds = ?,
                  winning_team = ?, winner_confidence = ?, winner_method = ?,
-                 comeback_deficit = ?, lead_changes = ?, remake_called = ?, approved = ?, uploaded_by = ?
+                 comeback_deficit = ?, team_deficits = ?, lead_changes = ?, remake_called = ?, approved = ?,
+                 uploaded_by = ?
                WHERE id = ?""",
             (file_hash, key, *self._match_columns(match), uploaded_by, match_id),
         )
@@ -863,7 +874,12 @@ class MatchStore:
             return False
         if row["winner_method"] == "confirmed":
             match = match.model_copy(
-                update={"winning_team": row["winning_team"], "winner_confidence": 1.0, "winner_method": "confirmed"}
+                update={
+                    "winning_team": row["winning_team"],
+                    "winner_confidence": 1.0,
+                    "winner_method": "confirmed",
+                    "comeback_deficit": match.team_deficits.get(row["winning_team"]),
+                }
             )
         if row["approved"]:
             match = match.model_copy(update={"approved": True})
@@ -1155,10 +1171,13 @@ class MatchStore:
         self._conn.commit()
 
     def confirm_winner(self, match_id: int, winning_team: int) -> None:
-        """Manual confirmation overrides any inferred result."""
+        """Manual confirmation overrides any inferred result. A game parsed
+        before team_deficits drops a comeback measured for the old winner."""
         self._conn.execute(
-            "UPDATE matches SET winning_team = ?, winner_confidence = 1.0, winner_method = 'confirmed' WHERE id = ?",
-            (winning_team, match_id),
+            """UPDATE matches SET winning_team = ?, winner_confidence = 1.0, winner_method = 'confirmed',
+                 comeback_deficit = CASE WHEN winning_team IS ? THEN comeback_deficit END
+               WHERE id = ?""",
+            (winning_team, winning_team, match_id),
         )
         self._conn.commit()
         self._changes += 1
@@ -1548,6 +1567,7 @@ class MatchStore:
             )
             for p in player_rows
         ]
+        deficits = {int(t): d for t, d in json.loads(row["team_deficits"] or "{}").items()}
         return MonobattleMatch.model_construct(
             set(),
             file_name=row["file_name"],
@@ -1562,7 +1582,8 @@ class MatchStore:
             winning_team=row["winning_team"],
             winner_confidence=row["winner_confidence"],
             winner_method=row["winner_method"],
-            comeback_deficit=row["comeback_deficit"],
+            comeback_deficit=deficits.get(row["winning_team"]) if deficits else row["comeback_deficit"],
+            team_deficits=deficits,
             lead_changes=row["lead_changes"],
             remake_called=None if row["remake_called"] is None else bool(row["remake_called"]),
             approved=bool(row["approved"]),

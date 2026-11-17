@@ -1881,7 +1881,10 @@ void MB_RemovePlayerUnits (int p) {
     }
 }
 
+// Melee's own rules, all handled by the mod (or not used, as on the old map). Reveal would announce
+// and expose every base the mod removes at load.
 void MB_DisableMelee (int p) {
+    MeleeSetOption(p, c_meleeOptionReveal, false);
     MeleeSetOption(p, c_meleeOptionDefeat, false);
     MeleeSetOption(p, c_meleeOptionVictory, false);
     MeleeSetOption(p, c_meleeOptionStalemate, false);

@@ -950,9 +950,8 @@ void MB_Layout (int p, int cards, int stripRows, bool buttonsBelow) {
         y = y + ((cards + MB_CARD_COLUMNS - 1) / MB_CARD_COLUMNS) * MB_CARD_PITCH + 8;
     }
     if (buttonsBelow) {
-        for (i = 1; i <= MB_TEXT_BUTTONS; i += 1) {
-            DialogControlSetPosition(gv_button[p][i], PlayerGroupAll(), c_anchorTopLeft, 36 + (i - 1) * 236, y);
-        }
+        // Below the cards there is one button (2: Confirm, or who we're waiting for), centred.
+        DialogControlSetPosition(gv_button[p][2], PlayerGroupAll(), c_anchorTopLeft, (MB_PANEL_WIDTH - 220) / 2, y);
         y = y + 66;
     }
     for (r = 1; r <= 2; r += 1) {

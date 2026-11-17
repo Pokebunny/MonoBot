@@ -1,8 +1,11 @@
-# Planned: move to a new Graviton server
+# Move to a new Graviton server
 
-Decided 2026-11-05 (option B over an in-place resize). Started 2026-11-17,
-before turning on the replay upload API: its uploaders send every player's
-recording of a game, each parsed separately.
+Decided 2026-11-05 (option B over an in-place resize). **Cut over
+2026-11-17**: all three bots run on the t4g.small at Elastic IP
+`18.224.76.73` (`i-...`, private `ip-172-31-0-200`); the upload API is at
+https://monobot-uploads.duckdns.org (DuckDNS). The old t2.micro
+(`i-01de6825d150fc7d7`, `52.14.192.236`) has its bots stopped and disabled;
+step 8 remains.
 
 ## Why
 

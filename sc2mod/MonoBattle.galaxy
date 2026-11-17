@@ -93,6 +93,7 @@ int[9] gv_order;          // draft turn order
 int gv_orderCount;
 int gv_turnPlayer;
 bool gv_turnDone;
+int gv_draftSelected;      // pool slot the turn player has selected but not confirmed, 0 = none
 
 bool[9] gv_optIn;
 int[3] gv_captain;
@@ -845,33 +846,29 @@ bool MB_OnUnitCreated (bool testConds, bool runActions) {
 }
 
 //--------------------------------------------------------------------------------------------------
-// Pick panel, one per player, 1000 wide and as tall as the phase needs (MB_Layout):
-//   title                                  y  30
-//   up to 4 text buttons, centred          y  80   actions and non-unit choices
-//   0-4 rows of unit cards, 5 per row      y 150   icon (56) with its name on a button beneath
-//   0-2 team strips                        below   a unit icon and a player name per slot
-//   one info line                          below
+// Pick panel, one per player, 1000 wide and as tall as the phase needs (MB_Layout), top to bottom:
+//   title
+//   up to 4 text buttons, centred (above the cards, or below them in the drafts)
+//   unit cards, 4 per row, a short last row centred: icon (52) with its name on a 200-wide button
+//     beneath, wide enough for "Hellion/Hellbat"
+//   0-2 team strips: a unit icon and a player name per slot
+//   one info line
 // Clicking a card's icon or its name picks it. Taken units go grey; the current choice's name is
 // green.
 //--------------------------------------------------------------------------------------------------
-const int MB_CARD_COLUMNS = 5;
-const int MB_CARD_WIDTH = 140;   // the name button; "Hellion/Hellbat" just fits
-const int MB_CARD_ICON = 56;
-
-int MB_CardX (int i) {
-    return 102 + ModI(i - 1, MB_CARD_COLUMNS) * (MB_CARD_WIDTH + 24);
-}
-
-int MB_CardY (int i) {
-    return 150 + ((i - 1) / MB_CARD_COLUMNS) * 102;
-}
+const int MB_CARD_COLUMNS = 4;
+const int MB_CARD_WIDTH = 200;
+const int MB_CARD_GAP = 40;
+const int MB_CARD_ICON = 52;
+const int MB_CARD_PITCH = 92;   // icon, 4, name button (32), 4
+const int MB_PANEL_WIDTH = 1000;
 
 void MB_CreatePanel (int p) {
     int i;
     int r;
     int k;
     int c;
-    gv_dialog[p] = DialogCreate(1000, 750, c_anchorCenter, 0, 0, false);
+    gv_dialog[p] = DialogCreate(MB_PANEL_WIDTH, 750, c_anchorCenter, 0, 0, false);
     gv_title[p] = DialogControlCreate(gv_dialog[p], c_triggerControlTypeLabel);
     DialogControlSetSize(gv_title[p], PlayerGroupAll(), 920, 40);
     DialogControlSetPosition(gv_title[p], PlayerGroupAll(), c_anchorTopLeft, 40, 30);
@@ -885,18 +882,15 @@ void MB_CreatePanel (int p) {
     for (i = 1; i <= MB_CARDS; i += 1) {
         c = DialogControlCreate(gv_dialog[p], c_triggerControlTypeImage);
         DialogControlSetSize(c, PlayerGroupAll(), MB_CARD_ICON, MB_CARD_ICON);
-        DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, MB_CardX(i) + (MB_CARD_WIDTH - MB_CARD_ICON) / 2, MB_CardY(i));
         DialogControlSetVisible(c, PlayerGroupAll(), false);
         gv_cardImage[p][i] = c;
         c = DialogControlCreate(gv_dialog[p], c_triggerControlTypeButton);
         DialogControlSetSize(c, PlayerGroupAll(), MB_CARD_ICON, MB_CARD_ICON);
-        DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, MB_CardX(i) + (MB_CARD_WIDTH - MB_CARD_ICON) / 2, MB_CardY(i));
         DialogControlFadeTransparency(c, PlayerGroupAll(), 0.0, 100.0);
         DialogControlSetVisible(c, PlayerGroupAll(), false);
         gv_cardHotspot[p][i] = c;
         c = DialogControlCreate(gv_dialog[p], c_triggerControlTypeButton);
-        DialogControlSetSize(c, PlayerGroupAll(), MB_CARD_WIDTH, 36);
-        DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, MB_CardX(i), MB_CardY(i) + MB_CARD_ICON + 4);
+        DialogControlSetSize(c, PlayerGroupAll(), MB_CARD_WIDTH, 32);
         DialogControlSetVisible(c, PlayerGroupAll(), false);
         gv_cardName[p][i] = c;
     }
@@ -921,14 +915,44 @@ void MB_CreatePanel (int p) {
     DialogSetVisible(gv_dialog[p], PlayerGroupSingle(p), true);
 }
 
-// Fit the panel to a phase: how many rows of cards and of team strips it shows.
-void MB_Layout (int p, int cardRows, int stripRows) {
+// Fit the panel to a phase: `cards` unit cards, `stripRows` team strips, and the text buttons above
+// the cards or (buttonsBelow) beneath them.
+void MB_Layout (int p, int cards, int stripRows, bool buttonsBelow) {
     int y;
+    int i;
     int r;
     int k;
-    y = 150 + cardRows * 102;
-    if (cardRows == 0) {
-        y = 146;
+    int row;
+    int col;
+    int inRow;
+    int x;
+    y = 80;
+    if (!buttonsBelow) {
+        for (i = 1; i <= MB_TEXT_BUTTONS; i += 1) {
+            DialogControlSetPosition(gv_button[p][i], PlayerGroupAll(), c_anchorTopLeft, 36 + (i - 1) * 236, y);
+        }
+        y = y + 66;
+    }
+    for (i = 1; i <= cards; i += 1) {
+        row = (i - 1) / MB_CARD_COLUMNS;
+        col = ModI(i - 1, MB_CARD_COLUMNS);
+        inRow = cards - row * MB_CARD_COLUMNS;
+        if (inRow > MB_CARD_COLUMNS) {
+            inRow = MB_CARD_COLUMNS;
+        }
+        x = (MB_PANEL_WIDTH - (inRow * MB_CARD_WIDTH + (inRow - 1) * MB_CARD_GAP)) / 2 + col * (MB_CARD_WIDTH + MB_CARD_GAP);
+        DialogControlSetPosition(gv_cardImage[p][i], PlayerGroupAll(), c_anchorTopLeft, x + (MB_CARD_WIDTH - MB_CARD_ICON) / 2, y + row * MB_CARD_PITCH);
+        DialogControlSetPosition(gv_cardHotspot[p][i], PlayerGroupAll(), c_anchorTopLeft, x + (MB_CARD_WIDTH - MB_CARD_ICON) / 2, y + row * MB_CARD_PITCH);
+        DialogControlSetPosition(gv_cardName[p][i], PlayerGroupAll(), c_anchorTopLeft, x, y + row * MB_CARD_PITCH + MB_CARD_ICON + 4);
+    }
+    if (cards > 0) {
+        y = y + ((cards + MB_CARD_COLUMNS - 1) / MB_CARD_COLUMNS) * MB_CARD_PITCH + 8;
+    }
+    if (buttonsBelow) {
+        for (i = 1; i <= MB_TEXT_BUTTONS; i += 1) {
+            DialogControlSetPosition(gv_button[p][i], PlayerGroupAll(), c_anchorTopLeft, 36 + (i - 1) * 236, y);
+        }
+        y = y + 66;
     }
     for (r = 1; r <= 2; r += 1) {
         for (k = 1; k <= 4; k += 1) {
@@ -938,7 +962,7 @@ void MB_Layout (int p, int cardRows, int stripRows) {
     }
     y = y + stripRows * 64;
     DialogControlSetPosition(gv_info[p], PlayerGroupAll(), c_anchorTopLeft, 40, y);
-    DialogSetSize(gv_dialog[p], 1000, y + 50);
+    DialogSetSize(gv_dialog[p], MB_PANEL_WIDTH, y + 50);
 }
 
 void MB_SetTitle (int p, text t) {
@@ -1058,6 +1082,9 @@ int MB_CardIndex (int p, int control) {
 }
 
 text MB_Name (int p) {
+    if (p == 0) {
+        return MB_Text("nobody");
+    }
     return PlayerName(p);
 }
 
@@ -1107,7 +1134,7 @@ void MB_ShowVotes () {
     int m;
     for (p = 1; p <= 8; p += 1) {
         if (MB_TeamOf(p) != 0) {
-            MB_Layout(p, 0, 0);
+            MB_Layout(p, 0, 0, false);
             for (m = 1; m <= 4; m += 1) {
                 MB_SetButton(p, m, MB_ModeName(m) + " (" + IntToString(MB_VoteCount(m)) + ")", true);
             }
@@ -1222,20 +1249,20 @@ void MB_Roll (int p, int raceChoice) {
     MB_Marker(p, "Offer_" + gv_unitName[u]);
 }
 
-// Race buttons until the roll; then the rolled unit as the middle card of the top row.
+// Race buttons until the roll; then the rolled unit as a single centred card.
 void MB_BlindButtons (int p) {
     MB_HideButtons(p);
     MB_HideCards(p);
     if (gv_rolls[p] == 0) {
-        MB_Layout(p, 0, 1);
+        MB_Layout(p, 0, 1, false);
         MB_SetButton(p, 1, "Random + repick", true);
         MB_SetButton(p, 2, "Terran", true);
         MB_SetButton(p, 3, "Zerg", true);
         MB_SetButton(p, 4, "Protoss", true);
         return;
     }
-    MB_Layout(p, 1, 1);
-    MB_SetCard(p, 3, gv_pick[p], MB_CARD_SHOWN);
+    MB_Layout(p, 1, 1, false);
+    MB_SetCard(p, 1, gv_pick[p], MB_CARD_SHOWN);
     if (gv_locked[p]) {
         MB_SetButton(p, 2, "Locked in", false);
     }
@@ -1321,12 +1348,11 @@ void MB_DealOffers (int t) {
     }
 }
 
-// The offers are the middle three cards of the top row (cards 2-4), the choice in green; one text
-// button locks it in.
+// The offers are three centred cards, the choice in green; one text button locks it in.
 void MB_PickThreeButtons (int p) {
     int i;
     int state;
-    MB_Layout(p, 1, 1);
+    MB_Layout(p, 3, 1, false);
     MB_HideButtons(p);
     MB_HideCards(p);
     for (i = 1; i <= 3; i += 1) {
@@ -1342,10 +1368,10 @@ void MB_PickThreeButtons (int p) {
         else {
             state = MB_CARD_PICKABLE;
         }
-        MB_SetCard(p, i + 1, gv_offer[p][i], state);
+        MB_SetCard(p, i, gv_offer[p][i], state);
     }
     if (gv_locked[p]) {
-        for (i = 2; i <= 4; i += 1) {
+        for (i = 1; i <= 3; i += 1) {
             DialogControlSetEnabled(gv_cardHotspot[p][i], PlayerGroupSingle(p), false);
             DialogControlSetEnabled(gv_cardName[p][i], PlayerGroupSingle(p), false);
         }
@@ -1360,8 +1386,8 @@ void MB_PickThreeClick (int p, int card, int button) {
     if (gv_locked[p] || gv_offer[p][1] == 0) {
         return;
     }
-    if (card >= 2 && card <= 4) {
-        gv_pick[p] = gv_offer[p][card - 1];
+    if (card >= 1 && card <= 3) {
+        gv_pick[p] = gv_offer[p][card];
     }
     else if (button == 2 && gv_pick[p] != 0) {
         gv_locked[p] = true;
@@ -1421,24 +1447,37 @@ void MB_DealPool () {
     }
 }
 
-// The pool as 20 cards: taken units grey, the rest pickable only by whoever's turn it is.
+// The pool as 20 cards: taken units grey; whoever's turn it is selects one (green) and confirms it
+// with the button beneath, everyone else waits.
 void MB_PoolButtons () {
     int p;
     int i;
     for (p = 1; p <= 8; p += 1) {
         if (MB_TeamOf(p) != 0) {
-            MB_Layout(p, 4, 2);
+            MB_Layout(p, MB_POOL_SIZE, 2, true);
             MB_HideButtons(p);
             for (i = 1; i <= MB_POOL_SIZE; i += 1) {
                 if (gv_poolTaken[i]) {
                     MB_SetCard(p, i, gv_pool[i], MB_CARD_TAKEN);
                 }
-                else if (p == gv_turnPlayer) {
-                    MB_SetCard(p, i, gv_pool[i], MB_CARD_PICKABLE);
-                }
-                else {
+                else if (p != gv_turnPlayer) {
                     MB_SetCard(p, i, gv_pool[i], MB_CARD_SHOWN);
                 }
+                else if (i == gv_draftSelected) {
+                    MB_SetCard(p, i, gv_pool[i], MB_CARD_CHOSEN);
+                }
+                else {
+                    MB_SetCard(p, i, gv_pool[i], MB_CARD_PICKABLE);
+                }
+            }
+            if (gv_turnPlayer == 0) {
+                continue;
+            }
+            if (p == gv_turnPlayer) {
+                MB_SetButton(p, 2, "Confirm pick", gv_draftSelected != 0);
+            }
+            else {
+                MB_SetButtonText(p, 2, MB_Text("Waiting for ") + MB_Name(gv_turnPlayer), false);
             }
         }
     }
@@ -1521,11 +1560,21 @@ void MB_TakeSlot (int i) {
     gv_turnDone = true;
 }
 
-void MB_DraftClick (int p, int i) {
-    if (p != gv_turnPlayer || gv_turnDone || i < 1 || i > MB_POOL_SIZE || gv_poolTaken[i]) {
+// A card selects (and can be changed); the Confirm button takes it.
+void MB_DraftClick (int p, int card, int button) {
+    if (p != gv_turnPlayer || gv_turnDone) {
         return;
     }
-    MB_TakeSlot(i);
+    if (card >= 1 && card <= MB_POOL_SIZE && !gv_poolTaken[card]) {
+        gv_draftSelected = card;
+    }
+    else if (button == 2 && gv_draftSelected != 0) {
+        MB_TakeSlot(gv_draftSelected);
+    }
+    else {
+        return;
+    }
+    MB_PoolButtons();
 }
 
 void MB_RunDraftTurns (string modeName) {
@@ -1534,6 +1583,7 @@ void MB_RunDraftTurns (string modeName) {
     for (n = 1; n <= gv_orderCount; n += 1) {
         gv_turnPlayer = gv_order[n];
         gv_turnDone = false;
+        gv_draftSelected = 0;
         MB_PoolButtons();
         MB_RefreshInfo();
         left = MB_DRAFT_TURN_SECONDS;
@@ -1542,7 +1592,10 @@ void MB_RunDraftTurns (string modeName) {
             Wait(1.0, c_timeReal);
             left -= 1;
         }
-        if (!gv_turnDone) {
+        if (!gv_turnDone && gv_draftSelected != 0) {
+            MB_TakeSlot(gv_draftSelected);  // timed out: the selected unit, as on the old map
+        }
+        else if (!gv_turnDone) {
             MB_TakeSlot(MB_RandomFreeSlot());
         }
     }
@@ -1610,7 +1663,7 @@ void MB_AssignButtons (int t) {
     c = gv_captain[t];
     for (k = 1; k <= gv_teamSize[t]; k += 1) {
         q = gv_teamPlayers[t][k];
-        MB_Layout(q, 1, 1);
+        MB_Layout(q, gv_teamUnitCount[t], 1, false);
         MB_HideButtons(q);
         MB_HideCards(q);
         for (s = 1; s <= gv_teamUnitCount[t]; s += 1) {
@@ -1707,7 +1760,7 @@ void MB_RunCaptains () {
     gv_phase = MB_PHASE_OPT_IN;
     for (p = 1; p <= 8; p += 1) {
         if (MB_TeamOf(p) != 0) {
-            MB_Layout(p, 0, 0);
+            MB_Layout(p, 0, 0, false);
             MB_HideButtons(p);
             MB_HideCards(p);
             MB_SetButton(p, 2, "I'll captain", true);
@@ -2011,6 +2064,7 @@ void MB_CreatePicksPanel () {
             DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 38 + (k - 1) * MB_PORTRAIT_PITCH, (t - 1) * MB_PORTRAIT_PITCH);
             DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), "Assets\\Textures\\white32.dds");
             DialogControlSetPropertyAsColor(c, c_triggerControlPropertyColor, PlayerGroupAll(), ColorFromIndex(PlayerGetColorIndex(p, false), c_teamColorDiffuse));
+            DialogControlFadeTransparency(c, PlayerGroupAll(), 0.0, 55.0);  // solid was too strong (testing)
             gv_picksBack[t][k] = c;
             c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
             DialogControlSetSize(c, PlayerGroupAll(), MB_PORTRAIT, MB_PORTRAIT);
@@ -2079,8 +2133,8 @@ bool MB_OnClick (bool testConds, bool runActions) {
     else if (gv_phase == MB_PHASE_PICK_THREE) {
         MB_PickThreeClick(p, card, i);
     }
-    else if ((gv_phase == MB_PHASE_SINGLE || gv_phase == MB_PHASE_CAPTAIN_DRAFT) && card >= 1) {
-        MB_DraftClick(p, card);
+    else if (gv_phase == MB_PHASE_SINGLE || gv_phase == MB_PHASE_CAPTAIN_DRAFT) {
+        MB_DraftClick(p, card, i);
         MB_RefreshInfo();
     }
     else if (gv_phase == MB_PHASE_OPT_IN && i == 2) {

@@ -30,43 +30,79 @@ Monobattle server:
 - Expected: rebuilds ~1.5–2x faster, no credit throttling, memory headroom to
   ~50k+ games.
 
+## The three bots
+
+| | MonoBot | LTWBot | RioBot |
+|---|---|---|---|
+| Deploy | GitHub Actions → SSH → `deploy/update.sh` | same, its own repo | GitHub Actions → **AWS CodeDeploy** (`RioBot` / `RioBot_deployment_group`) |
+| Runs as | `monobot`, systemd | `ltwbot`, systemd | root, `nohup python3.11` (CodeDeploy hooks) |
+| Lives in | `/opt/monobot/MonoBot` | `/opt/ltwbot/LTWBot` | `/home/ec2-user/RioBot` |
+| Live-only files | `main/.env`, `resources/config.json`, `monobot.db`, `guilds/`, `replays/` | `.env`, `client_secret.json`, `trivia_stats.txt` | `main/.env`, `main/rio_name_map.json` |
+| Repoint after | `DEPLOY_HOST` secret | `DEPLOY_HOST` secret (LTWBot repo) | CodeDeploy group's target |
+
+ARM is a fresh install, not a copy: everything is reinstalled from the
+repos, and only the live-only files move. RioBot's install hook takes Python
+3.11 from dnf, so it needs nothing hand-built.
+
 ## Steps
 
-Who: **you** = AWS console / `ec2-user` (root); **Claude** = scripts, the
-MonoBot data copy, secrets, verification (the `monobot` login can't sudo).
+Who: **you** = AWS console / `ec2-user`; **Claude** = scripts, GitHub
+secrets, verification. Steps 1–4 are prep with every bot still running on
+the old box; the downtime is steps 5–7 (~15 minutes).
 
-1. ~~**Claude** — write `deploy/bootstrap.sh`~~ Done: users, dirs, uv,
-   clone, `uv sync`, systemd unit, the sudoers line, a 500 MB journal cap,
-   and Caddy for the upload API. No logrotate rule: RioBot rotates its own
-   log since malonek1/RioBot#110.
-2. **You** — launch the t4g.small (AL2023 arm64, 30 GB gp3, same key pair as
-   now), allocate an Elastic IP and attach it. Security group: 22, plus 80
-   and 443 for the upload API. Point the upload domain's A record at the
-   Elastic IP.
-3. **You** — run the bootstrap as `ec2-user` (command in
-   `deploy/README.md`, with the domain); set up LTWBot and RioBot too.
-   ARM means a fresh install, not a copy: RioBot runs on a hand-built
-   Python 3.11 (`/opt/Python-3.11.3`) — rebuild it or move it to uv. Check
-   what `codedeploy-agent` on the old box is for (not MonoBot — its deploy is
-   SSH from GitHub Actions) and whether the new box needs it.
-4. **Claude** — stop MonoBot on the old box, then copy the live-only files:
-   `main/.env`, `main/resources/config.json`, `main/resources/monobot.db`,
-   `main/resources/guilds/` (every community DB), and the replay archive
-   `main/resources/replays/` (~1.7 GB). Copy DBs with sqlite's backup, not a
-   raw cp of a live file.
-5. **Claude** — point the `DEPLOY_HOST` GitHub secret at the Elastic IP
-   (`DEPLOY_SSH_KEY` must have its public half in the new
-   `/home/monobot/.ssh/authorized_keys`), push or re-run the deploy, and
-   confirm: bot connects, "Serving 3 communities", match counts match, no
-   reconcile surprises. Then add `upload_api` to config.json, restart, and
-   check `https://<domain>/v1/me` answers 401.
-6. **You** — stop (don't terminate) the old instance; terminate after a
+1. ~~**Claude** — the scripts~~ Done: `deploy/bootstrap.sh` (MonoBot,
+   + Caddy), `deploy/new_box.sh` (all three bots), `deploy/pull_live_files.sh`
+   (cutover copy). No logrotate rule: RioBot rotates its own log since
+   malonek1/RioBot#110.
+2. **You** — in the console:
+   - Check how `RioBot_deployment_group` picks its instance (CodeDeploy →
+     Applications → RioBot → the group → Environment configuration: an EC2
+     tag, probably) and which **IAM role** the old box has (EC2 → instance →
+     Security). The CodeDeploy agent needs that role to work.
+   - Launch the t4g.small: AL2023 **arm64**, 30 GB gp3, same key pair, the
+     **same IAM role**, and **not** the RioBot deployment tag yet (with it,
+     the next RioBot deploy would start a second RioBot here).
+   - Allocate an Elastic IP and attach it. Security group: 22, 80, 443.
+   - Point the upload domain's A record at the Elastic IP.
+3. **You** — on the new box as `ec2-user`, with each repo's deploy public
+   key (old box: `/home/monobot/.ssh/authorized_keys`,
+   `/home/ltwbot/.ssh/authorized_keys`):
+   ```
+   curl -fsSL https://raw.githubusercontent.com/Pokebunny/MonoBot/main/deploy/new_box.sh \
+     | bash -s -- "<monobot pubkey>" "<ltwbot pubkey>" <upload domain>
+   ```
+4. **You** — let the new box reach the old one: on the new box
+   `ssh-keygen -t ed25519 -N "" -f ~/.ssh/old_box`, and append
+   `~/.ssh/old_box.pub` to the old box's `/home/ec2-user/.ssh/authorized_keys`.
+5. **You** — cutover. On the new box:
+   ```
+   curl -fsSLO https://raw.githubusercontent.com/Pokebunny/MonoBot/main/deploy/pull_live_files.sh
+   bash pull_live_files.sh <old box IP>
+   ```
+   It stops and disables all three bots on the old box, copies the files,
+   fixes ownership, and checks every database's match count against the
+   old box's.
+6. **You** — `sudo systemctl start monobot ltwbot`. For RioBot: move the
+   deployment tag from the old instance to the new one, then CodeDeploy →
+   the group's last deployment → **Retry** (or re-run RioBot's latest
+   "CD Pipeline" action). Its hooks install the deps and start the bot.
+7. **Claude** — set `DEPLOY_HOST` to the Elastic IP in the MonoBot and
+   LTWBot repos, re-run each deploy, and confirm: all three bots online,
+   "Serving 3 communities", no reconcile surprises. Then add `upload_api`
+   to config.json, restart, and check `https://<domain>/v1/me` answers 401.
+8. **You** — stop (don't terminate) the old instance; terminate it after a
    week of the new one running cleanly.
 
 ## Watch out for
 
-- Starting MonoBot on both boxes at once means two bots answering every
-  command — stop the old one before starting the new one.
+- Any bot running on both boxes at once answers every command twice.
+  `pull_live_files.sh` stops and disables the old copies before anything
+  starts on the new box; RioBot also needs its CodeDeploy tag moved, not
+  copied.
+- Rollback until the old box is terminated: on it,
+  `sudo systemctl enable --now monobot ltwbot`, move the RioBot tag back and
+  redeploy, and restore the `DEPLOY_HOST` secrets.
 - `/tmp` was tmpfs (RAM) on the old box; stage large copies in a home dir.
 - Update the local notes and scripts that hard-code the old IP
-  (`52.14.192.236`, e.g. `scripts/sync_live_db.py`).
+  (`52.14.192.236`: `scripts/sync_live_db.py`, the "MonoBot live DB sync"
+  scheduled task's target, `~/.ssh` known_hosts).

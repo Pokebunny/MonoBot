@@ -34,9 +34,10 @@ const int MB_DRAFT_TURN_SECONDS = 30;
 const int MB_OPT_IN_SECONDS = 10;
 const int MB_ASSIGN_SECONDS = 30;
 
-// No resource trading until 10:00 on the in-game clock (a house rule). The clock shows real
-// seconds at Faster speed, 1.4 game seconds each, and starts when the battle does.
-const fixed MB_TRADE_LOCK_GAME_SECONDS = 840.0;
+// No resource trading until 10:00 on the in-game clock (a house rule), through melee's own trade
+// lock (normally 3:30), so the panel shows its usual "opens at" text. Set at battle start; whether
+// the game counts it from that moment or from load is for the first lobby test to confirm.
+const int MB_TRADE_LOCK_SECONDS = 600;
 
 // Lifted-off Terran buildings start burning this long into the battle if they're all a player has.
 const fixed MB_FLOATER_GRACE_GAME_SECONDS = 168.0;  // 2:00 on the clock
@@ -1911,25 +1912,6 @@ void MB_ClearMeleeStart () {
     }
 }
 
-void MB_SetTrading (bool allowed) {
-    int p;
-    int q;
-    for (p = 1; p <= 8; p += 1) {
-        for (q = 1; q <= 8; q += 1) {
-            if (p != q && MB_TeamOf(p) != 0 && MB_TeamOf(p) == MB_TeamOf(q)) {
-                PlayerSetAlliance(p, c_allianceIdTrade, q, allowed);
-            }
-        }
-    }
-}
-
-bool MB_TradeUnlock (bool testConds, bool runActions) {
-    Wait(MB_TRADE_LOCK_GAME_SECONDS, c_timeGame);
-    MB_SetTrading(true);
-    MB_Say(PlayerGroupAll(), MB_Text("Resource trading is now allowed."));
-    return true;
-}
-
 bool MB_IsCountedStructure (string type) {
     return type != "CreepTumor" && type != "CreepTumorBurrowed" && type != "CreepTumorQueen"
         && type != "AutoTurret" && type != "PointDefenseDrone" && type != "ForceField"
@@ -2279,10 +2261,9 @@ void MB_StartBattle () {
     MB_CreatePicksPanel();
     // Hatcheries spawn after the pick phase rather than at load, so their creep catches up fast.
     CreepSetSpeed(c_creepSpeedGrowth, 1000.0);
-    MB_SetTrading(false);
+    UISetResourceTradeCountdownTime(MB_TRADE_LOCK_SECONDS);
     MB_Say(PlayerGroupAll(), MB_Text("Resource trading unlocks at 10:00. Good luck!"));
     GameSetMissionTimePaused(false);
-    TriggerExecute(TriggerCreate("MB_TradeUnlock"), false, false);
     TriggerExecute(TriggerCreate("MB_WatchBattle"), false, false);
     Wait(8.0, c_timeGame);
     CreepSetSpeed(c_creepSpeedGrowth, 100.0);

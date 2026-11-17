@@ -42,18 +42,22 @@ def _uploader(tmp_path, folder, since):
 
 def test_peek_reads_the_map_and_teams_without_sc2reader():
     with open(REAL_REPLAY, "rb") as f:
-        assert peek(f.read()) == ("Monobattle LotV - Map Rotation", [4, 4])
+        assert peek(f.read()) == ("Monobattle LotV - Map Rotation", [4, 4], False)
 
 
 def test_only_what_could_be_a_monobattle_is_sent(monkeypatch):
-    for title, teams, send in [
-        ("Monobattle LotV - Map Rotation", [4, 4], True),
-        ("Ulrena LE", [4, 4], True),  # maybe a MonoBattle mod game: the server decides
-        ("Ulrena LE", [1, 1], False),
-        ("Dead of Night", [2], False),
+    for title, teams, blizzard_map, send in [
+        ("Monobattle LotV - Map Rotation", [4, 4], False, True),
+        # The mod clears the Blizzard-map flag even on a melee map: the server decides.
+        ("Brass Devil", [4, 4], False, True),
+        ("Brass Devil", [4, 4], True, False),  # an ordinary 4v4 on it
+        ("Scythe of Amon", [4, 4], True, False),  # co-op, AI included
+        ("Ulrena LE", [1, 1], True, False),
+        ("Dead of Night", [2], True, False),
     ]:
-        monkeypatch.setattr(monobot_uploader, "peek", lambda _data, r=(title, teams): r)
-        assert worth_sending(b"")[0] is send, (title, teams)
+        result = monobot_uploader.Peek(title, teams, blizzard_map)
+        monkeypatch.setattr(monobot_uploader, "peek", lambda _data, r=result: r)
+        assert worth_sending(b"")[0] is send, result
 
 
 def test_a_replay_it_cannot_read_is_sent_anyway():
@@ -63,7 +67,7 @@ def test_a_replay_it_cannot_read_is_sent_anyway():
 def test_a_skipped_replay_is_not_read_again(tmp_path, monkeypatch):
     folder = _folder(tmp_path)
     _write(folder, "Ulrena LE.SC2Replay")
-    monkeypatch.setattr(monobot_uploader, "peek", lambda _data: ("Ulrena LE", [1, 1]))
+    monkeypatch.setattr(monobot_uploader, "peek", lambda _data: monobot_uploader.Peek("Ulrena LE", [1, 1], True))
     uploader, sent = _uploader(tmp_path, folder, since=0)
     uploader.scan()
     uploader.scan()

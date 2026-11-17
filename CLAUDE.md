@@ -156,7 +156,9 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   melee map, so `matches.mod_version` (set from the markers) is what marks it:
   `storage.is_monobattle` keeps a game only if it has markers or is on the
   arcade map. The uploader can't see markers (it peeks at `replay.details`
-  only, stdlib), so it sends every arcade-map game and every 4v4.
+  only, stdlib; the mod is just a dependency hash that changes each publish),
+  so it sends every arcade-map game and every 4v4 whose `m_isBlizzardMap` is
+  clear, which the mod clears even on a Blizzard melee map.
 - `scripts/` (repo root) — one-shot utilities, e.g. `backfill_archive.py` to
   seed the database from a folder of replays (idempotent, dedupes by hash).
   `reparse_stored.py` re-applies parser improvements to stored games

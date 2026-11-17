@@ -39,9 +39,10 @@ what happened, e.g. `stored on BGH as match #1520` or `already on Mono`.
 - It decides what to send by looking inside each replay (map name and team
   sizes, read in well under a millisecond), not by file name: a MonoBattle
   mod game is named after whichever melee map it was played on. It sends
-  anything on the Monobattle arcade map and any 4v4, which may be a mod game
-  that only the bot can confirm. Everything else (1v1, co-op, 2v2...) never
-  leaves your computer and logs as `skipped, not a monobattle (1v1 on ...)`.
+  anything on the Monobattle arcade map, and any 4v4 not marked as a
+  Blizzard map (the mod clears that mark even on a melee map), which the bot
+  then confirms. Everything else (1v1, co-op, ladder 4v4...) never leaves
+  your computer and logs as `skipped, not a monobattle (1v1 on ...)`.
   A replay it can't read is sent anyway, so the bot decides.
 - It logs to `~/.monobot_uploader.log` as well as the console.
 

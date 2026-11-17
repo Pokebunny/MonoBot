@@ -1,7 +1,7 @@
 """Watch the SC2 replay folders and send new monobattle replays to MonoBot's
-upload API: anything on the arcade map, and any 4v4 (it may be a MonoBattle
-mod game, which only the server can confirm). Standard library only, so it
-runs on any Python 3.10+.
+upload API: anything on the arcade map, and any 4v4 off a Blizzard map (it
+may be a MonoBattle mod game, which only the server can confirm). Standard
+library only, so it runs on any Python 3.10+.
 
     python monobot_uploader.py --server https://... --token ...   # first run saves both
     python monobot_uploader.py                                    # then just this
@@ -25,6 +25,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
+from typing import NamedTuple
 
 logger = logging.getLogger("monobot_uploader")
 
@@ -184,29 +185,41 @@ class _Versioned:
         raise ValueError(f"unknown versioned tag {tag}")
 
 
-def peek(data: bytes) -> tuple[str, list[int]]:
-    """(map title, players per team, largest first) from a replay's bytes.
-    Field numbers are replay.details' in s2protocol: 0 players, 1 title; a
-    player's 5 team, 7 observer."""
+class Peek(NamedTuple):
+    title: str
+    teams: list[int]  # players per team, largest first
+    blizzard_map: bool
+
+
+def peek(data: bytes) -> Peek:
+    """What replay.details says. Field numbers are s2protocol's: 0 players,
+    1 title, 4 m_isBlizzardMap; a player's 5 team, 7 observer."""
     details = _Versioned(_mpq_file(data, "replay.details")).value()
     teams: dict[int, int] = {}
     for player in details.get(0) or []:
         if not player.get(7):
             teams[player.get(5)] = teams.get(player.get(5), 0) + 1
-    return details[1].decode("utf-8", "replace"), sorted(teams.values(), reverse=True)
+    return Peek(details[1].decode("utf-8", "replace"), sorted(teams.values(), reverse=True), bool(details.get(4)))
 
 
 def worth_sending(data: bytes) -> tuple[bool, str]:
-    """Whether the server could keep this game, and why not. A 4v4 on any
-    other map is sent: it may be a MonoBattle mod game, which only the
-    server's full parse can see. A replay this can't read is sent too."""
+    """Whether the server could keep this game, and why not.
+
+    The MonoBattle mod can't be seen here (it's one dependency hash among
+    eight, new with every publish), but it clears m_isBlizzardMap even on a
+    Blizzard melee map: all 4 mod test games did, while all 361 of the
+    owner's 4v4s flagged as Blizzard maps were co-op or ladder. So a 4v4
+    off a Blizzard map is sent and the server's parse decides. A replay this
+    can't read is sent too."""
     try:
-        title, teams = peek(data)
+        title, teams, blizzard_map = peek(data)
     except Exception as e:  # an odd file costs the server a parse, never a game
         logger.debug("Couldn't peek at a replay (%s); sending it", e)
         return True, ""
-    if title.lower().startswith(ARCADE_MAP_PREFIX.lower()) or teams == [4, 4]:
+    if title.lower().startswith(ARCADE_MAP_PREFIX.lower()):
         return True, ""
+    if teams == [4, 4]:
+        return (False, f"4v4 on {title}, a Blizzard map without the mod") if blizzard_map else (True, "")
     return False, f"{'v'.join(map(str, teams)) or 'no players'} on {title}"
 
 

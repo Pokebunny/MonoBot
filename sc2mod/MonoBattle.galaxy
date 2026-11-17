@@ -837,25 +837,31 @@ bool MB_OnUnitCreated (bool testConds, bool runActions) {
 }
 
 //--------------------------------------------------------------------------------------------------
-// Pick panel: a title, a 5x4 grid of buttons and an info line, one panel per player.
+// Pick panel: a title, a 4-column grid of up to 20 buttons and an info block beneath, one panel per
+// player. Buttons are 230 wide: at the game's button font that fits about 18 characters, enough for
+// "Captains Draft (8)" and "Hellion/Hellbat".
 //--------------------------------------------------------------------------------------------------
+const int MB_PANEL_COLUMNS = 4;
+const int MB_BUTTON_WIDTH = 230;
+const int MB_BUTTON_HEIGHT = 56;
+
 void MB_CreatePanel (int p) {
     int i;
     int c;
-    gv_dialog[p] = DialogCreate(720, 460, c_anchorCenter, 0, 0, false);
+    gv_dialog[p] = DialogCreate(1040, 640, c_anchorCenter, 0, 0, false);
     gv_title[p] = DialogControlCreate(gv_dialog[p], c_triggerControlTypeLabel);
-    DialogControlSetSize(gv_title[p], PlayerGroupAll(), 680, 40);
-    DialogControlSetPosition(gv_title[p], PlayerGroupAll(), c_anchorTopLeft, 20, 24);
+    DialogControlSetSize(gv_title[p], PlayerGroupAll(), 960, 40);
+    DialogControlSetPosition(gv_title[p], PlayerGroupAll(), c_anchorTopLeft, 40, 36);
     for (i = 1; i <= MB_BUTTONS; i += 1) {
         c = DialogControlCreate(gv_dialog[p], c_triggerControlTypeButton);
-        DialogControlSetSize(c, PlayerGroupAll(), 128, 50);
-        DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 20 + ModI(i - 1, 5) * 136, 72 + ((i - 1) / 5) * 58);
+        DialogControlSetSize(c, PlayerGroupAll(), MB_BUTTON_WIDTH, MB_BUTTON_HEIGHT);
+        DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 40 + ModI(i - 1, MB_PANEL_COLUMNS) * (MB_BUTTON_WIDTH + 10), 90 + ((i - 1) / MB_PANEL_COLUMNS) * (MB_BUTTON_HEIGHT + 8));
         DialogControlSetVisible(c, PlayerGroupAll(), false);
         gv_button[p][i] = c;
     }
     gv_info[p] = DialogControlCreate(gv_dialog[p], c_triggerControlTypeLabel);
-    DialogControlSetSize(gv_info[p], PlayerGroupAll(), 680, 140);
-    DialogControlSetPosition(gv_info[p], PlayerGroupAll(), c_anchorTopLeft, 20, 310);
+    DialogControlSetSize(gv_info[p], PlayerGroupAll(), 960, 190);
+    DialogControlSetPosition(gv_info[p], PlayerGroupAll(), c_anchorTopLeft, 40, 420);
     DialogSetVisible(gv_dialog[p], PlayerGroupSingle(p), true);
 }
 
@@ -1087,14 +1093,14 @@ void MB_Roll (int p, int raceChoice) {
 void MB_BlindButtons (int p) {
     MB_HideButtons(p);
     if (gv_rolls[p] == 0) {
-        MB_SetButton(p, 1, "Random (one repick)", true);
+        MB_SetButton(p, 1, "Random + repick", true);
         MB_SetButton(p, 2, "Terran", true);
         MB_SetButton(p, 3, "Zerg", true);
         MB_SetButton(p, 4, "Protoss", true);
     }
     else if (!gv_locked[p]) {
         MB_SetButton(p, 1, "Repick", true);
-        MB_SetButton(p, 2, "Lock in " + gv_unitLabel[gv_pick[p]], true);
+        MB_SetButton(p, 2, "Lock in", true);
     }
 }
 
@@ -1432,7 +1438,7 @@ void MB_AssignButtons (int t) {
         MB_SetButtonText(c, s, label, true);
     }
     for (k = 1; k <= gv_teamSize[t]; k += 1) {
-        MB_SetButtonText(c, 5 + k, MB_Text("Give to ") + MB_Name(gv_teamPlayers[t][k]), gv_selectedSlot[t] != 0);
+        MB_SetButtonText(c, MB_PANEL_COLUMNS + k, MB_Text("To ") + MB_Name(gv_teamPlayers[t][k]), gv_selectedSlot[t] != 0);
     }
 }
 
@@ -1447,8 +1453,8 @@ void MB_AssignClick (int p, int i) {
     if (i >= 1 && i <= gv_teamUnitCount[t]) {
         gv_selectedSlot[t] = i;
     }
-    else if (i >= 6 && i - 5 <= gv_teamSize[t] && gv_selectedSlot[t] != 0) {
-        target = gv_teamPlayers[t][i - 5];
+    else if (i > MB_PANEL_COLUMNS && i - MB_PANEL_COLUMNS <= gv_teamSize[t] && gv_selectedSlot[t] != 0) {
+        target = gv_teamPlayers[t][i - MB_PANEL_COLUMNS];
         for (s = 1; s <= gv_teamUnitCount[t]; s += 1) {
             if (gv_assignee[t][s] == target) {
                 gv_assignee[t][s] = 0;  // a player holds one unit; reassigning frees the old one
@@ -1735,10 +1741,11 @@ void MB_CreatePicksPanel () {
     int k;
     int p;
     int c;
-    gv_picksDialog = DialogCreate(300, 180, c_anchorTopLeft, 0, 45, false);
+    // Slots are 110 wide so names fit under the portraits; the button is tall enough for its label.
+    gv_picksDialog = DialogCreate(570, 200, c_anchorTopLeft, 0, 45, false);
     DialogSetImageVisible(gv_picksDialog, false);
     gv_picksToggle = DialogControlCreate(gv_picksDialog, c_triggerControlTypeButton);
-    DialogControlSetSize(gv_picksToggle, PlayerGroupAll(), 64, 30);
+    DialogControlSetSize(gv_picksToggle, PlayerGroupAll(), 100, 44);
     DialogControlSetPosition(gv_picksToggle, PlayerGroupAll(), c_anchorTopLeft, 0, 0);
     DialogControlSetPropertyAsText(gv_picksToggle, c_triggerControlPropertyText, PlayerGroupAll(), MB_Text("Picks"));
     for (t = 1; t <= 2; t += 1) {
@@ -1749,14 +1756,14 @@ void MB_CreatePicksPanel () {
             }
             c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
             DialogControlSetSize(c, PlayerGroupAll(), 48, 48);
-            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 70 + (k - 1) * 58, 4 + (t - 1) * 74);
+            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 141 + (k - 1) * 110, 4 + (t - 1) * 84);
             DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), gv_unitIcon[gv_pick[p]]);
             DialogControlSetPropertyAsText(c, c_triggerControlPropertyTooltip, PlayerGroupAll(), MB_Text(gv_unitLabel[gv_pick[p]] + " - ") + MB_Name(p));
             DialogControlSetPropertyAsBool(c, c_triggerControlPropertyAcceptMouseTarget, PlayerGroupAll(), true);
             gv_picksPortrait[t][k] = c;
             c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeLabel);
-            DialogControlSetSize(c, PlayerGroupAll(), 56, 20);
-            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 66 + (k - 1) * 58, 52 + (t - 1) * 74);
+            DialogControlSetSize(c, PlayerGroupAll(), 106, 28);
+            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 112 + (k - 1) * 110, 52 + (t - 1) * 84);
             DialogControlSetPropertyAsText(c, c_triggerControlPropertyText, PlayerGroupAll(), TextWithColor(MB_Name(p), ColorFromIndex(PlayerGetColorIndex(p, false), c_teamColorDiffuse)));
             gv_picksName[t][k] = c;
         }

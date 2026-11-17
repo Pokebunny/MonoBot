@@ -48,7 +48,7 @@ only the Editor's compiler and a real game can prove them.
    The clock starts at 0:00. The **picks panel** appears in the top-left
    corner, as on the old map: a small portrait per player (team 1's row above
    team 2's), the player's name in their colour and their unit on hover, and a
-   Picks button that collapses it. It's shown to everyone, observers included.
+   small button at its left that collapses it. It's shown to everyone, observers included.
 5. **End.** A team with no structures left, or no players left, loses. Every
    game ends with Victory/Defeat. Typing **gg** opens a **concede vote** for
    your team (your gg counts as yes; 20 s); when every remaining player on the

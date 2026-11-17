@@ -1764,7 +1764,7 @@ void MB_RefreshInfo () {
 //--------------------------------------------------------------------------------------------------
 // Picks panel: a small portrait per player in the top-left corner, team 1's row above team 2's;
 // hovering one shows the player's name in their colour and their unit. Shown to everyone,
-// observers included; the Picks button collapses it for whoever presses it.
+// observers included; the small button at its left collapses it for whoever presses it.
 //--------------------------------------------------------------------------------------------------
 const int MB_PORTRAIT = 40;
 const int MB_PORTRAIT_GAP = 4;
@@ -1774,13 +1774,17 @@ void MB_CreatePicksPanel () {
     int k;
     int p;
     int c;
-    gv_picksDialog = DialogCreate(260, 90, c_anchorTopLeft, 0, 45, false);
+    gv_picksDialog = DialogCreate(230, 90, c_anchorTopLeft, 0, 45, false);
     DialogSetImageVisible(gv_picksDialog, false);
-    // 36 tall: shorter and the game reports the label as too tall for one line.
+    // The old map's toggle: a small icon under an invisible button, no text.
+    c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
+    DialogControlSetSize(c, PlayerGroupAll(), 24, 24);
+    DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 4, 8);
+    DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), "Assets\\Textures\\ui_battlenet_glue_chatpanel_minimizehover.dds");
     gv_picksToggle = DialogControlCreate(gv_picksDialog, c_triggerControlTypeButton);
-    DialogControlSetSize(gv_picksToggle, PlayerGroupAll(), 72, 36);
+    DialogControlSetSize(gv_picksToggle, PlayerGroupAll(), 32, 40);
     DialogControlSetPosition(gv_picksToggle, PlayerGroupAll(), c_anchorTopLeft, 0, 0);
-    DialogControlSetPropertyAsText(gv_picksToggle, c_triggerControlPropertyText, PlayerGroupAll(), MB_Text("Picks"));
+    DialogControlFadeTransparency(gv_picksToggle, PlayerGroupAll(), 0.0, 100.0);
     for (t = 1; t <= 2; t += 1) {
         for (k = 1; k <= gv_teamSize[t]; k += 1) {
             p = gv_teamPlayers[t][k];
@@ -1789,7 +1793,7 @@ void MB_CreatePicksPanel () {
             }
             c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
             DialogControlSetSize(c, PlayerGroupAll(), MB_PORTRAIT, MB_PORTRAIT);
-            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 78 + (k - 1) * (MB_PORTRAIT + MB_PORTRAIT_GAP), (t - 1) * (MB_PORTRAIT + MB_PORTRAIT_GAP));
+            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 38 + (k - 1) * (MB_PORTRAIT + MB_PORTRAIT_GAP), (t - 1) * (MB_PORTRAIT + MB_PORTRAIT_GAP));
             DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), gv_unitIcon[gv_pick[p]]);
             DialogControlSetPropertyAsText(c, c_triggerControlPropertyTooltip, PlayerGroupAll(), TextWithColor(MB_Name(p), ColorFromIndex(PlayerGetColorIndex(p, false), c_teamColorDiffuse)) + MB_Text(" - " + gv_unitLabel[gv_pick[p]]));
             DialogControlSetPropertyAsBool(c, c_triggerControlPropertyAcceptMouseTarget, PlayerGroupAll(), true);

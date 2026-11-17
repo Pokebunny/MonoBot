@@ -43,7 +43,7 @@ only the Editor's compiler and a real game can prove them.
    Random roll and repick, every Pick Three offer and choice, the draft as it
    happens and each captain's assignments, both teams, nothing hidden.
    Players never see it.
-4. **Preview.** Every pick, both teams, for 4 s, then a 3-2-1 with the game's
+4. **Preview.** Every pick, both teams, for 7 s, then a 3-2-1 with the game's
    countdown sounds. (The game's own 3-2-1 plays at load, before anyone has
    picked, so the mod hides it.)
 5. **Battle.** Each player's race is set to their pick's, their pick and its

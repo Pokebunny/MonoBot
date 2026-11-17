@@ -39,7 +39,7 @@ const int MB_ASSIGN_SECONDS = 30;
 // clock shows real seconds at Faster speed, 1.4 game seconds each: 10:00 = 840. The panel's own
 // countdown therefore starts at 14:00 and runs fast, reaching zero as the clock hits 10:00.
 const int MB_TRADE_LOCK_SECONDS = 840;
-const fixed MB_PREVIEW_SECONDS = 4.0;   // the picks preview before the 3-2-1
+const fixed MB_PREVIEW_SECONDS = 7.0;   // the picks preview before the 3-2-1: 10 s on screen in all
 
 // Lifted-off Terran buildings start burning this long into the battle if they're all a player has.
 const fixed MB_FLOATER_GRACE_GAME_SECONDS = 168.0;  // 2:00 on the clock
@@ -2043,23 +2043,25 @@ void MB_RefreshInfo () {
 // observers included; the small button at its left collapses it for whoever presses it.
 //--------------------------------------------------------------------------------------------------
 const int MB_PORTRAIT = 40;
-const int MB_PORTRAIT_FRAME = 4;  // colour showing around the portrait
-const int MB_PORTRAIT_PITCH = 52;
+const int MB_PORTRAIT_FRAME = 2;  // colour showing around the portrait
+const int MB_PORTRAIT_PITCH = 48;
+const int MB_PICKS_PAD = 6;       // from the screen corner
+const int MB_PICKS_LEFT = 36;     // portraits start right of the toggle
 
 void MB_CreatePicksPanel () {
     int t;
     int k;
     int p;
     int c;
-    gv_picksDialog = DialogCreate(250, 110, c_anchorTopLeft, 0, 45, false);
+    gv_picksDialog = DialogCreate(MB_PICKS_LEFT + 4 * MB_PORTRAIT_PITCH + MB_PICKS_PAD, 2 * MB_PORTRAIT_PITCH + MB_PICKS_PAD, c_anchorTopLeft, 0, 0, false);
     DialogSetImageVisible(gv_picksDialog, false);
     // The old map's toggle: a small icon under an invisible button, no text.
     c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
     DialogControlSetSize(c, PlayerGroupAll(), 24, 24);
-    DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 4, 8);
+    DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, MB_PICKS_PAD, MB_PICKS_PAD + (MB_PORTRAIT + 2 * MB_PORTRAIT_FRAME - 24) / 2);
     DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), "Assets\\Textures\\ui_battlenet_glue_chatpanel_minimizehover.dds");
     gv_picksToggle = DialogControlCreate(gv_picksDialog, c_triggerControlTypeButton);
-    DialogControlSetSize(gv_picksToggle, PlayerGroupAll(), 32, 40);
+    DialogControlSetSize(gv_picksToggle, PlayerGroupAll(), MB_PICKS_LEFT - 2, MB_PORTRAIT_PITCH + MB_PICKS_PAD);
     DialogControlSetPosition(gv_picksToggle, PlayerGroupAll(), c_anchorTopLeft, 0, 0);
     DialogControlFadeTransparency(gv_picksToggle, PlayerGroupAll(), 0.0, 100.0);
     for (t = 1; t <= 2; t += 1) {
@@ -2070,14 +2072,14 @@ void MB_CreatePicksPanel () {
             }
             c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
             DialogControlSetSize(c, PlayerGroupAll(), MB_PORTRAIT + 2 * MB_PORTRAIT_FRAME, MB_PORTRAIT + 2 * MB_PORTRAIT_FRAME);
-            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 38 + (k - 1) * MB_PORTRAIT_PITCH, (t - 1) * MB_PORTRAIT_PITCH);
+            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, MB_PICKS_LEFT + (k - 1) * MB_PORTRAIT_PITCH, MB_PICKS_PAD + (t - 1) * MB_PORTRAIT_PITCH);
             DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), "Assets\\Textures\\white32.dds");
             DialogControlSetPropertyAsColor(c, c_triggerControlPropertyColor, PlayerGroupAll(), ColorFromIndex(PlayerGetColorIndex(p, false), c_teamColorDiffuse));
             DialogControlFadeTransparency(c, PlayerGroupAll(), 0.0, 85.0);  // a light tint: 15% colour (testing)
             gv_picksBack[t][k] = c;
             c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
             DialogControlSetSize(c, PlayerGroupAll(), MB_PORTRAIT, MB_PORTRAIT);
-            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 38 + MB_PORTRAIT_FRAME + (k - 1) * MB_PORTRAIT_PITCH, MB_PORTRAIT_FRAME + (t - 1) * MB_PORTRAIT_PITCH);
+            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, MB_PICKS_LEFT + MB_PORTRAIT_FRAME + (k - 1) * MB_PORTRAIT_PITCH, MB_PICKS_PAD + MB_PORTRAIT_FRAME + (t - 1) * MB_PORTRAIT_PITCH);
             DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), gv_unitIcon[gv_pick[p]]);
             DialogControlSetPropertyAsText(c, c_triggerControlPropertyTooltip, PlayerGroupAll(), TextWithColor(MB_Name(p), ColorFromIndex(PlayerGetColorIndex(p, false), c_teamColorDiffuse)) + MB_Text(" - " + gv_unitLabel[gv_pick[p]]));
             DialogControlSetPropertyAsBool(c, c_triggerControlPropertyAcceptMouseTarget, PlayerGroupAll(), true);

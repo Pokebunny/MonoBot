@@ -35,9 +35,10 @@ const int MB_OPT_IN_SECONDS = 10;
 const int MB_ASSIGN_SECONDS = 30;
 
 // No resource trading until 10:00 on the in-game clock (a house rule), through melee's own trade
-// lock (normally 3:30), so the panel shows its usual "opens at" text. Set at battle start; whether
-// the game counts it from that moment or from load is for the first lobby test to confirm.
-const int MB_TRADE_LOCK_SECONDS = 600;
+// lock (normally 3:30), set at battle start. The lock counts game seconds (seen in testing), and the
+// clock shows real seconds at Faster speed, 1.4 game seconds each: 10:00 = 840. The panel's own
+// countdown therefore starts at 14:00 and runs fast, reaching zero as the clock hits 10:00.
+const int MB_TRADE_LOCK_SECONDS = 840;
 
 // Lifted-off Terran buildings start burning this long into the battle if they're all a player has.
 const fixed MB_FLOATER_GRACE_GAME_SECONDS = 168.0;  // 2:00 on the clock

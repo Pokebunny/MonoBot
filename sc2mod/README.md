@@ -158,8 +158,9 @@ Run `MonoBattle.galaxy` on a 4v4 melee map through each mode, then check:
       as-is from the old map, it relies on the unit-created event for trained units
 - [ ] Resource trading is refused before 10:00 and works after
 - [ ] Killing a team's last structure ends the game for everyone
-- [ ] The resource-trade panel shows, disabled, with "opens at 10:00" (melee's own lock,
-      normally 3:30); check it counts from battle start, not from load
+- [ ] The resource-trade panel shows, disabled (melee's own lock, normally 3:30), and
+      opens when the clock reaches 10:00. Its own countdown starts at 14:00 because it
+      counts game seconds
 - [ ] gg opens the concede vote for your team only; all yes ends the game,
       a failed vote can't be restarted for a minute, and every player's replay
       shows the result

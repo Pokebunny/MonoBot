@@ -37,8 +37,24 @@ what happened, e.g. `stored on BGH as match #1520` or `already on Mono`.
   (repeatable) for anything else.
 - It picks replays by file name: SC2 names them after the map, and the
   monobattle map's name starts with `Monobattle`.
-- To start it with Windows, put a shortcut to `pythonw monobot_uploader.py` in
-  `shell:startup`.
+- It logs to `~/.monobot_uploader.log` as well as the console.
+
+### Keep it running (Windows)
+
+After the first run has saved your settings, start it hidden at every login:
+
+1. Press Win+R, type `shell:startup`, press Enter.
+2. Right-click in that folder → New → Shortcut. For the location, enter
+   `pythonw` followed by the full path to `monobot_uploader.py` in quotes,
+   e.g. `pythonw "C:\Users\you\MonoBotUploader\monobot_uploader.py"`.
+   (`pythonw` is Python without a window; use its full path, e.g.
+   `C:\Users\you\AppData\Local\Programs\Python\Python314\pythonw.exe`, if
+   plain `pythonw` isn't found.)
+3. Name it "MonoBot Uploader", then double-click it once to start it now.
+
+To check it's working, open `%USERPROFILE%\.monobot_uploader.log`. To stop
+it, end `pythonw.exe` in Task Manager (and delete the shortcut to stop it
+starting at login).
 
 Uploads count toward your Chronicler achievement. `/uploadtoken` again gives
 you a new token and turns off the old one; `/uploadtoken revoke` turns it off.

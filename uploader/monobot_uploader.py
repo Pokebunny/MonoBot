@@ -13,6 +13,7 @@ import glob
 import hashlib
 import json
 import logging
+import logging.handlers
 import os
 import sys
 import time
@@ -23,6 +24,7 @@ import urllib.request
 logger = logging.getLogger("monobot_uploader")
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".monobot_uploader.json")
+LOG_PATH = os.path.join(os.path.expanduser("~"), ".monobot_uploader.log")
 # SC2 names a saved replay after its map, and every monobattle is played on
 # one arcade map whose name starts with this.
 DEFAULT_NAME_PREFIX = "Monobattle"
@@ -217,7 +219,15 @@ def main(argv=None) -> int:
     parser.add_argument("--once", action="store_true", help="scan once and exit")
     parser.add_argument("--config", default=CONFIG_PATH, help=f"settings file (default {CONFIG_PATH})")
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    # Also a file, since pythonw (run at login, no window) has no console.
+    handlers: list[logging.Handler] = [
+        logging.handlers.RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=1, encoding="utf-8")
+    ]
+    if sys.stderr is not None:
+        handlers.append(logging.StreamHandler())
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S", handlers=handlers
+    )
 
     config = load_json(args.config)
     if args.server:

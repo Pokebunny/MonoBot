@@ -31,8 +31,9 @@ only the Editor's compiler and a real game can prove them.
    - *Single Draft*: a pool of 20 from all 42, picked one player at a time in
      snake order (A-B-B-A-A-B-B-A), 30 s a turn.
    - *Pick Three* (30 s): one unit of each race offered, never the same unit
-     twice in a team; everyone picks at once. Allies see each other's offers
-     and choices.
+     twice in a team; everyone picks at once and can switch until they press
+     Lock in. Allies see each other's offers and choices.
+   - Blind Random and Pick Three end early once everyone has locked in.
    - *Captains Draft*: volunteers for 10 s, then a random volunteer per team
      (a random player if none) drafts their team's units from the shared pool
      of 20 in snake order, 30 s a pick, then assigns them to players in 30 s.
@@ -157,6 +158,7 @@ Run `MonoBattle.galaxy` on a 4v4 melee map through each mode, then check:
       as-is from the old map, it relies on the unit-created event for trained units
 - [ ] Resource trading is refused before 10:00 and works after
 - [ ] Killing a team's last structure ends the game for everyone
+- [ ] The resource-trade button is hidden or blocked before 10:00 and works after
 - [ ] gg opens the concede vote for your team only; all yes ends the game,
       a failed vote can't be restarted for a minute, and every player's replay
       shows the result

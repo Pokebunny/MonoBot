@@ -1004,6 +1004,17 @@ bool MB_AllVoted () {
     return true;
 }
 
+// Everyone still in has locked in their pick: the pick phase can end early.
+bool MB_AllLocked () {
+    int p;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) != 0 && MB_IsPlaying(p) && !gv_locked[p]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Most votes wins; ties (including nobody voting) are broken at random.
 int MB_VoteResult () {
     int best;
@@ -1134,7 +1145,7 @@ void MB_RunBlind () {
     }
     MB_RefreshInfo();
     left = MB_BLIND_SECONDS;
-    while (left > 0) {
+    while (left > 0 && !MB_AllLocked()) {
         MB_TitleAll(MB_Text("Blind Random - " + IntToString(left) + " s"));
         Wait(1.0, c_timeReal);
         left -= 1;
@@ -1179,24 +1190,39 @@ void MB_DealOffers (int t) {
     }
 }
 
+// Buttons 1-3 are the offers (the current choice marked), 4 locks it in; locked, all go grey.
 void MB_PickThreeButtons (int p) {
     int i;
     MB_HideButtons(p);
     for (i = 1; i <= 3; i += 1) {
         if (gv_pick[p] == gv_offer[p][i]) {
-            MB_SetButton(p, i, "> " + gv_unitLabel[gv_offer[p][i]] + " <", true);
+            MB_SetButton(p, i, "> " + gv_unitLabel[gv_offer[p][i]] + " <", !gv_locked[p]);
         }
         else {
-            MB_SetButton(p, i, gv_unitLabel[gv_offer[p][i]], true);
+            MB_SetButton(p, i, gv_unitLabel[gv_offer[p][i]], !gv_locked[p]);
         }
+    }
+    if (gv_locked[p]) {
+        MB_SetButton(p, 4, "Locked in", false);
+    }
+    else {
+        MB_SetButton(p, 4, "Lock in", gv_pick[p] != 0);
     }
 }
 
 void MB_PickThreeClick (int p, int i) {
-    if (i < 1 || i > 3 || gv_offer[p][i] == 0) {
+    if (gv_locked[p] || gv_offer[p][1] == 0) {
         return;
     }
-    gv_pick[p] = gv_offer[p][i];
+    if (i >= 1 && i <= 3) {
+        gv_pick[p] = gv_offer[p][i];
+    }
+    else if (i == 4 && gv_pick[p] != 0) {
+        gv_locked[p] = true;
+    }
+    else {
+        return;
+    }
     MB_PickThreeButtons(p);
     MB_RefreshInfo();
 }
@@ -1215,7 +1241,7 @@ void MB_RunPickThree () {
     }
     MB_RefreshInfo();
     left = MB_PICK_THREE_SECONDS;
-    while (left > 0) {
+    while (left > 0 && !MB_AllLocked()) {
         MB_TitleAll(MB_Text("Pick Three - " + IntToString(left) + " s"));
         Wait(1.0, c_timeReal);
         left -= 1;
@@ -1664,6 +1690,9 @@ text MB_ObserverLine (int p) {
         s = s + gv_unitLabel[gv_offer[p][1]] + " / " + gv_unitLabel[gv_offer[p][2]] + " / " + gv_unitLabel[gv_offer[p][3]];
         if (gv_pick[p] != 0) {
             s = s + " -> " + gv_unitLabel[gv_pick[p]];
+            if (gv_locked[p]) {
+                s = s + " (locked)";
+            }
         }
     }
     else if (gv_phase == MB_PHASE_OPT_IN) {

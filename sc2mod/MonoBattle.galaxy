@@ -1988,6 +1988,7 @@ void MB_RefreshInfo () {
     int r;
     int k;
     int q;
+    int[3] shown;
     for (p = 1; p <= 8; p += 1) {
         t = MB_TeamOf(p);
         if (t == 0) {
@@ -2002,11 +2003,14 @@ void MB_RefreshInfo () {
             }
         }
         else if (gv_phase == MB_PHASE_SINGLE) {
-            for (r = 1; r <= 2; r += 1) {
-                for (k = 1; k <= gv_teamSize[r]; k += 1) {
-                    q = gv_teamPlayers[r][k];
-                    MB_SetStrip(p, r, k, gv_pick[q], MB_StripName(q, gv_pick[q] != 0));
-                }
+            // Each team's row in draft order.
+            shown[1] = 0;
+            shown[2] = 0;
+            for (k = 1; k <= gv_orderCount; k += 1) {
+                q = gv_order[k];
+                r = MB_TeamOf(q);
+                shown[r] += 1;
+                MB_SetStrip(p, r, shown[r], gv_pick[q], MB_StripName(q, gv_pick[q] != 0));
             }
         }
         else if (gv_phase == MB_PHASE_CAPTAIN_DRAFT) {

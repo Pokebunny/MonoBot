@@ -43,6 +43,15 @@ class GuildConfig(BaseModel):
     # Guilds whose uploads (and winner confirmations) also count here. One way.
     counts_games_from: list[int] = []
 
+    # Webhooks (the id in the webhook URL) whose .SC2Replay posts in this
+    # community's replay channels are ingested, e.g. by uploader/. Other bot
+    # and webhook messages are ignored.
+    upload_webhook_ids: list[int] = []
+
+    # Guilds a webhook upload is recorded in instead of here when every player
+    # is linked to a member of that guild; the first that qualifies wins.
+    route_member_games_to: list[int] = []
+
 
 class BotConfig(GuildConfig):
     """Top-level fields are the home community's; `guilds` are the others."""

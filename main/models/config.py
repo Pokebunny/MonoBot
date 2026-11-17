@@ -43,14 +43,23 @@ class GuildConfig(BaseModel):
     # Guilds whose uploads (and winner confirmations) also count here. One way.
     counts_games_from: list[int] = []
 
-    # Webhooks (the id in the webhook URL) whose .SC2Replay posts in this
-    # community's replay channels are ingested, e.g. by uploader/. Other bot
-    # and webhook messages are ignored.
-    upload_webhook_ids: list[int] = []
-
-    # Guilds a webhook upload is recorded in instead of here when every player
-    # is linked to a member of that guild; the first that qualifies wins.
+    # Guilds an upload-API game is recorded in instead of here when at least
+    # route_min_members of its players are linked to members of that guild
+    # (not all 8: new people join before they link); the first that qualifies wins.
     route_member_games_to: list[int] = []
+    route_min_members: int = 6
+
+
+class UploadApiConfig(BaseModel):
+    """The HTTP replay upload API (cogs/uploads.py, used by uploader/)."""
+
+    port: int | None = None  # None: off
+    # Loopback by default: a TLS proxy (deploy/README.md) faces the internet.
+    host: str = "127.0.0.1"
+    # Shown to players with their token, e.g. https://uploads.example.com
+    public_url: str | None = None
+    # The community uploads land in unless routed; None = home.
+    default_guild_id: int | None = None
 
 
 class BotConfig(GuildConfig):
@@ -58,3 +67,4 @@ class BotConfig(GuildConfig):
 
     home_guild_id: int | None = None  # None: home serves every unlisted server
     guilds: dict[int, GuildConfig] = {}
+    upload_api: UploadApiConfig = UploadApiConfig()

@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+import secrets
 import sqlite3
 import sys
 from collections import Counter
@@ -219,6 +220,10 @@ INSERT OR IGNORE INTO meta (key, value) VALUES ('achievement_epoch', datetime('n
 def hash_replay(data: bytes) -> str:
     """Content hash used to deduplicate uploads of the same replay file."""
     return hashlib.sha256(data).hexdigest()
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def content_key(match: MonobattleMatch) -> str:
@@ -520,6 +525,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS {s}idx_player_links_handle
 -- but users won't reproduce it, and "Rain"/"rain" must not be two claims.
 CREATE UNIQUE INDEX IF NOT EXISTS {s}idx_player_links_name_nocase
     ON player_links(sc2_name COLLATE NOCASE);
+
+-- Upload-API tokens, one per Discord user; only a SHA-256 of the token is kept.
+CREATE TABLE IF NOT EXISTS {s}upload_tokens (
+    discord_id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -1279,6 +1291,28 @@ class MatchStore:
     def discord_id_for_handle(self, toon_handle: str) -> str | None:
         row = self._conn.execute("SELECT discord_id FROM player_links WHERE toon_handle = ?", (toon_handle,)).fetchone()
         return row["discord_id"] if row else None
+
+    def new_upload_token(self, discord_id: str) -> str:
+        """A fresh upload-API token for this user, replacing any old one."""
+        token = secrets.token_urlsafe(32)
+        self._conn.execute(
+            "INSERT INTO upload_tokens (discord_id, token_hash) VALUES (?, ?) "
+            "ON CONFLICT(discord_id) DO UPDATE SET token_hash = excluded.token_hash, created_at = datetime('now')",
+            (discord_id, _token_hash(token)),
+        )
+        self._conn.commit()
+        return token
+
+    def upload_token_owner(self, token: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT discord_id FROM upload_tokens WHERE token_hash = ?", (_token_hash(token),)
+        ).fetchone()
+        return row["discord_id"] if row else None
+
+    def revoke_upload_token(self, discord_id: str) -> bool:
+        cur = self._conn.execute("DELETE FROM upload_tokens WHERE discord_id = ?", (discord_id,))
+        self._conn.commit()
+        return cur.rowcount > 0
 
     def has_replay(self, file_hash: str) -> bool:
         row = self._conn.execute("SELECT 1 FROM matches WHERE file_hash = ?", (file_hash,)).fetchone()

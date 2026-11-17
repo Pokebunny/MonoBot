@@ -1,10 +1,11 @@
-"""Watch the SC2 replay folders and post new monobattle replays to MonoBot's
-upload webhook. Standard library only, so it runs on any Python 3.10+.
+"""Watch the SC2 replay folders and send new monobattle replays to MonoBot's
+upload API. Standard library only, so it runs on any Python 3.10+.
 
-    python monobot_uploader.py --webhook https://discord.com/api/webhooks/...   # first run saves it
-    python monobot_uploader.py                                                  # then just this
+    python monobot_uploader.py --server https://... --token ...   # first run saves both
+    python monobot_uploader.py                                    # then just this
 
-The bot decides which server a game belongs to; this only finds and sends files.
+Get the command (token included) from the bot with /uploadtoken. The bot
+decides which server a game belongs to; this only finds and sends files.
 See README.md."""
 
 import argparse
@@ -16,8 +17,8 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
-import uuid
 
 logger = logging.getLogger("monobot_uploader")
 
@@ -28,9 +29,14 @@ DEFAULT_NAME_PREFIX = "Monobattle"
 POLL_SECONDS = 10
 # SC2 writes the file at game end; wait until it has stopped changing.
 SETTLE_SECONDS = 5
-# Past Discord's 10MB upload limit for a webhook (replays are ~0.1-2MB).
+# The server refuses bigger (real replays are 0.1-2 MB).
 MAX_BYTES = 10 * 1024 * 1024
 RETRY_DELAYS = (5, 30, 120)
+USER_AGENT = "MonoBotUploader/2"
+
+
+class BadToken(Exception):
+    """The server doesn't know this token: no point retrying."""
 
 
 def default_replay_roots() -> list[str]:
@@ -76,11 +82,53 @@ def save_json(path: str, data: dict) -> None:
     os.replace(tmp, path)
 
 
+def _request(server: str, token: str, path: str, data: bytes | None = None, headers: dict | None = None) -> dict:
+    request = urllib.request.Request(
+        server.rstrip("/") + path,
+        data=data,
+        method="POST" if data is not None else "GET",
+        headers={"Authorization": f"Bearer {token}", "User-Agent": USER_AGENT, **(headers or {})},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return json.loads(response.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            raise BadToken() from e
+        raise
+
+
+def check_token(server: str, token: str) -> str:
+    """The Discord name the token belongs to."""
+    return _request(server, token, "/v1/me")["user"]
+
+
+def post_replay(server: str, token: str, file_name: str, data: bytes) -> dict:
+    return _request(
+        server,
+        token,
+        "/v1/replays",
+        data,
+        {"Content-Type": "application/octet-stream", "X-Replay-Name": urllib.parse.quote(file_name, safe=" ()")},
+    )
+
+
+def describe(result: dict) -> str:
+    status = result.get("status")
+    if status == "stored":
+        return f"stored on {result.get('server') or 'the ladder'} as match #{result.get('match')}"
+    if status == "duplicate":
+        return f"already on {result.get('server') or 'the ladder'}"
+    if status == "rejected":
+        return f"not a ladder game ({result.get('reason')})"
+    return f"the bot couldn't read it ({result.get('reason') or status})"
+
+
 class Uploader:
     def __init__(self, config: dict, config_path: str = CONFIG_PATH, post=None):
         self.config = config
         self.config_path = config_path
-        self.post = post or post_to_webhook
+        self.post = post or post_replay
         self.uploaded: set[str] = set(config.get("uploaded", []))
         self.sizes: dict[str, int] = {}  # path -> size at the last scan
 
@@ -110,7 +158,8 @@ class Uploader:
         return [path for _, path in sorted(found)]
 
     def scan(self) -> int:
-        """Upload what's new; returns how many were sent."""
+        """Send what's new; returns how many the server answered. Raises
+        BadToken if the server refuses the token."""
         sent = 0
         for path in self.candidates():
             try:
@@ -123,37 +172,35 @@ class Uploader:
             if digest in self.uploaded:
                 continue
             if len(data) > MAX_BYTES:
-                logger.warning("Skipping %s: too big for a webhook (%d bytes)", path, len(data))
+                logger.warning("Skipping %s: too big (%d bytes)", path, len(data))
                 self._remember(digest)
                 continue
-            if self._send(path, data):
-                logger.info("Uploaded %s", os.path.basename(path))
+            result = self._send(path, data)
+            if result is not None:
+                logger.info("%s: %s", os.path.basename(path), describe(result))
                 self._remember(digest)
                 sent += 1
         return sent
 
-    def _send(self, path: str, data: bytes) -> bool:
+    def _send(self, path: str, data: bytes) -> dict | None:
         for delay in (*RETRY_DELAYS, None):
             try:
-                self.post(self.config["webhook_url"], os.path.basename(path), data, self.config.get("name"))
-                return True
-            except RateLimited as e:
-                time.sleep(e.retry_after)
+                return self.post(self.config["server_url"], self.config["token"], os.path.basename(path), data)
+            except BadToken:
+                raise
             except urllib.error.HTTPError as e:
-                if e.code in (401, 403, 404):
-                    logger.error("The webhook was refused (%s); ask an admin for a new URL", e.code)
-                    return False
-                if delay is None:
-                    logger.error("Giving up on %s for now (HTTP %s); will retry next start", path, e.code)
-                    return False
-                time.sleep(delay)
-            except (urllib.error.URLError, OSError) as e:
-                if delay is None:
-                    logger.error("Giving up on %s for now (%s); will retry next start", path, e)
-                    return False
-                logger.warning("Upload failed (%s); retrying in %ss", e, delay)
-                time.sleep(delay)
-        return False
+                if 400 <= e.code < 500:
+                    logger.error("The server refused %s (HTTP %s)", path, e.code)
+                    return None
+                problem = f"HTTP {e.code}"
+            except (urllib.error.URLError, OSError, ValueError) as e:
+                problem = str(e)
+            if delay is None:
+                logger.error("Giving up on %s for now (%s); it'll be retried next start", path, problem)
+                return None
+            logger.warning("Upload failed (%s); retrying in %ss", problem, delay)
+            time.sleep(delay)
+        return None
 
     def _remember(self, digest: str) -> None:
         self.uploaded.add(digest)
@@ -161,45 +208,10 @@ class Uploader:
         save_json(self.config_path, self.config)
 
 
-class RateLimited(Exception):
-    def __init__(self, retry_after: float):
-        self.retry_after = retry_after
-
-
-def post_to_webhook(url: str, file_name: str, data: bytes, username: str | None) -> None:
-    payload = {"username": username or "MonoBot Uploader", "allowed_mentions": {"parse": []}}
-    boundary = uuid.uuid4().hex
-    body = b"".join(
-        [
-            f'--{boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\n'
-            f"Content-Type: application/json\r\n\r\n".encode(),
-            json.dumps(payload).encode(),
-            f'\r\n--{boundary}\r\nContent-Disposition: form-data; name="files[0]"; filename="{file_name}"\r\n'
-            f"Content-Type: application/octet-stream\r\n\r\n".encode(),
-            data,
-            f"\r\n--{boundary}--\r\n".encode(),
-        ]
-    )
-    request = urllib.request.Request(
-        url + ("&" if "?" in url else "?") + "wait=true",
-        data=body,
-        method="POST",
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}", "User-Agent": "MonoBotUploader/1.0"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=60):
-            pass
-    except urllib.error.HTTPError as e:
-        if e.code == 429:
-            retry_after = float(json.loads(e.read() or b"{}").get("retry_after", 5))
-            raise RateLimited(retry_after) from e
-        raise
-
-
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Upload new monobattle replays to MonoBot.")
-    parser.add_argument("--webhook", help="the upload webhook URL from a MonoBot admin (saved for next time)")
-    parser.add_argument("--name", help="name shown on your uploads in Discord (saved)")
+    parser.add_argument("--server", help="the upload server address (saved for next time)")
+    parser.add_argument("--token", help="your token from /uploadtoken (saved for next time)")
     parser.add_argument("--folder", action="append", help="a replay folder to watch instead of the defaults (saved)")
     parser.add_argument("--backfill-days", type=float, help="also upload replays from the last N days")
     parser.add_argument("--once", action="store_true", help="scan once and exit")
@@ -208,19 +220,27 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 
     config = load_json(args.config)
-    if args.webhook:
-        config["webhook_url"] = args.webhook.strip()
-    if args.name:
-        config["name"] = args.name
+    if args.server:
+        config["server_url"] = args.server.strip()
+    if args.token:
+        config["token"] = args.token.strip()
     if args.folder:
         config["folders"] = args.folder
-    if not config.get("webhook_url"):
-        parser.error("no webhook saved yet: run once with --webhook <url>")
-    # Only games from here on: the first run doesn't flood the channel with history.
+    if not (config.get("server_url") and config.get("token")):
+        parser.error("no server/token saved yet: run the command /uploadtoken gives you")
+    # Only games from here on: the first run doesn't send years of history.
     config.setdefault("since", time.time())
     if args.backfill_days is not None:
         config["since"] = min(config["since"], time.time() - args.backfill_days * 86400)
     save_json(args.config, config)
+
+    try:
+        logger.info("Uploading as %s", check_token(config["server_url"], config["token"]))
+    except BadToken:
+        logger.error("The server doesn't know this token. Get a new one with /uploadtoken.")
+        return 1
+    except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
+        logger.warning("Can't reach %s right now (%s); will keep trying", config["server_url"], e)
 
     uploader = Uploader(config, args.config)
     folders = uploader.folders()
@@ -229,16 +249,19 @@ def main(argv=None) -> int:
         return 1
     for folder in folders:
         logger.info("Watching %s", folder)
-    if args.once:
-        # Settling needs two looks at each file.
-        uploader.candidates()
-        time.sleep(SETTLE_SECONDS)
-        uploader.scan()
-        return 0
     try:
+        if args.once:
+            # Settling needs two looks at each file.
+            uploader.candidates()
+            time.sleep(SETTLE_SECONDS)
+            uploader.scan()
+            return 0
         while True:
             uploader.scan()
             time.sleep(POLL_SECONDS)
+    except BadToken:
+        logger.error("The server stopped accepting this token. Get a new one with /uploadtoken.")
+        return 1
     except KeyboardInterrupt:
         return 0
 

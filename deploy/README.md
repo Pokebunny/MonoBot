@@ -82,8 +82,35 @@ LTWBot deploys to the same host from its own repo, with its own key and its own
 `DEPLOY_*` secrets. The two are independent: revoking one bot's key doesn't
 affect the other.
 
-Security group: allow inbound SSH (22) only; the bot makes outbound
-connections to Discord and needs nothing else open.
+Security group: allow inbound SSH (22), plus 80 and 443 if the replay upload
+API is on (next section). Otherwise the bot only makes outbound connections.
+
+## Replay upload API
+
+Players' desktop uploaders (`uploader/`) POST replays to the bot over HTTPS.
+The bot serves plain HTTP on 127.0.0.1 (`upload_api.port` in config.json), and
+Caddy sits in front to handle TLS, getting and renewing a Let's Encrypt
+certificate by itself. Let's Encrypt needs a DNS name, not a bare IP: point an
+A record (any domain you own, or a free one such as DuckDNS) at the Elastic IP.
+
+```bash
+# as ec2-user. Amazon Linux has no caddy package: use the static binary.
+curl -L "https://caddyserver.com/api/download?os=linux&arch=amd64" -o caddy  # arch=arm64 on Graviton
+sudo install -m 755 caddy /usr/local/bin/caddy
+sudo useradd --system --home-dir /var/lib/caddy --create-home --shell /sbin/nologin caddy
+sudo mkdir -p /etc/caddy
+echo 'uploads.example.com {
+    reverse_proxy 127.0.0.1:8080
+}' | sudo tee /etc/caddy/Caddyfile
+sudo curl -L https://raw.githubusercontent.com/caddyserver/dist/master/init/caddy.service \
+    -o /etc/systemd/system/caddy.service
+sudo systemctl daemon-reload && sudo systemctl enable --now caddy
+```
+
+Open 80 (the certificate challenge) and 443 in the security group, set
+`upload_api` in config.json (see `uploader/README.md`), and restart the bot.
+`curl https://uploads.example.com/v1/me` should answer 401 with an "unknown
+token" message.
 
 ## Database backups
 

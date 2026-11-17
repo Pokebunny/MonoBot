@@ -26,8 +26,13 @@ def _write(folder, name, data=b"replay", age=60):
 
 def _uploader(tmp_path, folder, since):
     sent = []
-    config = {"webhook_url": "https://example.invalid/hook", "folders": [str(folder)], "since": since}
-    uploader = Uploader(config, str(tmp_path / "config.json"), post=lambda _url, name, data, _user: sent.append(name))
+    config = {"server_url": "https://example.invalid", "token": "t", "folders": [str(folder)], "since": since}
+
+    def post(_server, _token, name, _data):
+        sent.append(name)
+        return {"status": "stored", "server": "Mono", "match": len(sent)}
+
+    uploader = Uploader(config, str(tmp_path / "config.json"), post=post)
     return uploader, sent
 
 

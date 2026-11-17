@@ -200,7 +200,12 @@ class ApproveGameView(ExpiringView):
         await self.cog._record(interaction.channel, match, self.data, self.file_hash, self.uploader)
 
 
-AUTO_UPLOAD_REACTIONS = {"stored": "✅", "duplicate": "🔁", "rejected": "⏭️", "failed": "❌"}
+class UploadOutcome(NamedTuple):
+    status: str  # stored / duplicate / rejected / failed
+    community: object  # Community the game was judged against
+    match_number: int | None = None
+    reason: str | None = None
+
 
 # Refuse an attachment this big before downloading it: far past what Discord
 # lets anyone upload without Nitro, and past any real batch of replays.
@@ -391,17 +396,13 @@ class Replays(CommunityCog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.guild is None or (message.author.bot and message.webhook_id is None):
+        if message.author.bot or message.guild is None:
             return
         if self.client.communities.for_guild(message.guild) is None:
             return
         self = self.at(message)
         watched = self._watched_channels()
         if watched and message.channel.id not in watched:
-            return
-        if message.webhook_id is not None:
-            if message.webhook_id in self.community.config.upload_webhook_ids:
-                await self._process_auto_uploads(message)
             return
         for attachment in message.attachments:
             # One bad upload must not skip the rest of the message's replays.
@@ -441,55 +442,43 @@ class Replays(CommunityCog):
             return
         await self._record(channel, match, data, file_hash, author)
 
-    async def _process_auto_uploads(self, message: discord.Message):
-        """Replays posted by an upload webhook: no prompts and no duplicate
-        notices (every player may run the uploader); a reaction says what
-        happened instead."""
-        for attachment in message.attachments:
-            if not attachment.filename.lower().endswith(".sc2replay"):
-                continue
-            try:
-                outcome = await self._auto_upload(message.channel, attachment, message.author)
-            except Exception:
-                logger.exception("Auto-upload of %s failed", attachment.filename)
-                outcome = "failed"
-            try:
-                await message.add_reaction(AUTO_UPLOAD_REACTIONS[outcome])
-            except discord.HTTPException:
-                logger.warning("Could not react to auto-upload %s", message.id)
-
-    async def _auto_upload(self, channel, attachment: discord.Attachment, author: discord.abc.User) -> str:
-        data = await attachment.read()
+    async def api_upload(self, file_name: str, data: bytes, author: discord.abc.User) -> UploadOutcome:
+        """A replay from the upload API (cogs/uploads.py), into this community
+        or the one route() picks. No prompts and no duplicate notices: every
+        player may run the uploader, and the caller is told the outcome."""
         file_hash = storage.hash_replay(data)
         if self.store.has_replay(file_hash):
-            return "duplicate"
+            return UploadOutcome("duplicate", self.community)
         try:
-            match = await asyncio.to_thread(_parse_bytes, data, attachment.filename)
+            match = await asyncio.to_thread(_parse_bytes, data, file_name)
         except Exception:
-            logger.warning("Auto-upload: could not parse %s", attachment.filename, exc_info=True)
-            return "failed"
+            logger.warning("API upload: could not parse %s", file_name, exc_info=True)
+            return UploadOutcome("failed", self.community, reason="the replay couldn't be read")
         reason = storage.rejection_reason(match)
         if reason is not None:
-            logger.info("Auto-upload: skipped %s (%s)", attachment.filename, reason)
-            return "rejected"
-        target = self.route(match)
-        if target is not self.community:
-            logger.info("Auto-upload: %s routed to community %s", attachment.filename, target.guild_id)
-            channel = target.post_channel(self.client)
-        status = await self.at(target)._record(channel, match, data, file_hash, author, quiet_duplicate=True)
-        return "duplicate" if status == "duplicate" else "stored"
+            logger.info("API upload: skipped %s (%s)", file_name, reason)
+            return UploadOutcome("rejected", self.community, reason=reason)
+        target = self.at(self.route(match))
+        result = await target._record(
+            target.community.post_channel(self.client), match, data, file_hash, author, quiet_duplicate=True
+        )
+        if result.status == "duplicate":
+            return UploadOutcome("duplicate", target.community)
+        logger.info("API upload: %s by %s stored in community %s", file_name, author.id, target.community.guild_id)
+        return UploadOutcome("stored", target.community, target.store.match_numbers()[result.match_id])
 
     def route(self, match):
-        """The community an auto-upload belongs to: the first of
-        route_member_games_to whose server holds every player as a linked
-        member, else this one."""
-        for guild_id in self.community.config.route_member_games_to:
+        """The community an API upload belongs to: the first of
+        route_member_games_to whose server holds at least route_min_members
+        of the players as linked members, else this one."""
+        config = self.community.config
+        for guild_id in config.route_member_games_to:
             target = self.client.communities.by_id(guild_id)
             guild = self.client.get_guild(guild_id)
             if target is None or guild is None:
                 logger.warning("route_member_games_to lists %s, which isn't a community the bot is in", guild_id)
                 continue
-            if all(self._linked_member(guild, p) for p in match.players):
+            if sum(self._linked_member(guild, p) for p in match.players) >= config.route_min_members:
                 return target
         return self.community
 
@@ -500,9 +489,9 @@ class Replays(CommunityCog):
 
     async def _record(
         self, channel, match, data: bytes, file_hash: str, author: discord.abc.User, quiet_duplicate: bool = False
-    ) -> str:
+    ) -> storage.IngestResult:
         """Store a parsed upload here and in every community that counts this
-        one's games, posting it in each. Returns this community's ingest status."""
+        one's games, posting it in each. Returns this community's ingest."""
         from_guild = getattr(getattr(channel, "guild", None), "name", None) or "another server"
         try:
             return await self._record_in(channel, match, data, file_hash, author, quiet_duplicate=quiet_duplicate)
@@ -524,7 +513,7 @@ class Replays(CommunityCog):
         author: discord.abc.User,
         from_guild: str | None = None,
         quiet_duplicate: bool = False,
-    ) -> str:
+    ) -> storage.IngestResult:
         """Store an upload and post its summary. With `from_guild` (another
         server's upload), a duplicate is silent and there are no lobby buttons."""
         # uploaded_by keys on the Discord id so Chronicler can credit it.
@@ -536,7 +525,7 @@ class Replays(CommunityCog):
             # complete from another player).
             if from_guild is None and not quiet_duplicate:
                 await channel.send(embed=match_embeds.duplicate_notice(match.file_name))
-            return result.status
+            return result
 
         # Deltas in the season the game was played in, not the open one.
         season = self.store.season_containing(match.played_at.isoformat())
@@ -594,7 +583,7 @@ class Replays(CommunityCog):
                 e.spec.key for _, e in unlocks if achievements.is_secret(e.spec) and e.spec.key not in pre_discovered
             )
             await send_with_retry(channel, embed=match_embeds.achievement_unlocks(unlocks, first))
-        return result.status
+        return result
 
     def _sharing(self) -> list:
         return self.client.communities.sharing_games_with(self.community)

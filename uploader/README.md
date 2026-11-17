@@ -1,49 +1,70 @@
 # MonoBot replay uploader
 
 Runs on a player's own computer, watches their StarCraft II replay folders and
-posts each new monobattle replay to MonoBot through a Discord webhook. The bot
-does the rest: it parses the game, skips remakes and non-4v4s, ignores copies of
-a game already stored (every player may run this), and records it on the right
-ladder. If all eight players are linked (`!link`) to members of a server listed
-in `route_member_games_to` (e.g. BGH), the game goes there; otherwise it goes to
-the server the webhook posts in. `counts_games_from` still applies afterwards,
-the same as a manual upload.
+sends each new monobattle replay to MonoBot's upload API. The bot does the
+rest: it parses the game, skips remakes and non-4v4s, ignores copies of a game
+it already has (every player may run this), and records it on the right
+ladder.
 
-Each upload gets a reaction from the bot: ✅ stored, 🔁 already had it,
-⏭️ not a ladder game (a remake or not a 4v4), ❌ couldn't parse.
+**Which ladder:** a game goes to BGH when at least 6 of its 8 players are
+linked (`!link`) to members of the BGH server. Otherwise it goes to the
+Monobattle server, which also collects every BGH game through
+`counts_games_from`. A pub with a few BGH regulars in it therefore stays off
+BGH, while a BGH game with one or two new, unlinked people still counts there.
+(Config: `upload_api.default_guild_id`, plus `route_member_games_to` and
+`route_min_members` on that community.)
 
 ## For players
 
 Needs Python 3.10+ (python.org; on Windows tick "Add to PATH"). No packages.
 
-```
-python monobot_uploader.py --webhook <URL from an admin> --name "<your SC2 name>"
-```
+1. In Discord, run `/uploadtoken`. The bot privately replies with a command
+   containing your personal token.
+2. Run that command in this folder:
+
+   ```
+   python monobot_uploader.py --server https://... --token ...
+   ```
 
 After that, `python monobot_uploader.py` is enough, since settings are saved to
-`~/.monobot_uploader.json`. Leave it running while you play. It only sends games
-saved after its first run; add `--backfill-days 7` to also send the last week's.
-It finds `Documents/StarCraft II/Accounts/*/*/Replays/Multiplayer` (OneDrive
-too) on Windows and the macOS equivalent; pass `--folder <path>` (repeatable)
-for anything else. It picks replays by file name: SC2 names them after the map,
-and the monobattle map's name starts with `Monobattle`.
+`~/.monobot_uploader.json`. Leave it running while you play. Each upload logs
+what happened, e.g. `stored on BGH as match #1520` or `already on Mono`.
 
-To start it with Windows, put a shortcut to `pythonw monobot_uploader.py` in
-`shell:startup`.
+- It only sends games saved after its first run. Add `--backfill-days 7` to
+  also send the last week's.
+- It finds `Documents/StarCraft II/Accounts/*/*/Replays/Multiplayer` (OneDrive
+  too) on Windows and the macOS equivalent. Pass `--folder <path>`
+  (repeatable) for anything else.
+- It picks replays by file name: SC2 names them after the map, and the
+  monobattle map's name starts with `Monobattle`.
+- To start it with Windows, put a shortcut to `pythonw monobot_uploader.py` in
+  `shell:startup`.
+
+Uploads count toward your Chronicler achievement. `/uploadtoken` again gives
+you a new token and turns off the old one; `/uploadtoken revoke` turns it off.
 
 ## For admins
 
-1. In the replay channel's settings: Integrations → Webhooks → New Webhook.
-   Copy its URL. The number after `/webhooks/` is its id.
-2. In `config.json`, on the community that owns that channel:
+The API runs inside the bot. Turn it on in `config.json`:
 
-   ```json
-   "upload_webhook_ids": [<webhook id>],
-   "route_member_games_to": [<BGH server id>]
-   ```
+```json
+"upload_api": {
+  "port": 8080,
+  "public_url": "https://uploads.example.com",
+  "default_guild_id": 662204879653044234
+},
+"guilds": {
+  "662204879653044234": {
+    "route_member_games_to": [1052625283288662016],
+    "route_min_members": 6
+  }
+}
+```
 
-   Restart the bot. The bot needs Add Reactions in that channel.
-3. Share the URL with players. Anyone holding it can post files there, so share
-   it only inside the community. If it leaks, delete the webhook and make a new
-   one. Uploads aren't credited to a person (no Chronicler progress), since a
-   webhook can't prove who sent it.
+It listens on 127.0.0.1 only, so a TLS proxy has to face the internet:
+see "Replay upload API" in `deploy/README.md`.
+
+API: `GET /v1/me` checks a token. `POST /v1/replays` takes the raw replay as
+the body, with `Authorization: Bearer <token>` and `X-Replay-Name: <URL-encoded
+file name>`. It answers `{"status": "stored" | "duplicate" | "rejected" |
+"failed", "server", "match", "reason"}`.

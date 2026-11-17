@@ -150,6 +150,8 @@ class MonobattleMatch(BaseModel):
     winner_confidence: float  # 1.0 recorded, <1.0 inferred, 0.0 unknown
     winner_method: str  # "recorded" | "marker" | "inferred:<signals>" | "unknown"
     comeback_deficit: int | None = None  # winner's worst deficit in value on the map
+    # Every team's worst deficit, so a changed winner reads its own comeback.
+    team_deficits: dict[int, int] = {}
     lead_changes: int | None = None  # meaningful flips of the lead in value on the map
     # Someone called for a remake after the battle began (replay_parser._REMAKE_RE).
     remake_called: bool | None = None

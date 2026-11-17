@@ -47,13 +47,18 @@ class Recap(CommunityCog):
 
     @commands.hybrid_command(
         aliases=["session", "nightly"],
-        description="recap the latest session, or a past one by its number (!recap 12)",
+        description="recap the latest session, or a past one by its number (!recap 12); add mmr for raw MMR",
         help="recap the latest session: records, rating changes, MVPs and achievements (◀ for older sessions). "
-        "Give a session number (shown in the footer) to post just that one, without page buttons",
+        "Give a session number (shown in the footer) to post just that one, without page buttons. "
+        "Add 'mmr' to show raw MMR gains and losses, with no uncertainty deduction (!session mmr, !session 12 mmr)",
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
-    async def recap(self, ctx, session: int | None = None):
+    async def recap(self, ctx, session: int | None = None, rating: str | None = None):
         self = self.at(ctx)
+        if rating is not None and rating.lower() not in ("mmr", "raw"):
+            await ctx.send(f"Unknown option **{rating}** — try `!session mmr` for raw MMR.")
+            return
+        raw = rating is not None
         # Sessions with no decided game have nothing to report, so they get
         # no page rather than a blank one.
         sessions = [s for s in recap.split_sessions(self.store.all_matches()) if any(recap.is_decided(m) for _, m in s)]
@@ -66,7 +71,7 @@ class Recap(CommunityCog):
             if not 1 <= session <= len(sessions):
                 await ctx.send(f"There's no session {session} — sessions run from 1 to {len(sessions)}.")
                 return
-            embed = self._embed(sessions[session - 1], "📋 Session Recap", ctx.guild)
+            embed = self._embed(sessions[session - 1], "📋 Session Recap", ctx.guild, raw)
             embed.set_footer(text=f"Session {session}/{len(sessions)} · {embed.footer.text}")
             await ctx.send(embed=embed)
             return
@@ -75,7 +80,7 @@ class Recap(CommunityCog):
 
         def render(page: int) -> discord.Embed:
             if page not in cache:
-                embed = self._embed(sessions[page], "📋 Session Recap", ctx.guild)
+                embed = self._embed(sessions[page], "📋 Session Recap", ctx.guild, raw)
                 embed.set_footer(text=f"Session {page + 1}/{len(sessions)} · {embed.footer.text}")
                 cache[page] = embed
             return cache[page]
@@ -107,7 +112,7 @@ class Recap(CommunityCog):
             except discord.HTTPException:
                 logger.exception("Morning recap: failed to post in %s", channel)
 
-    def _embed(self, session, title: str, guild) -> discord.Embed | None:
+    def _embed(self, session, title: str, guild, raw: bool = False) -> discord.Embed | None:
         if not session:
             return None
         first, last = session[0][1].played_at, session[-1][1].played_at
@@ -118,6 +123,7 @@ class Recap(CommunityCog):
             self.store.merge_map(),
             self.store.unlocks_between(first, last),
             start=season_start(self.store, season),
+            raw=raw,
         )
         if summary is None:
             return None

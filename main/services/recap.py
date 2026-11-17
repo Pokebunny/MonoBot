@@ -6,7 +6,7 @@ import datetime
 from models.recap import PlayerRecap, SessionRecap
 from models.replay import MonobattleMatch
 from services.achievements import RARITIES, SPECS_BY_KEY
-from services.rating import DEFAULT_DISPLAY, MIN_WINNER_CONFIDENCE, RatingBook, long_enough
+from services.rating import DEFAULT_DISPLAY, DEFAULT_RAW, MIN_WINNER_CONFIDENCE, RatingBook, long_enough
 
 SESSION_GAP = datetime.timedelta(hours=3)
 
@@ -41,10 +41,12 @@ def build_recap(
     merge_map: dict[str, str],
     unlocks: list[tuple[str, str]],
     start: RatingBook | None = None,
+    raw: bool = False,
 ) -> SessionRecap | None:
     """Summarise `session` (oldest first); None if nothing was decided.
     `season_matches` drive the before/after ratings; `start`
-    (rating.season_start) is consumed."""
+    (rating.season_start) is consumed. `raw` reports raw_rating, not the
+    hedged display_rating."""
     decided = [m for _, m in session if is_decided(m)]
     if not decided:
         return None
@@ -64,6 +66,8 @@ def build_recap(
             if p is mvp:
                 entry.mvps += 1
 
+    shown = (lambda r: r.raw_rating) if raw else (lambda r: r.display_rating)  # noqa: E731
+    fresh = DEFAULT_RAW if raw else DEFAULT_DISPLAY
     session_ids = {mid for mid, _ in session}
     last_id = session[-1][0]
     book = start if start is not None else RatingBook(merge_map)
@@ -73,13 +77,13 @@ def build_recap(
                 entry = players.get(canonical(p.toon_handle))
                 if entry is not None and entry.rating_before is None:
                     rating = book.standing_for(p.toon_handle)
-                    entry.rating_before = rating.display_rating if rating is not None else DEFAULT_DISPLAY
+                    entry.rating_before = shown(rating) if rating is not None else fresh
         book.rate_match(match)
         if mid == last_id:
             break
     for entry in players.values():
         if entry.rating_before is not None:
-            entry.rating_after = book.rating_for(entry.handle).display_rating
+            entry.rating_after = shown(book.rating_for(entry.handle))
 
     for handle, key in unlocks:
         entry = players.get(canonical(handle))
@@ -93,4 +97,5 @@ def build_recap(
         ended_at=session[-1][1].played_at,
         games=len(decided),
         players=list(players.values()),
+        raw=raw,
     )

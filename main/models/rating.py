@@ -21,6 +21,12 @@ class PlayerRating(BaseModel):
         return round(self.ordinal * 40 + 1000)
 
     @property
+    def raw_rating(self) -> int:
+        """mu on display_rating's scale, with no uncertainty taken off — what
+        matchmaking balances on. A fresh player is ~2000 here."""
+        return round(self.mu * 40 + 1000)
+
+    @property
     def provisional(self) -> bool:
         return self.sigma > 6.0
 

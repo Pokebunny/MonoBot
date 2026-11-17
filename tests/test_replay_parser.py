@@ -223,22 +223,22 @@ class TestGameSwings:
                 _stats(200, "b", 4000, killed=2000),
             ]
         )
-        deficit, _ = replay_parser._game_swings(replay, 1, game_start=0)
-        assert deficit == 6000
+        deficits, _ = replay_parser._game_swings(replay, game_start=0)
+        assert deficits[1] == 6000
 
     def test_units_being_built_count_as_on_the_map(self):
         # Spending moves value from the bank into production; it must not read
         # as a dip.
         replay = _swing_replay([_stats(100, "a", 4000, building=3000), _stats(100, "b", 7000)])
-        assert replay_parser._game_swings(replay, 1, game_start=0) == (0, 0)
+        assert replay_parser._game_swings(replay, game_start=0)[0][1] == 0
 
     def test_bank_does_not_count(self):
         replay = _swing_replay([_stats(100, "a", 5000), _stats(100, "b", 5000, bank=30000)])
-        assert replay_parser._game_swings(replay, 1, game_start=0) == (0, 0)
+        assert replay_parser._game_swings(replay, game_start=0)[0][1] == 0
 
     def test_pick_phase_is_ignored(self):
         replay = _swing_replay([_stats(10, "a", 1000), _stats(10, "b", 9000), _stats(100, "b", 1000)])
-        assert replay_parser._game_swings(replay, 1, game_start=50) == (0, 0)
+        assert replay_parser._game_swings(replay, game_start=50) == ({1: 0, 2: 0}, 0)
 
     def test_players_sharing_a_name_stay_on_their_own_teams(self):
         # Two different players both called "dup", one per team (seen live:
@@ -252,7 +252,7 @@ class TestGameSwings:
             ],
             events=[_stats(100, "dup", 9000, pid=1), _stats(100, "dup", 1000, pid=2)],
         )
-        assert replay_parser._game_swings(replay, 1, game_start=0) == (0, 0)
+        assert replay_parser._game_swings(replay, game_start=0)[0][1] == 0
 
     def test_small_leads_are_not_lead_changes(self):
         replay = _swing_replay(
@@ -262,4 +262,4 @@ class TestGameSwings:
                 for n, v in (("a", va), ("b", vb))
             ]
         )
-        assert replay_parser._game_swings(replay, 1, game_start=0)[1] == 0
+        assert replay_parser._game_swings(replay, game_start=0)[1] == 0

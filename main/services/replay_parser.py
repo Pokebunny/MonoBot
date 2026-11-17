@@ -457,8 +457,8 @@ def _tally_events(replay, game_start: int, prestart_units: bool = True) -> dict[
 _LEAD_NOISE = 1500
 
 
-def _game_swings(replay, winning_team: int | None, game_start: int) -> tuple[int | None, int]:
-    """(winner's worst deficit or None, lead changes), from value on the map
+def _game_swings(replay, game_start: int) -> tuple[dict[int, int], int]:
+    """(each team's worst deficit, lead changes), from value on the map
     (alive + in production). Not kill value or bank: both turned stomps into
     fake comebacks over 1,259 games."""
     team_of = {p.pid: t.number for t in replay.teams for p in t.players}
@@ -487,11 +487,10 @@ def _game_swings(replay, winning_team: int | None, game_start: int) -> tuple[int
             if state != 0 and sign != state:
                 changes += 1
             state = sign
-    max_deficit = None
-    if winning_team is not None and diffs:
-        winner_view = diffs if winning_team == first_team else [-d for d in diffs]
-        max_deficit = max(0, -min(winner_view))
-    return max_deficit, changes
+    if not diffs:
+        return {}, changes
+    second_team = max(t.number for t in replay.teams)
+    return {first_team: max(0, -min(diffs)), second_team: max(0, max(diffs))}, changes
 
 
 def _infer_winner(replay, markers: "_Markers | None" = None) -> tuple[int | None, float, str]:
@@ -720,7 +719,7 @@ def parse_replay(path: str) -> MonobattleMatch:
             )
 
     winning_team, confidence, method = _infer_winner(replay, markers)
-    comeback_deficit, lead_changes = _game_swings(replay, winning_team, game_start)
+    team_deficits, lead_changes = _game_swings(replay, game_start)
     return MonobattleMatch(
         file_name=os.path.basename(path),
         map_name=replay.map_name,
@@ -735,7 +734,8 @@ def parse_replay(path: str) -> MonobattleMatch:
         winning_team=winning_team,
         winner_confidence=confidence,
         winner_method=method,
-        comeback_deficit=comeback_deficit,
+        comeback_deficit=team_deficits.get(winning_team),
+        team_deficits=team_deficits,
         lead_changes=lead_changes,
         remake_called=_remake_called(replay, game_start),
     )

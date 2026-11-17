@@ -139,6 +139,18 @@ def test_new_modes_come_from_markers(marked):
 SC2MOD = os.path.join(os.path.dirname(__file__), "..", "sc2mod")
 
 
+def test_mod_folder_holds_the_current_script():
+    """The Editor's copy of the script (sc2mod/MonoBattle.SC2Mod) is in step:
+    run sc2mod/sync_mod.py after editing MonoBattle.galaxy."""
+    from xml.etree import ElementTree
+
+    code = ElementTree.parse(os.path.join(SC2MOD, "MonoBattle.SC2Mod", "Triggers")).find(".//ScriptCode").text
+    script = open(os.path.join(SC2MOD, "MonoBattle.galaxy"), encoding="utf8").read()
+    assert [line.strip() for line in code.strip().splitlines()] == [
+        line.strip() for line in script.strip().splitlines()
+    ]
+
+
 def test_mod_roster_and_markers_match_the_parser():
     """The mod's roster names are MonoBot's unit names, in the same race, and
     every marker the parser reads is defined in the mod's data."""

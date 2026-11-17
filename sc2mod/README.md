@@ -7,7 +7,9 @@ replay. The design and the reasons behind it are in the map spec doc.
 
 | File | What it is |
 | --- | --- |
-| `MonoBattle.galaxy` | The whole mod: vote, four pick modes, unit rules, battle start, ending, trade lock |
+| `MonoBattle.SC2Mod/` | The mod itself, as the Editor saves it (folder format). Open this in the Editor |
+| `MonoBattle.galaxy` | The whole script: vote, four pick modes, unit rules, battle start, ending, trade lock. Edit here, then `sync_mod.py` |
+| `sync_mod.py` | Copies `MonoBattle.galaxy` into `MonoBattle.SC2Mod` (a test fails if they differ) |
 | `Attributes`, `GameStrings.txt` | The one lobby setting, **Pick mode** (host only): Vote in game (default), or a fixed mode |
 | `UpgradeData.xml` | The replay markers (135 no-effect upgrades), generated from the script's roster |
 | `RaceSwapTest.galaxy` | A throwaway test mod for the one thing no existing mod proved: switching race mid-game |
@@ -100,29 +102,24 @@ script, the XML and the parser drift apart.
 
 ## Building it in the Editor
 
-Menu names below are from memory of the SC2 Editor and may differ slightly.
+`MonoBattle.SC2Mod/` is the complete mod (dependencies Core and Void Multi,
+the custom script with init function `MB_Init`, the markers, the Pick mode
+setting, the name "MonoBot Monobattle").
 
-1. **New mod.** File → New → Mod. Set its dependencies to Core and Void Multi
-   (the ones melee LotV maps use).
-2. **Script.** Trigger module → New → Custom Script. Paste in
-   `MonoBattle.galaxy` and set its initialization function to `MB_Init`.
-3. **Markers.** Save the mod as a folder (component format), close the
-   Editor, and copy `UpgradeData.xml` to
-   `<mod>.SC2Mod/Base.SC2Data/GameData/UpgradeData.xml`. If the Editor doesn't
-   list the `MB_*` upgrades when reopened, create any upgrade in the Data
-   module, save, and replace the file again.
-4. **Lobby setting.** With the mod still saved as a folder, copy `Attributes`
-   to `<mod>.SC2Mod/Attributes`, add the lines of `GameStrings.txt` to
-   `<mod>.SC2Mod/enUS.SC2Data/LocalizedData/GameStrings.txt`, and make sure
-   `<mod>.SC2Mod/ComponentList.SC2Components` lists
-   `<DataComponent Type="attr">Attributes</DataComponent>` and the enUS
-   `text` component. If the Editor rejects the file, recreate the setting in
-   its lobby settings screen (Map/Mod → Game Variants / Attributes): one
-   host-only global setting, id 1, values 1–5 in the order above, default 1.
-5. **Compile.** Save. Fix anything the Editor reports and tell MonoBot's
-   maintainers (or paste the errors back to Claude).
-6. **Test** on a 4v4 melee map (set one as the map used for testing mods in
-   the Editor's preferences), then publish as an extension mod.
+1. **Edit** `MonoBattle.galaxy`, then run `python sc2mod/sync_mod.py`.
+2. **Open** `sc2mod/MonoBattle.SC2Mod` in the Editor and save, which
+   compiles the script. Fix anything it reports (or paste the errors to Claude).
+3. **Test** on a 4v4 melee map (the Editor's preferences name the map used
+   for testing mods).
+4. **Publish** from a single-file copy: File → Save As, `.SC2Mod` file format,
+   into `sc2mod/build/` (ignored by git), then publish that file as an
+   extension mod. The Editor can't publish a folder mod.
+
+Changes made in the Editor (data, lobby settings, Mod Info) are saved into
+the folder; commit them. Script changes go the other way: always edit
+`MonoBattle.galaxy`, since the next sync overwrites the Editor's copy.
+`UpgradeData.xml`, `Attributes` and `GameStrings.txt` at the top level are
+the sources those parts of the folder were made from.
 
 ## Test 1: race swap (do this first)
 

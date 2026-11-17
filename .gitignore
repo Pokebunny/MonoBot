@@ -11,3 +11,4 @@ main/resources/guilds/
 /scratch/
 /.claude/settings.local.json
 main/resources/*.db.log
+/sc2mod/build/

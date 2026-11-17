@@ -7,7 +7,11 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "uploader"))
 
 import monobot_uploader  # noqa: E402
-from monobot_uploader import Uploader, replay_folders  # noqa: E402
+from monobot_uploader import Uploader, peek, replay_folders, worth_sending  # noqa: E402
+
+REAL_REPLAY = os.path.join(
+    os.path.dirname(__file__), "..", "test_replays", "Monobattle LotV - Map Rotation (713).SC2Replay"
+)
 
 
 def _folder(tmp_path):
@@ -34,6 +38,38 @@ def _uploader(tmp_path, folder, since):
 
     uploader = Uploader(config, str(tmp_path / "config.json"), post=post)
     return uploader, sent
+
+
+def test_peek_reads_the_map_and_teams_without_sc2reader():
+    with open(REAL_REPLAY, "rb") as f:
+        assert peek(f.read()) == ("Monobattle LotV - Map Rotation", [4, 4])
+
+
+def test_only_what_could_be_a_monobattle_is_sent(monkeypatch):
+    for title, teams, send in [
+        ("Monobattle LotV - Map Rotation", [4, 4], True),
+        ("Ulrena LE", [4, 4], True),  # maybe a MonoBattle mod game: the server decides
+        ("Ulrena LE", [1, 1], False),
+        ("Dead of Night", [2], False),
+    ]:
+        monkeypatch.setattr(monobot_uploader, "peek", lambda _data, r=(title, teams): r)
+        assert worth_sending(b"")[0] is send, (title, teams)
+
+
+def test_a_replay_it_cannot_read_is_sent_anyway():
+    assert worth_sending(b"not a replay") == (True, "")
+
+
+def test_a_skipped_replay_is_not_read_again(tmp_path, monkeypatch):
+    folder = _folder(tmp_path)
+    _write(folder, "Ulrena LE.SC2Replay")
+    monkeypatch.setattr(monobot_uploader, "peek", lambda _data: ("Ulrena LE", [1, 1]))
+    uploader, sent = _uploader(tmp_path, folder, since=0)
+    uploader.scan()
+    uploader.scan()
+    assert sent == []
+    monkeypatch.setattr(monobot_uploader, "peek", lambda _data: (_ for _ in ()).throw(AssertionError("re-read")))
+    uploader.scan()
 
 
 def test_finds_every_accounts_multiplayer_folder(tmp_path):

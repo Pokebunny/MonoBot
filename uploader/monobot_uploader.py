@@ -1,6 +1,7 @@
-"""Watch the SC2 replay folders and send new replays to MonoBot's upload API,
-which keeps only the monobattles. Standard library only, so it runs on any
-Python 3.10+.
+"""Watch the SC2 replay folders and send new monobattle replays to MonoBot's
+upload API: anything on the arcade map, and any 4v4 (it may be a MonoBattle
+mod game, which only the server can confirm). Standard library only, so it
+runs on any Python 3.10+.
 
     python monobot_uploader.py --server https://... --token ...   # first run saves both
     python monobot_uploader.py                                    # then just this
@@ -10,17 +11,20 @@ decides which server a game belongs to; this only finds and sends files.
 See README.md."""
 
 import argparse
+import bz2
 import glob
 import hashlib
 import json
 import logging
 import logging.handlers
 import os
+import struct
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 
 logger = logging.getLogger("monobot_uploader")
 
@@ -37,6 +41,173 @@ USER_AGENT = "MonoBotUploader/2"
 
 class BadToken(Exception):
     """The server doesn't know this token: no point retrying."""
+
+
+# -- a peek at the replay, so obvious non-monobattles are never sent ---------
+# A replay is an MPQ archive; its replay.details file holds the map title and
+# the players. Reading just that takes the standard library and milliseconds
+# (the server's full parse takes seconds). Layout as in Blizzard's s2protocol
+# and the mpyq library.
+ARCADE_MAP_PREFIX = "Monobattle"  # every game on the old arcade map
+
+
+def _crypt_table() -> list[int]:
+    table = [0] * 0x500
+    seed = 0x00100001
+    for i in range(0x100):
+        index = i
+        for _ in range(5):
+            seed = (seed * 125 + 3) % 0x2AAAAB
+            high = (seed & 0xFFFF) << 16
+            seed = (seed * 125 + 3) % 0x2AAAAB
+            table[index] = high | (seed & 0xFFFF)
+            index += 0x100
+    return table
+
+
+_CRYPT = _crypt_table()
+_MASK = 0xFFFFFFFF
+
+
+def _mpq_hash(name: str, kind: int) -> int:
+    """kind: 1 and 2 are a file's two name hashes, 3 a table's key."""
+    seed1, seed2 = 0x7FED7FED, 0xEEEEEEEE
+    for ch in name.upper().encode():
+        seed1 = _CRYPT[(kind << 8) + ch] ^ ((seed1 + seed2) & _MASK)
+        seed2 = (ch + seed1 + seed2 + (seed2 << 5) + 3) & _MASK
+    return seed1
+
+
+def _decrypt(data: bytes, key: int) -> bytes:
+    seed1, seed2 = key, 0xEEEEEEEE
+    out = []
+    for (value,) in struct.iter_unpack("<I", data):
+        seed2 = (seed2 + _CRYPT[0x400 + (seed1 & 0xFF)]) & _MASK
+        value ^= (seed1 + seed2) & _MASK
+        seed1 = (((~seed1 << 21) + 0x11111111) | (seed1 >> 11)) & _MASK
+        seed2 = (value + seed2 + (seed2 << 5) + 3) & _MASK
+        out.append(value)
+    return struct.pack(f"<{len(out)}I", *out)
+
+
+def _decompress(data: bytes) -> bytes:
+    kind, body = data[0], data[1:]
+    if kind == 0x10:
+        return bz2.decompress(body)
+    if kind == 0x02:
+        return zlib.decompress(body)
+    if kind == 0:
+        return body
+    raise ValueError(f"unknown MPQ compression {kind:#x}")
+
+
+def _mpq_file(archive: bytes, name: str) -> bytes:
+    """One file out of an SC2 replay (an MPQ behind a user-data header)."""
+    if archive[:4] != b"MPQ\x1b":
+        raise ValueError("not an SC2 replay")
+    base = struct.unpack_from("<I", archive, 8)[0]  # the archive proper starts here
+    if archive[base : base + 4] != b"MPQ\x1a":
+        raise ValueError("no MPQ header")
+    sector_shift, hash_offset, block_offset, hash_count, block_count = struct.unpack_from("<HIIII", archive, base + 14)
+    hash_start, block_start = base + hash_offset, base + block_offset
+    hashes = _decrypt(archive[hash_start : hash_start + hash_count * 16], _mpq_hash("(hash table)", 3))
+    blocks = _decrypt(archive[block_start : block_start + block_count * 16], _mpq_hash("(block table)", 3))
+    want = (_mpq_hash(name, 1), _mpq_hash(name, 2))
+    for hash_a, hash_b, _locale, _platform, block_index in struct.iter_unpack("<IIHHI", hashes):
+        if (hash_a, hash_b) == want and block_index < block_count:
+            break
+    else:
+        raise ValueError(f"{name} not in replay")
+    offset, packed_size, size, flags = struct.unpack_from("<IIII", blocks, block_index * 16)
+    data = archive[base + offset : base + offset + packed_size]
+    compressed = flags & 0x00000200
+    if flags & 0x01000000:  # stored as one unit
+        return _decompress(data) if compressed and size > packed_size else data
+    sector_size = 512 << sector_shift
+    sectors = (size + sector_size - 1) // sector_size
+    has_crc = bool(flags & 0x04000000)
+    bounds = struct.unpack_from(f"<{sectors + 1 + has_crc}I", data)
+    out, left = bytearray(), size
+    for start, end in zip(bounds[:sectors], bounds[1 : sectors + 1]):
+        sector = data[start:end]
+        if compressed and left > len(sector):
+            sector = _decompress(sector)
+        left -= len(sector)
+        out += sector
+    return bytes(out)
+
+
+class _Versioned:
+    """Blizzard's versioned encoding: every value carries a type tag, so it
+    decodes without the protocol's type tables. Structs come back as
+    {field tag: value}."""
+
+    def __init__(self, data: bytes):
+        self.data, self.pos = data, 0
+
+    def _byte(self) -> int:
+        self.pos += 1
+        return self.data[self.pos - 1]
+
+    def _vint(self) -> int:
+        b = self._byte()
+        negative, value, shift = b & 1, (b >> 1) & 0x3F, 6
+        while b & 0x80:
+            b = self._byte()
+            value |= (b & 0x7F) << shift
+            shift += 7
+        return -value if negative else value
+
+    def _take(self, n: int) -> bytes:
+        self.pos += n
+        return self.data[self.pos - n : self.pos]
+
+    def value(self):
+        tag = self._byte()
+        if tag == 0:  # array
+            return [self.value() for _ in range(self._vint())]
+        if tag == 1:  # bit array
+            return self._take((self._vint() + 7) // 8)
+        if tag == 2:  # blob
+            return self._take(self._vint())
+        if tag == 3:  # choice
+            self._vint()
+            return self.value()
+        if tag == 4:  # optional
+            return self.value() if self._byte() else None
+        if tag == 5:  # struct
+            return {self._vint(): self.value() for _ in range(self._vint())}
+        if tag in (6, 7, 8):  # u8 / u32 / u64
+            return int.from_bytes(self._take({6: 1, 7: 4, 8: 8}[tag]), "big")
+        if tag == 9:
+            return self._vint()
+        raise ValueError(f"unknown versioned tag {tag}")
+
+
+def peek(data: bytes) -> tuple[str, list[int]]:
+    """(map title, players per team, largest first) from a replay's bytes.
+    Field numbers are replay.details' in s2protocol: 0 players, 1 title; a
+    player's 5 team, 7 observer."""
+    details = _Versioned(_mpq_file(data, "replay.details")).value()
+    teams: dict[int, int] = {}
+    for player in details.get(0) or []:
+        if not player.get(7):
+            teams[player.get(5)] = teams.get(player.get(5), 0) + 1
+    return details[1].decode("utf-8", "replace"), sorted(teams.values(), reverse=True)
+
+
+def worth_sending(data: bytes) -> tuple[bool, str]:
+    """Whether the server could keep this game, and why not. A 4v4 on any
+    other map is sent: it may be a MonoBattle mod game, which only the
+    server's full parse can see. A replay this can't read is sent too."""
+    try:
+        title, teams = peek(data)
+    except Exception as e:  # an odd file costs the server a parse, never a game
+        logger.debug("Couldn't peek at a replay (%s); sending it", e)
+        return True, ""
+    if title.lower().startswith(ARCADE_MAP_PREFIX.lower()) or teams == [4, 4]:
+        return True, ""
+    return False, f"{'v'.join(map(str, teams)) or 'no players'} on {title}"
 
 
 def default_replay_roots() -> list[str]:
@@ -131,9 +302,9 @@ class Uploader:
         return self.config.get("folders") or replay_folders(default_replay_roots())
 
     def candidates(self) -> list[str]:
-        """Settled replays saved since tracking began, oldest first. Every one:
-        the file name is the map's, and a MonoBattle mod game is named after
-        whichever melee map it was played on, so only the server can tell."""
+        """Settled replays saved since tracking began, oldest first, whatever
+        their name: a MonoBattle mod game is named after its melee map.
+        worth_sending then looks inside."""
         since = self.config["since"]
         now = time.time()
         found = []
@@ -167,6 +338,11 @@ class Uploader:
                 continue
             if len(data) > MAX_BYTES:
                 logger.warning("Skipping %s: too big (%d bytes)", path, len(data))
+                self._remember(digest)
+                continue
+            send, why = worth_sending(data)
+            if not send:
+                logger.info("%s: skipped, not a monobattle (%s)", os.path.basename(path), why)
                 self._remember(digest)
                 continue
             result = self._send(path, data)

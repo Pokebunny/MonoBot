@@ -155,7 +155,8 @@ Code lives under `main/`. Environment and dependencies are managed with **uv**
   roster, the marker XML and the parser in step. A mod game is played on any
   melee map, so `matches.mod_version` (set from the markers) is what marks it:
   `storage.is_monobattle` keeps a game only if it has markers or is on the
-  arcade map, since the uploader sends every replay, not just `Monobattle*`.
+  arcade map. The uploader can't see markers (it peeks at `replay.details`
+  only, stdlib), so it sends every arcade-map game and every 4v4.
 - `scripts/` (repo root) — one-shot utilities, e.g. `backfill_archive.py` to
   seed the database from a folder of replays (idempotent, dedupes by hash).
   `reparse_stored.py` re-applies parser improvements to stored games

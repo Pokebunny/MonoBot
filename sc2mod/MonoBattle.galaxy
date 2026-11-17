@@ -1844,6 +1844,37 @@ void MB_RemovePlayerUnits (int p) {
     }
 }
 
+void MB_DisableMelee (int p) {
+    MeleeSetOption(p, c_meleeOptionDefeat, false);
+    MeleeSetOption(p, c_meleeOptionVictory, false);
+    MeleeSetOption(p, c_meleeOptionStalemate, false);
+}
+
+// The map's melee setup can run after the mod starts, and would then spawn bases and re-enable
+// melee victory/defeat behind it. Wait (up to 5 s) until a player's starting units exist, give the
+// setup a moment to finish, then take over.
+void MB_ClearMeleeStart () {
+    int p;
+    fixed waited;
+    bool spawned;
+    waited = 0.0;
+    spawned = false;
+    while (waited < 5.0 && !spawned) {
+        Wait(0.25, c_timeGame);
+        waited += 0.25;
+        for (p = 1; p <= 8; p += 1) {
+            if (MB_TeamOf(p) != 0 && UnitGroupCount(UnitGroup(null, p, RegionEntireMap(), UnitFilter(0, 0, 0, 0), 0), c_unitCountAll) > 0) {
+                spawned = true;
+            }
+        }
+    }
+    Wait(0.5, c_timeGame);
+    for (p = 1; p <= 8; p += 1) {
+        MB_DisableMelee(p);
+        MB_RemovePlayerUnits(p);
+    }
+}
+
 void MB_SetTrading (bool allowed) {
     int p;
     int q;
@@ -2193,6 +2224,7 @@ void MB_StartBattle () {
     }
     gv_phase = MB_PHASE_BATTLE;
     for (p = 1; p <= 8; p += 1) {
+        MB_DisableMelee(p);  // again, in case anything re-enabled it during the pick phase
         u = gv_pick[p];
         if (MB_TeamOf(p) == 0 || u == 0) {
             continue;
@@ -2225,16 +2257,11 @@ void MB_StartBattle () {
 //--------------------------------------------------------------------------------------------------
 bool MB_Main (bool testConds, bool runActions) {
     int p;
-    // Let the map's own melee setup run first, then take it over.
-    Wait(0.5, c_timeGame);
+    MB_ClearMeleeStart();
     GameSetMissionTimePaused(true);
     MB_SetupRoster();
     MB_BuildTeams();
     for (p = 1; p <= 8; p += 1) {
-        MeleeSetOption(p, c_meleeOptionDefeat, false);
-        MeleeSetOption(p, c_meleeOptionVictory, false);
-        MeleeSetOption(p, c_meleeOptionStalemate, false);
-        MB_RemovePlayerUnits(p);
         MB_DisallowEverything(p);
         if (MB_TeamOf(p) != 0) {
             TechTreeUpgradeAddLevel(p, "MB_Version", MB_VERSION);

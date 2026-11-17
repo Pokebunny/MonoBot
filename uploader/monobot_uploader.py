@@ -1,5 +1,6 @@
-"""Watch the SC2 replay folders and send new monobattle replays to MonoBot's
-upload API. Standard library only, so it runs on any Python 3.10+.
+"""Watch the SC2 replay folders and send new replays to MonoBot's upload API,
+which keeps only the monobattles. Standard library only, so it runs on any
+Python 3.10+.
 
     python monobot_uploader.py --server https://... --token ...   # first run saves both
     python monobot_uploader.py                                    # then just this
@@ -25,9 +26,6 @@ logger = logging.getLogger("monobot_uploader")
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".monobot_uploader.json")
 LOG_PATH = os.path.join(os.path.expanduser("~"), ".monobot_uploader.log")
-# SC2 names a saved replay after its map, and every monobattle is played on
-# one arcade map whose name starts with this.
-DEFAULT_NAME_PREFIX = "Monobattle"
 POLL_SECONDS = 10
 # SC2 writes the file at game end; wait until it has stopped changing.
 SETTLE_SECONDS = 5
@@ -62,11 +60,6 @@ def replay_folders(roots: list[str]) -> list[str]:
     for root in roots:
         folders += glob.glob(os.path.join(root, "*", "*", "Replays", "Multiplayer"))
     return sorted(set(folders))
-
-
-def is_monobattle(path: str, prefix: str) -> bool:
-    name = os.path.basename(path)
-    return name.lower().endswith(".sc2replay") and name.lower().startswith(prefix.lower())
 
 
 def load_json(path: str) -> dict:
@@ -122,7 +115,7 @@ def describe(result: dict) -> str:
     if status == "duplicate":
         return f"already on {result.get('server') or 'the ladder'}"
     if status == "rejected":
-        return f"not a ladder game ({result.get('reason')})"
+        return f"skipped ({result.get('reason')})"
     return f"the bot couldn't read it ({result.get('reason') or status})"
 
 
@@ -138,15 +131,14 @@ class Uploader:
         return self.config.get("folders") or replay_folders(default_replay_roots())
 
     def candidates(self) -> list[str]:
-        """Settled monobattle replays saved since tracking began, oldest first."""
+        """Settled replays saved since tracking began, oldest first. Every one:
+        the file name is the map's, and a MonoBattle mod game is named after
+        whichever melee map it was played on, so only the server can tell."""
         since = self.config["since"]
-        prefix = self.config.get("name_prefix", DEFAULT_NAME_PREFIX)
         now = time.time()
         found = []
         for folder in self.folders():
             for path in glob.glob(os.path.join(folder, "*.SC2Replay")):
-                if not is_monobattle(path, prefix):
-                    continue
                 try:
                     stat = os.stat(path)
                 except OSError:

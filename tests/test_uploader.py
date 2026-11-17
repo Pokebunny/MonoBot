@@ -41,18 +41,19 @@ def test_finds_every_accounts_multiplayer_folder(tmp_path):
     assert replay_folders([str(tmp_path / "Accounts")]) == [str(folder)]
 
 
-def test_sends_new_monobattles_once(tmp_path):
+def test_sends_every_new_replay_once(tmp_path):
     folder = _folder(tmp_path)
-    _write(folder, "Monobattle LotV - Map Rotation (3).SC2Replay")
-    _write(folder, "Ladder Map LE.SC2Replay", b"ladder")
+    _write(folder, "Monobattle LotV - Map Rotation (3).SC2Replay", age=120)
+    # A MonoBattle mod game is named after its melee map: the server decides.
+    _write(folder, "Ulrena LE.SC2Replay", b"mod game", age=60)
     _write(folder, "Monobattle LotV - Map Rotation (2).SC2Replay", b"old", age=3600)
     uploader, sent = _uploader(tmp_path, folder, since=time.time() - 600)
     uploader.scan()  # first look: sizes not settled yet
     assert sent == []
     uploader.scan()
-    assert sent == ["Monobattle LotV - Map Rotation (3).SC2Replay"]
+    assert sent == ["Monobattle LotV - Map Rotation (3).SC2Replay", "Ulrena LE.SC2Replay"]
     uploader.scan()
-    assert len(sent) == 1
+    assert len(sent) == 2
 
 
 def test_a_file_still_being_written_waits(tmp_path, monkeypatch):

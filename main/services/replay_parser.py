@@ -745,6 +745,7 @@ def parse_replay(path: str) -> MonobattleMatch:
         team_deficits=team_deficits,
         lead_changes=lead_changes,
         remake_called=_remake_called(replay, game_start),
+        mod_version=None if markers is None else markers.version,
     )
 
 

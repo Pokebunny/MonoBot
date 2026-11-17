@@ -971,6 +971,18 @@ def test_a_long_undecided_game_is_kept_for_confirmation(store):
     assert store.ingest(undecided, hash_replay(b"undecided")).status == "inserted"
 
 
+def test_a_4v4_on_another_map_is_not_a_monobattle(store):
+    ladder = _match().model_copy(update={"map_name": "Ulrena LE"})
+    assert rejection_reason(ladder) == "it's not a monobattle"
+
+
+def test_a_mod_game_on_a_melee_map_is_stored_with_its_mod_version(store):
+    mod_game = _match().model_copy(update={"map_name": "Ulrena LE", "mod_version": 1})
+    assert rejection_reason(mod_game) is None
+    result = store.ingest(mod_game, hash_replay(b"mod game"))
+    assert store.get_match(result.match_id).mod_version == 1
+
+
 def test_an_approved_remake_is_stored_and_stays_approved(store):
     # A real game that ended in under two minutes, recorded anyway.
     short = _match(duration=163).model_copy(update={"approved": True})

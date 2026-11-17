@@ -1,10 +1,11 @@
 # MonoBot replay uploader
 
 Runs on a player's own computer, watches their StarCraft II replay folders and
-sends each new monobattle replay to MonoBot's upload API. The bot does the
-rest: it parses the game, skips remakes and non-4v4s, ignores copies of a game
+sends each new replay to MonoBot's upload API. The bot does the rest: it
+parses the game, keeps only monobattles (the old arcade map, or any map played
+with the MonoBattle mod), skips remakes and non-4v4s, ignores copies of a game
 it already has (every player may run this), and records it on the right
-ladder.
+ladder. Everything else it sends is read and thrown away, never stored.
 
 **Which ladder:** a game goes to BGH when at least 6 of its 8 players are
 linked (`!link`) to members of the BGH server. Otherwise it goes to the
@@ -35,8 +36,10 @@ what happened, e.g. `stored on BGH as match #1520` or `already on Mono`.
 - It finds `Documents/StarCraft II/Accounts/*/*/Replays/Multiplayer` (OneDrive
   too) on Windows and the macOS equivalent. Pass `--folder <path>`
   (repeatable) for anything else.
-- It picks replays by file name: SC2 names them after the map, and the
-  monobattle map's name starts with `Monobattle`.
+- It sends every replay, not just ones named `Monobattle...`: SC2 names a
+  replay after its map, and a MonoBattle mod game is named after whichever
+  melee map it was played on, so only the bot can tell. Other games (1v1
+  ladder, etc.) log as `skipped (it's not a monobattle)`.
 - It logs to `~/.monobot_uploader.log` as well as the console.
 
 ### Keep it running (Windows)

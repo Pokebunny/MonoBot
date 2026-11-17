@@ -134,7 +134,9 @@ GAME_SECONDS_PER_SECOND = 1.4
 
 class MonobattleMatch(BaseModel):
     file_name: str
-    map_name: str  # the arcade map's own name, identical for every game
+    # The arcade map's own name (identical for every old-map game); a mod game's
+    # melee map.
+    map_name: str
     map_hash: str = ""  # published-version hash; resolves to the real terrain
     played_at: datetime.datetime  # UTC
     # Shared by every recording of one game (unlike played_at, the recorder's clock).
@@ -155,6 +157,9 @@ class MonobattleMatch(BaseModel):
     lead_changes: int | None = None  # meaningful flips of the lead in value on the map
     # Someone called for a remake after the battle began (replay_parser._REMAKE_RE).
     remake_called: bool | None = None
+    # Played with the MonoBattle mod: its MB_Version marker (0 if it wrote
+    # markers but no version); None for every other game.
+    mod_version: int | None = None
     # Vouched for despite storage.rejection_reason (a real game that ended early).
     approved: bool = False
 

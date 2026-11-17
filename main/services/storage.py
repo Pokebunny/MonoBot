@@ -38,6 +38,14 @@ class IngestResult(NamedTuple):
 TEAM_SIZE = 4
 MIN_BATTLE_SECONDS = 120
 REMAKE_CALL_SECONDS = 180
+# Every game on the old arcade map; the MonoBattle mod plays on melee maps.
+ARCADE_MAP_PREFIX = "Monobattle"
+
+
+def is_monobattle(match: MonobattleMatch) -> bool:
+    """Played on the arcade map or with the MonoBattle mod, not just any 4v4
+    (the uploader sends every replay it finds)."""
+    return match.mod_version is not None or match.map_name.lower().startswith(ARCADE_MAP_PREFIX.lower())
 
 
 def rejection_reason(match: MonobattleMatch) -> str | None:
@@ -45,6 +53,8 @@ def rejection_reason(match: MonobattleMatch) -> str | None:
     someone approved after it was turned away (match.approved) is kept."""
     if match.approved:
         return None
+    if not is_monobattle(match):
+        return "it's not a monobattle"
     sizes = Counter(p.team for p in match.players)
     if len(sizes) != 2 or any(n != TEAM_SIZE for n in sizes.values()):
         return f"it's a {match.game_type}, not a 4v4"
@@ -85,7 +95,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "mo
 
 # Stored in each DB file via PRAGMA user_version. Version 1 = the 2026-07
 # baseline schema below; pre-versioning DBs read as 0 and are migrated up.
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -108,6 +118,7 @@ CREATE TABLE IF NOT EXISTS matches (
     team_deficits TEXT,
     lead_changes INTEGER,
     remake_called INTEGER,
+    mod_version INTEGER,
     approved INTEGER NOT NULL DEFAULT 0,
     uploaded_by TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -500,6 +511,14 @@ def _migration_21_team_deficits(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE matches ADD COLUMN team_deficits TEXT")
 
 
+def _migration_22_mod_version(conn: sqlite3.Connection) -> None:
+    """MonobattleMatch.mod_version; NULL is right for every game stored before
+    it, all played on the arcade map."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(matches)")}
+    if "mod_version" not in cols:
+        conn.execute("ALTER TABLE matches ADD COLUMN mod_version INTEGER")
+
+
 # Global Discord links, in the home DB. Other stores ATTACH it as LINKS_SCHEMA
 # and read it unqualified (their own DB has no such table). "{s}" is the
 # schema prefix: "" in the home DB, "links." when attached.
@@ -577,6 +596,7 @@ _MIGRATIONS = {
     19: _migration_19_drop_replay_channels,
     20: _migration_20_remake_called,
     21: _migration_21_team_deficits,
+    22: _migration_22_mod_version,
 }
 
 
@@ -715,8 +735,8 @@ class MatchStore:
                    (file_hash, content_key, file_name, map_name, map_hash, played_at, game_seed, duration_seconds,
                     game_type, pick_mode, pick_phase_seconds, winning_team,
                     winner_confidence, winner_method, comeback_deficit, team_deficits, lead_changes, remake_called,
-                    approved, uploaded_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    mod_version, approved, uploaded_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (file_hash, key, *self._match_columns(match), uploaded_by),
             )
         except sqlite3.IntegrityError:
@@ -806,6 +826,7 @@ class MatchStore:
             json.dumps(match.team_deficits) if match.team_deficits else None,
             match.lead_changes,
             None if match.remake_called is None else int(match.remake_called),
+            match.mod_version,
             int(match.approved),
         )
 
@@ -854,8 +875,8 @@ class MatchStore:
                  file_hash = ?, content_key = ?, file_name = ?, map_name = ?, map_hash = ?, played_at = ?,
                  game_seed = ?, duration_seconds = ?, game_type = ?, pick_mode = ?, pick_phase_seconds = ?,
                  winning_team = ?, winner_confidence = ?, winner_method = ?,
-                 comeback_deficit = ?, team_deficits = ?, lead_changes = ?, remake_called = ?, approved = ?,
-                 uploaded_by = ?
+                 comeback_deficit = ?, team_deficits = ?, lead_changes = ?, remake_called = ?, mod_version = ?,
+                 approved = ?, uploaded_by = ?
                WHERE id = ?""",
             (file_hash, key, *self._match_columns(match), uploaded_by, match_id),
         )
@@ -1620,5 +1641,6 @@ class MatchStore:
             team_deficits=deficits,
             lead_changes=row["lead_changes"],
             remake_called=None if row["remake_called"] is None else bool(row["remake_called"]),
+            mod_version=row["mod_version"],
             approved=bool(row["approved"]),
         )

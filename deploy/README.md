@@ -17,53 +17,22 @@ also locks you out.
 
 ## One-time server setup
 
-Amazon Linux is not Ubuntu, and the difference bites in two places: `adduser`
-here is a symlink to shadow-utils' `useradd`, whose options are entirely
-different from Debian's, and `git` is not on the base AMI. The admin user is
-`ec2-user`, not `ubuntu`.
+`deploy/bootstrap.sh` does the whole thing on Amazon Linux 2023 (x86 or
+Graviton) and is safe to re-run. As `ec2-user`:
 
 ```bash
-# as ec2-user
-sudo dnf install -y git          # yum on Amazon Linux 2
-
-# --create-home is required: --system otherwise skips the home directory, and
-# no home means no ~/.ssh/authorized_keys for the deploy key to live in.
-# --shell is required too: the default for a system account is nologin, and a
-# nologin user cannot open an SSH session at all.
-sudo useradd --system --user-group --create-home --home-dir /home/monobot \
-    --shell /bin/bash monobot
-sudo mkdir -p /opt/monobot && sudo chown monobot:monobot /opt/monobot
-
-# as monobot (sudo -u monobot -s)
-curl -LsSf https://astral.sh/uv/install.sh | sh          # installs to ~/.local/bin
-cd /opt/monobot && git clone https://github.com/Pokebunny/MonoBot.git
-cd MonoBot && ~/.local/bin/uv sync
-
-# live-only files (gitignored) — copy from your machine:
-#   main/.env               BOT_TOKEN=...
-#   main/resources/config.json
-#   main/resources/monobot.db
-# e.g. scp -r main/.env main/resources/*.json main/resources/*.db ec2-user@HOST:/tmp/
-#      then sudo mv them into place and chown monobot:monobot
-
-# service
-sudo cp deploy/monobot.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now monobot
-journalctl -u monobot -f        # watch it come up
+curl -fsSL https://raw.githubusercontent.com/Pokebunny/MonoBot/main/deploy/bootstrap.sh \
+  | bash -s -- "<deploy key's public half>" uploads.example.com
 ```
 
-Let the deploy script restart the service without a password. This grants
-`monobot` exactly one command, and only for its own unit:
-
-```bash
-echo 'monobot ALL=(root) NOPASSWD: /usr/bin/systemctl restart monobot' | sudo tee /etc/sudoers.d/monobot
-sudo chmod 440 /etc/sudoers.d/monobot && sudo visudo -cf /etc/sudoers.d/monobot
-```
-
-LTWBot has this whole sequence as a single idempotent script
-([`deploy/bootstrap.sh`](https://github.com/Pokebunny/LTWBot/blob/main/deploy/bootstrap.sh),
-which handles both distro families). Worth porting here the next time this
-needs doing from scratch.
+It creates the `monobot` user, installs uv and the repo, authorises the
+GitHub Actions deploy key, installs the systemd unit and the one sudoers rule
+`update.sh` needs (restarting this unit, nothing else), and caps the journal
+at 500 MB. With the optional domain it also sets up Caddy for the upload API
+(next section). The service is left enabled but stopped until you copy in the
+live-only files, which aren't in the repo: `main/.env` (`BOT_TOKEN=...`),
+`main/resources/config.json`, `main/resources/monobot.db`,
+`main/resources/guilds/` and the replay archive `main/resources/replays/`.
 
 ## Auto-deploy on merge to main
 
@@ -82,8 +51,24 @@ LTWBot deploys to the same host from its own repo, with its own key and its own
 `DEPLOY_*` secrets. The two are independent: revoking one bot's key doesn't
 affect the other.
 
-Security group: allow inbound SSH (22) only; the bot makes outbound
-connections to Discord and needs nothing else open.
+Security group: allow inbound SSH (22), plus 80 and 443 if the replay upload
+API is on (next section). Otherwise the bot only makes outbound connections.
+
+## Replay upload API
+
+Players' desktop uploaders (`uploader/`) POST replays to the bot over HTTPS.
+The bot serves plain HTTP on 127.0.0.1 (`upload_api.port` in config.json), and
+Caddy sits in front to handle TLS, getting and renewing a Let's Encrypt
+certificate by itself. Let's Encrypt needs a DNS name, not a bare IP: point an
+A record (any domain you own, or a free one such as DuckDNS) at the Elastic IP.
+
+`bootstrap.sh` installs and configures Caddy when given the domain (it
+proxies to port 8080; keep `upload_api.port` in step). Point the A record and
+open 80 (the certificate challenge) and 443 in the security group first, or
+Caddy can't get its certificate. Then set `upload_api` in config.json (see
+`uploader/README.md`) and restart the bot.
+`curl https://uploads.example.com/v1/me` should answer 401 with an "unknown
+token" message.
 
 ## Database backups
 

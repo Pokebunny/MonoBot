@@ -166,8 +166,8 @@ async def settle_copy(client, community, match, team: int) -> None:
 
 
 class ApproveGameView(ExpiringView):
-    """Lets a player or admin keep a rejected game anyway (still subject to
-    the rating gate)."""
+    """Lets an admin keep a rejected game anyway (still subject to the rating
+    gate). Admins only: players could otherwise approve their own junk games."""
 
     def __init__(self, cog: "Replays", match, data: bytes, file_hash: str, uploader: discord.abc.User):
         super().__init__()
@@ -177,19 +177,10 @@ class ApproveGameView(ExpiringView):
         self.file_hash = file_hash
         self.uploader = uploader
 
-    def _may_approve(self, interaction: discord.Interaction) -> bool:
-        if is_admin(interaction.client, interaction.guild, interaction.user):
-            return True
-        handles = set(self.cog.store.handles_for(str(interaction.user.id)))
-        return any(p.toon_handle in handles for p in self.match.players)
-
-    @discord.ui.button(label="Record anyway", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Record anyway (admins)", style=discord.ButtonStyle.secondary)
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self._may_approve(interaction):
-            await interaction.response.send_message(
-                "Only a player who was in this game (with a linked SC2 name) or an admin can record it.",
-                ephemeral=True,
-            )
+        if not is_admin(interaction.client, interaction.guild, interaction.user):
+            await interaction.response.send_message("Only an admin can record a rejected game.", ephemeral=True)
             return
         self.stop()
         button.disabled = True
@@ -198,6 +189,13 @@ class ApproveGameView(ExpiringView):
         await interaction.response.edit_message(embed=embed, view=self)
         match = self.match.model_copy(update={"approved": True})
         await self.cog._record(interaction.channel, match, self.data, self.file_hash, self.uploader)
+
+
+class UploadOutcome(NamedTuple):
+    status: str  # stored / duplicate / rejected / failed
+    community: object  # Community the game was judged against
+    match_number: int | None = None
+    reason: str | None = None
 
 
 # Refuse an attachment this big before downloading it: far past what Discord
@@ -214,10 +212,10 @@ class ZipEntry(NamedTuple):
     reason: str | None = None  # why it's rejected
 
 
-def _parse_bytes(data: bytes):
+def _parse_bytes(data: bytes, name: str = "upload.SC2Replay"):
     """parse_replay wants a path; write the bytes to a scratch file."""
     with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "upload.SC2Replay")
+        path = os.path.join(tmp, os.path.basename(name) or "upload.SC2Replay")
         with open(path, "wb") as f:
             f.write(data)
         return replay_parser.parse_replay(path)
@@ -435,23 +433,78 @@ class Replays(CommunityCog):
             return
         await self._record(channel, match, data, file_hash, author)
 
-    async def _record(self, channel, match, data: bytes, file_hash: str, author: discord.abc.User):
-        """Store a parsed upload here and in every community that counts this
-        one's games, posting it in each."""
+    async def api_upload(self, file_name: str, data: bytes, author: discord.abc.User) -> UploadOutcome:
+        """A replay from the upload API (cogs/uploads.py), into this community
+        or the one route() picks. No prompts and no duplicate notices: every
+        player may run the uploader, and the caller is told the outcome."""
+        file_hash = storage.hash_replay(data)
+        if self.store.has_replay(file_hash):
+            return UploadOutcome("duplicate", self.community)
         try:
-            await self._record_in(channel, match, data, file_hash, author)
+            match = await asyncio.to_thread(_parse_bytes, data, file_name)
+        except Exception:
+            logger.warning("API upload: could not parse %s", file_name, exc_info=True)
+            return UploadOutcome("failed", self.community, reason="the replay couldn't be read")
+        reason = storage.rejection_reason(match)
+        if reason is not None:
+            logger.info("API upload: skipped %s (%s)", file_name, reason)
+            return UploadOutcome("rejected", self.community, reason=reason)
+        target = self.at(self.route(match))
+        result = await target._record(
+            target.community.post_channel(self.client), match, data, file_hash, author, quiet_duplicate=True
+        )
+        if result.status == "duplicate":
+            return UploadOutcome("duplicate", target.community)
+        logger.info("API upload: %s by %s stored in community %s", file_name, author.id, target.community.guild_id)
+        return UploadOutcome("stored", target.community, target.store.match_numbers()[result.match_id])
+
+    def route(self, match):
+        """The community an API upload belongs to: the first of
+        route_member_games_to whose server holds at least route_min_members
+        of the players as linked members, else this one."""
+        config = self.community.config
+        for guild_id in config.route_member_games_to:
+            target = self.client.communities.by_id(guild_id)
+            guild = self.client.get_guild(guild_id)
+            if target is None or guild is None:
+                logger.warning("route_member_games_to lists %s, which isn't a community the bot is in", guild_id)
+                continue
+            if sum(self._linked_member(guild, p) for p in match.players) >= config.route_min_members:
+                return target
+        return self.community
+
+    def _linked_member(self, guild, player) -> bool:
+        # A link made before its owner's first game has no handle yet.
+        discord_id = self.store.discord_id_for_handle(player.toon_handle) or self.store.discord_id_for(player.name)
+        return discord_id is not None and guild.get_member(int(discord_id)) is not None
+
+    async def _record(
+        self, channel, match, data: bytes, file_hash: str, author: discord.abc.User, quiet_duplicate: bool = False
+    ) -> storage.IngestResult:
+        """Store a parsed upload here and in every community that counts this
+        one's games, posting it in each. Returns this community's ingest."""
+        from_guild = getattr(getattr(channel, "guild", None), "name", None) or "another server"
+        try:
+            return await self._record_in(channel, match, data, file_hash, author, quiet_duplicate=quiet_duplicate)
         finally:
             for other in self.client.communities.collectors_of(self.community):
                 try:
                     await self.at(other)._record_in(
-                        other.post_channel(self.client), match, data, file_hash, author, from_guild=channel.guild.name
+                        other.post_channel(self.client), match, data, file_hash, author, from_guild=from_guild
                     )
                 except Exception:
                     logger.exception("Could not add %s to community %s", match.file_name, other.guild_id)
 
     async def _record_in(
-        self, channel, match, data: bytes, file_hash: str, author: discord.abc.User, from_guild: str | None = None
-    ):
+        self,
+        channel,
+        match,
+        data: bytes,
+        file_hash: str,
+        author: discord.abc.User,
+        from_guild: str | None = None,
+        quiet_duplicate: bool = False,
+    ) -> storage.IngestResult:
         """Store an upload and post its summary. With `from_guild` (another
         server's upload), a duplicate is silent and there are no lobby buttons."""
         # uploaded_by keys on the Discord id so Chronicler can credit it.
@@ -461,10 +514,9 @@ class Replays(CommunityCog):
         if result.status == "duplicate":
             # Same game already stored (this file, or a recording at least as
             # complete from another player).
-            if from_guild is not None:
-                return
-            await channel.send(embed=match_embeds.duplicate_notice(match.file_name))
-            return
+            if from_guild is None and not quiet_duplicate:
+                await channel.send(embed=match_embeds.duplicate_notice(match.file_name))
+            return result
 
         # Deltas in the season the game was played in, not the open one.
         season = self.store.season_containing(match.played_at.isoformat())
@@ -522,6 +574,7 @@ class Replays(CommunityCog):
                 e.spec.key for _, e in unlocks if achievements.is_secret(e.spec) and e.spec.key not in pre_discovered
             )
             await send_with_retry(channel, embed=match_embeds.achievement_unlocks(unlocks, first))
+        return result
 
     def _sharing(self) -> list:
         return self.client.communities.sharing_games_with(self.community)

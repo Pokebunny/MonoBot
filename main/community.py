@@ -92,6 +92,12 @@ class Communities:
             return self.home
         return None
 
+    def by_id(self, guild_id: int) -> Community | None:
+        """The community configured for exactly this server (no home fallback)."""
+        if guild_id in self.others:
+            return self.others[guild_id]
+        return self.home if self.home.guild_id == guild_id else None
+
     def collectors_of(self, community: Community) -> list[Community]:
         """Communities whose `counts_games_from` lists this one."""
         if community.guild_id is None:

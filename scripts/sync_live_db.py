@@ -25,7 +25,7 @@ import sqlite3
 import subprocess
 import sys
 
-SSH_HOST = "monobot@52.14.192.236"
+SSH_HOST = "monobot@18.224.76.73"
 SSH_KEY = os.path.expanduser("~/.ssh/monobot_deploy")
 REMOTE_DB = "/opt/monobot/MonoBot/main/resources/monobot.db"
 REMOTE_SNAPSHOT = "/tmp/monobot-sync-snapshot.db"

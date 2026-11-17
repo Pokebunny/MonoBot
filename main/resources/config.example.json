@@ -12,13 +12,21 @@
     111111111111111111,
     222222222222222222
   ],
+  "upload_api": {
+    "port": 8080,
+    "public_url": "https://uploads.example.com",
+    "default_guild_id": 333333333333333333
+  },
   "guilds": {
     "333333333333333333": {
       "replays_channel_ids": [
         444444444444444444
       ],
       "recap_timezone": "Europe/Berlin",
-      "queue_reset_timezone": "Europe/Berlin"
+      "queue_reset_timezone": "Europe/Berlin",
+      "counts_games_from": [111111111111111111],
+      "route_member_games_to": [111111111111111111],
+      "route_min_members": 6
     }
   }
 }

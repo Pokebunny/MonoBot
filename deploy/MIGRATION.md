@@ -55,13 +55,13 @@ the old box; the downtime is steps 5–7 (~15 minutes).
    (cutover copy). No logrotate rule: RioBot rotates its own log since
    malonek1/RioBot#110.
 2. **You** — in the console:
-   - Check how `RioBot_deployment_group` picks its instance (CodeDeploy →
-     Applications → RioBot → the group → Environment configuration: an EC2
-     tag, probably) and which **IAM role** the old box has (EC2 → instance →
-     Security). The CodeDeploy agent needs that role to work.
+   - `RioBot_deployment_group` (us-east-2) targets any EC2 instance with the
+     tag key **`bot_host`** (key only; the value isn't checked). Note which
+     **IAM role** the old box has (EC2 → instance → Security): the
+     CodeDeploy agent needs that role to work.
    - Launch the t4g.small: AL2023 **arm64**, 30 GB gp3, same key pair, the
-     **same IAM role**, and **not** the RioBot deployment tag yet (with it,
-     the next RioBot deploy would start a second RioBot here).
+     **same IAM role**, and **no `bot_host` tag** yet (with it, the next
+     RioBot deploy would start a second RioBot here).
    - Allocate an Elastic IP and attach it. Security group: 22, 80, 443.
    - Point the upload domain's A record at the Elastic IP.
 3. **You** — on the new box as `ec2-user`, with each repo's deploy public
@@ -83,7 +83,7 @@ the old box; the downtime is steps 5–7 (~15 minutes).
    fixes ownership, and checks every database's match count against the
    old box's.
 6. **You** — `sudo systemctl start monobot ltwbot`. For RioBot: move the
-   deployment tag from the old instance to the new one, then CodeDeploy →
+   `bot_host` tag from the old instance to the new one, then CodeDeploy →
    the group's last deployment → **Retry** (or re-run RioBot's latest
    "CD Pipeline" action). Its hooks install the deps and start the bot.
 7. **Claude** — set `DEPLOY_HOST` to the Elastic IP in the MonoBot and

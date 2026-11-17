@@ -1894,11 +1894,15 @@ int MB_CountStructures (int p) {
     return n;
 }
 
-// A team is out once it has no structures left or none of its players is still in the game.
+// A team is out once it has no structures left or none of its players is still in the game. A
+// team that started empty (a solo test) never is: type gg to end such a game.
 bool MB_TeamIsOut (int t) {
     int p;
     int structures;
     bool anyone;
+    if (gv_teamSize[t] == 0) {
+        return false;
+    }
     structures = 0;
     anyone = false;
     for (p = 1; p <= 8; p += 1) {

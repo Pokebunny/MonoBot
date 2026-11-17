@@ -39,6 +39,7 @@ const int MB_ASSIGN_SECONDS = 30;
 // clock shows real seconds at Faster speed, 1.4 game seconds each: 10:00 = 840. The panel's own
 // countdown therefore starts at 14:00 and runs fast, reaching zero as the clock hits 10:00.
 const int MB_TRADE_LOCK_SECONDS = 840;
+const fixed MB_PREVIEW_SECONDS = 4.0;   // the picks preview before the 3-2-1
 
 // Lifted-off Terran buildings start burning this long into the battle if they're all a player has.
 const fixed MB_FLOATER_GRACE_GAME_SECONDS = 168.0;  // 2:00 on the clock
@@ -62,6 +63,7 @@ const int MB_PHASE_OPT_IN = 5;
 const int MB_PHASE_CAPTAIN_DRAFT = 6;
 const int MB_PHASE_ASSIGN = 7;
 const int MB_PHASE_BATTLE = 8;
+const int MB_PHASE_PREVIEW = 9;
 
 const int MB_TEXT_BUTTONS = 4;  // per panel: actions and choices that aren't units
 const int MB_CARDS = 20;        // per panel: unit cards
@@ -1918,6 +1920,9 @@ text MB_ObserverLine (int p) {
             }
         }
     }
+    else if (gv_phase == MB_PHASE_PREVIEW) {
+        s = s + gv_unitLabel[gv_pick[p]];
+    }
     else if (gv_phase == MB_PHASE_OPT_IN) {
         if (gv_optIn[p]) {
             s = s + "volunteered";
@@ -2514,6 +2519,47 @@ bool MB_WatchBattle (bool testConds, bool runActions) {
     return true;
 }
 
+void MB_CountdownSound (string id) {
+    SoundPlayForPlayer(SoundLink(id, c_soundIndexAny), c_maxPlayers, PlayerGroupAll(), 100.0, 0.0);
+}
+
+// Every pick, both teams, then a 3-2-1 into the battle (the engine's own countdown is hidden: it
+// plays at load, before the pick phase).
+void MB_RunPreview () {
+    int p;
+    int r;
+    int k;
+    int q;
+    int left;
+    gv_phase = MB_PHASE_PREVIEW;
+    gv_turnPlayer = 0;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) == 0) {
+            continue;
+        }
+        MB_HideButtons(p);
+        MB_HideCards(p);
+        MB_HideStrips(p);
+        MB_Layout(p, 0, 2, false);
+        for (r = 1; r <= 2; r += 1) {
+            for (k = 1; k <= gv_teamSize[r]; k += 1) {
+                q = gv_teamPlayers[r][k];
+                MB_SetStrip(p, r, k, gv_pick[q], TextWithColor(MB_Name(q), ColorFromIndex(PlayerGetColorIndex(q, false), c_teamColorDiffuse)));
+            }
+        }
+        MB_SetInfo(p, MB_Text(""));
+    }
+    MB_TitleAll(MB_Text("The picks"));
+    MB_RefreshObserver();
+    Wait(MB_PREVIEW_SECONDS, c_timeReal);
+    for (left = 3; left >= 1; left -= 1) {
+        MB_TitleAll(MB_Text("Battle starts in " + IntToString(left)));
+        MB_CountdownSound("UI_Bnet_MatchCountdown" + IntToString(left));
+        Wait(1.0, c_timeReal);
+    }
+    MB_CountdownSound("UI_Bnet_MatchCountdownGo");
+}
+
 void MB_StartBattle () {
     int p;
     int u;
@@ -2595,6 +2641,7 @@ bool MB_Main (bool testConds, bool runActions) {
     else {
         MB_RunCaptains();
     }
+    MB_RunPreview();
     MB_StartBattle();
     return true;
 }

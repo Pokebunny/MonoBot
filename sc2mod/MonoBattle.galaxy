@@ -860,7 +860,8 @@ const int MB_CARD_COLUMNS = 4;
 const int MB_CARD_WIDTH = 200;
 const int MB_CARD_GAP = 40;
 const int MB_CARD_ICON = 52;
-const int MB_CARD_PITCH = 92;   // icon, 4, name button (32), 4
+const int MB_CARD_NAME_HEIGHT = 36;  // shorter and the game reports names as too tall for a line
+const int MB_CARD_PITCH = 96;   // icon, 4, name button, 4
 const int MB_PANEL_WIDTH = 1000;
 
 void MB_CreatePanel (int p) {
@@ -890,7 +891,7 @@ void MB_CreatePanel (int p) {
         DialogControlSetVisible(c, PlayerGroupAll(), false);
         gv_cardHotspot[p][i] = c;
         c = DialogControlCreate(gv_dialog[p], c_triggerControlTypeButton);
-        DialogControlSetSize(c, PlayerGroupAll(), MB_CARD_WIDTH, 32);
+        DialogControlSetSize(c, PlayerGroupAll(), MB_CARD_WIDTH, MB_CARD_NAME_HEIGHT);
         DialogControlSetVisible(c, PlayerGroupAll(), false);
         gv_cardName[p][i] = c;
     }

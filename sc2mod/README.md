@@ -46,9 +46,9 @@ only the Editor's compiler and a real game can prove them.
 4. **Battle.** Each player's race is set to their pick's, their pick and its
    upgrades are unlocked, and a melee base spawns at their start location.
    The clock starts at 0:00. The **picks panel** appears in the top-left
-   corner, as on the old map: a portrait per player (team 1 above team 2),
-   their name beneath in their colour, "unit - player" on hover, and a Picks
-   button that collapses it. It's shown to everyone, observers included.
+   corner, as on the old map: a small portrait per player (team 1's row above
+   team 2's), the player's name in their colour and their unit on hover, and a
+   Picks button that collapses it. It's shown to everyone, observers included.
 5. **End.** A team with no structures left, or no players left, loses. Every
    game ends with Victory/Defeat. Typing **gg** opens a **concede vote** for
    your team (your gg counts as yes; 20 s); when every remaining player on the
@@ -147,7 +147,7 @@ Run `MonoBattle.galaxy` on a 4v4 melee map through each mode, then check:
 - [ ] The lobby shows a host-only Pick mode setting; Vote in game runs the
       vote, and each fixed mode skips it and announces "set by the host"
 - [ ] Every mode's buttons, timers and info text behave as described above
-- [ ] The picks panel shows every portrait, name and hover text, sits clear of
+- [ ] The picks panel shows every portrait and its hover text (name and unit), sits clear of
       the game's own top-left buttons, and the Picks button collapses it
 - [ ] An observer in the lobby, and a replay of the game, both show the picks
       panel (it's shown to all, but observers' view of custom UI is unproven)

@@ -129,7 +129,6 @@ int[9][21] gv_button;
 int gv_picksDialog;
 int gv_picksToggle;
 int[3][5] gv_picksPortrait;
-int[3][5] gv_picksName;
 bool[17] gv_picksHidden;  // per viewer, observers included
 
 //--------------------------------------------------------------------------------------------------
@@ -1763,20 +1762,23 @@ void MB_RefreshInfo () {
 }
 
 //--------------------------------------------------------------------------------------------------
-// Picks panel: a portrait per player in the top-left corner, team 1 above team 2, the player's name
-// beneath in their colour and "unit - player" on hover. Shown to everyone, observers included; the
-// Picks button collapses it for whoever presses it.
+// Picks panel: a small portrait per player in the top-left corner, team 1's row above team 2's;
+// hovering one shows the player's name in their colour and their unit. Shown to everyone,
+// observers included; the Picks button collapses it for whoever presses it.
 //--------------------------------------------------------------------------------------------------
+const int MB_PORTRAIT = 40;
+const int MB_PORTRAIT_GAP = 4;
+
 void MB_CreatePicksPanel () {
     int t;
     int k;
     int p;
     int c;
-    // Slots are 110 wide so names fit under the portraits; the button is tall enough for its label.
-    gv_picksDialog = DialogCreate(570, 200, c_anchorTopLeft, 0, 45, false);
+    gv_picksDialog = DialogCreate(260, 90, c_anchorTopLeft, 0, 45, false);
     DialogSetImageVisible(gv_picksDialog, false);
+    // 36 tall: shorter and the game reports the label as too tall for one line.
     gv_picksToggle = DialogControlCreate(gv_picksDialog, c_triggerControlTypeButton);
-    DialogControlSetSize(gv_picksToggle, PlayerGroupAll(), 100, 44);
+    DialogControlSetSize(gv_picksToggle, PlayerGroupAll(), 72, 36);
     DialogControlSetPosition(gv_picksToggle, PlayerGroupAll(), c_anchorTopLeft, 0, 0);
     DialogControlSetPropertyAsText(gv_picksToggle, c_triggerControlPropertyText, PlayerGroupAll(), MB_Text("Picks"));
     for (t = 1; t <= 2; t += 1) {
@@ -1786,17 +1788,12 @@ void MB_CreatePicksPanel () {
                 continue;
             }
             c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
-            DialogControlSetSize(c, PlayerGroupAll(), 48, 48);
-            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 141 + (k - 1) * 110, 4 + (t - 1) * 84);
+            DialogControlSetSize(c, PlayerGroupAll(), MB_PORTRAIT, MB_PORTRAIT);
+            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 78 + (k - 1) * (MB_PORTRAIT + MB_PORTRAIT_GAP), (t - 1) * (MB_PORTRAIT + MB_PORTRAIT_GAP));
             DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), gv_unitIcon[gv_pick[p]]);
-            DialogControlSetPropertyAsText(c, c_triggerControlPropertyTooltip, PlayerGroupAll(), MB_Text(gv_unitLabel[gv_pick[p]] + " - ") + MB_Name(p));
+            DialogControlSetPropertyAsText(c, c_triggerControlPropertyTooltip, PlayerGroupAll(), TextWithColor(MB_Name(p), ColorFromIndex(PlayerGetColorIndex(p, false), c_teamColorDiffuse)) + MB_Text(" - " + gv_unitLabel[gv_pick[p]]));
             DialogControlSetPropertyAsBool(c, c_triggerControlPropertyAcceptMouseTarget, PlayerGroupAll(), true);
             gv_picksPortrait[t][k] = c;
-            c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeLabel);
-            DialogControlSetSize(c, PlayerGroupAll(), 106, 28);
-            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 112 + (k - 1) * 110, 52 + (t - 1) * 84);
-            DialogControlSetPropertyAsText(c, c_triggerControlPropertyText, PlayerGroupAll(), TextWithColor(MB_Name(p), ColorFromIndex(PlayerGetColorIndex(p, false), c_teamColorDiffuse)));
-            gv_picksName[t][k] = c;
         }
     }
     DialogSetVisible(gv_picksDialog, PlayerGroupAll(), true);
@@ -1810,7 +1807,6 @@ void MB_TogglePicks (int viewer) {
         for (k = 1; k <= 4; k += 1) {
             if (gv_picksPortrait[t][k] != 0) {
                 DialogControlSetVisible(gv_picksPortrait[t][k], PlayerGroupSingle(viewer), !gv_picksHidden[viewer]);
-                DialogControlSetVisible(gv_picksName[t][k], PlayerGroupSingle(viewer), !gv_picksHidden[viewer]);
             }
         }
     }

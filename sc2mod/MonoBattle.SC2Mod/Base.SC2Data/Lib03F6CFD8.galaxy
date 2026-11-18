@@ -50,6 +50,7 @@ const int MB_ASSIGN_SECONDS = 30;
 // clock shows real seconds at Faster speed, 1.4 game seconds each: 10:00 = 840. The panel's own
 // countdown therefore starts at 14:00 and runs fast, reaching zero as the clock hits 10:00.
 const int MB_TRADE_LOCK_SECONDS = 840;
+const fixed MB_PREVIEW_SECONDS = 7.0;   // the picks preview before the 3-2-1: 10 s on screen in all
 
 // Lifted-off Terran buildings start burning this long into the battle if they're all a player has.
 const fixed MB_FLOATER_GRACE_GAME_SECONDS = 168.0;  // 2:00 on the clock
@@ -73,6 +74,7 @@ const int MB_PHASE_OPT_IN = 5;
 const int MB_PHASE_CAPTAIN_DRAFT = 6;
 const int MB_PHASE_ASSIGN = 7;
 const int MB_PHASE_BATTLE = 8;
+const int MB_PHASE_PREVIEW = 9;
 
 const int MB_TEXT_BUTTONS = 4;  // per panel: actions and choices that aren't units
 const int MB_CARDS = 20;        // per panel: unit cards
@@ -435,6 +437,12 @@ void MB_DisallowEverything (int lp_player) {
     TechTreeUpgradeAllow(lp_player, "zerglingattackspeed", false);
     TechTreeUpgradeAllow(lp_player, "zerglingmovementspeed", false);
     TechTreeUpgradeAllow(lp_player, "ObverseIncubation", false);
+    TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel1", false);
+    TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel2", false);
+    TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel3", false);
+    TechTreeUpgradeAllow(lp_player, "ZergMeleeWeaponsLevel1", false);
+    TechTreeUpgradeAllow(lp_player, "ZergMeleeWeaponsLevel2", false);
+    TechTreeUpgradeAllow(lp_player, "ZergMeleeWeaponsLevel3", false);
     TechTreeAbilityAllow(lp_player, AbilityCommand("MedivacHeal", 0), false);
     TechTreeAbilityAllow(lp_player, AbilityCommand("ArmSiloWithNuke", 0), false);
     TechTreeAbilityAllow(lp_player, AbilityCommand("ArchonWarp", 0), false);
@@ -457,11 +465,21 @@ void MB_DisallowEverything (int lp_player) {
     TechTreeAbilityAllow(lp_player, AbilityCommand("SeekerMissile", 0), false);
 }
 
+// Some research buttons show only while another unit is allowed (Stimpack: Marine; Protoss air
+// weapons and armour: Phoenix). Allow it but take away its train button, the first in lp_train.
+void MB_AllowForResearch (int lp_player, string lp_unit, string lp_train) {
+    TechTreeUnitAllow(lp_player, lp_unit, true);
+    TechTreeAbilityAllow(lp_player, AbilityCommand(lp_train, 0), false);
+}
+
 void MB_Unlock (int lp_player, string lp_name) {
     if (lp_name == "Zergling") {
         TechTreeUnitAllow(lp_player, "Zergling", true);
         TechTreeUpgradeAllow(lp_player, "zerglingattackspeed", true);
         TechTreeUpgradeAllow(lp_player, "zerglingmovementspeed", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMeleeWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMeleeWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMeleeWeaponsLevel3", true);
     }
     else if (lp_name == "Baneling") {
         TechTreeUnitAllow(lp_player, "Baneling", true);
@@ -469,6 +487,9 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUnitAllow(lp_player, "BanelingCocoon", true);
         TechTreeUpgradeAllow(lp_player, "CentrificalHooks", true);
         TechTreeUpgradeAllow(lp_player, "zerglingmovementspeed", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMeleeWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMeleeWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMeleeWeaponsLevel3", true);
     }
     else if (lp_name == "Roach") {
         TechTreeUnitAllow(lp_player, "Roach", true);
@@ -554,6 +575,9 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUnitAllow(lp_player, "Ultralisk", true);
         TechTreeUpgradeAllow(lp_player, "ChitinousPlating", true);
         TechTreeUpgradeAllow(lp_player, "AnabolicSynthesis", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMeleeWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMeleeWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "ZergMeleeWeaponsLevel3", true);
     }
     else if (lp_name == "Zealot") {
         TechTreeUpgradeAllow(lp_player, "SunderingImpact", true);
@@ -637,12 +661,18 @@ void MB_Unlock (int lp_player, string lp_name) {
     }
     else if (lp_name == "Disruptor") {
         TechTreeUnitAllow(lp_player, "Disruptor", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel1", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel2", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel3", false);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", false);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", false);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", false);
     }
     else if (lp_name == "Phoenix") {
         TechTreeUnitAllow(lp_player, "Phoenix", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel1", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel2", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel3", false);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", true);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", true);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", true);
@@ -650,6 +680,9 @@ void MB_Unlock (int lp_player, string lp_name) {
     }
     else if (lp_name == "Carrier") {
         TechTreeUnitAllow(lp_player, "Carrier", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel1", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel2", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel3", false);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", true);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", true);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", true);
@@ -657,6 +690,9 @@ void MB_Unlock (int lp_player, string lp_name) {
     }
     else if (lp_name == "VoidRay") {
         TechTreeUnitAllow(lp_player, "VoidRay", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel1", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel2", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel3", false);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", true);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", true);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", true);
@@ -664,6 +700,9 @@ void MB_Unlock (int lp_player, string lp_name) {
     }
     else if (lp_name == "Tempest") {
         TechTreeUnitAllow(lp_player, "Tempest", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel1", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel2", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel3", false);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", true);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", true);
         TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", true);
@@ -671,25 +710,35 @@ void MB_Unlock (int lp_player, string lp_name) {
     }
     else if (lp_name == "Oracle") {
         TechTreeUnitAllow(lp_player, "Oracle", true);
-        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel1", true);
-        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel2", true);
-        TechTreeUpgradeAllow(lp_player, "ProtossAirWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel1", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel2", false);
+        TechTreeUpgradeAllow(lp_player, "ProtossGroundWeaponsLevel3", false);
     }
     else if (lp_name == "Marine") {
         TechTreeUnitAllow(lp_player, "Marine", true);
         TechTreeUnitAllow(lp_player, "Medivac", true);
         TechTreeUpgradeAllow(lp_player, "Stimpack", true);
         TechTreeUpgradeAllow(lp_player, "ShieldWall", true);
+        TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel3", true);
     }
     else if (lp_name == "Reaper") {
         TechTreeUnitAllow(lp_player, "Reaper", true);
         TechTreeUnitAllow(lp_player, "Medivac", true);
+        TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel3", true);
     }
     else if (lp_name == "Marauder") {
         TechTreeUnitAllow(lp_player, "Marauder", true);
+        MB_AllowForResearch(lp_player, "Marine", "BarracksTrain");
         TechTreeUnitAllow(lp_player, "Medivac", true);
         TechTreeUpgradeAllow(lp_player, "PunisherGrenades", true);
         TechTreeUpgradeAllow(lp_player, "Stimpack", true);
+        TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel3", true);
     }
     else if (lp_name == "Ghost") {
         TechTreeUnitAllow(lp_player, "Ghost", true);
@@ -697,6 +746,9 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "PersonalCloaking", true);
         TechTreeAbilityAllow(lp_player, AbilityCommand("ArmSiloWithNuke", 0), true);
         TechTreeUpgradeAllow(lp_player, "GhostMoebiusReactor", true);
+        TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel3", true);
     }
     else if (lp_name == "SiegeTank") {
         TechTreeUnitAllow(lp_player, "SiegeTank", true);
@@ -711,6 +763,7 @@ void MB_Unlock (int lp_player, string lp_name) {
     }
     else if (lp_name == "Thor") {
         TechTreeUpgradeAllow(lp_player, "SmartServos", true);
+        TechTreeUnitAllow(lp_player, "Thor", true);
         TechTreeUnitAllow(lp_player, "ThorAP", true);
         TechTreeUnitAllow(lp_player, "Medivac", true);
         TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
@@ -772,9 +825,6 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel1", true);
         TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel2", true);
         TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel3", true);
-        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
-        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel2", true);
-        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel3", true);
     }
     else if (lp_name == "Liberator") {
         TechTreeUnitAllow(lp_player, "Liberator", true);
@@ -1929,6 +1979,9 @@ text MB_ObserverLine (int p) {
             }
         }
     }
+    else if (gv_phase == MB_PHASE_PREVIEW) {
+        s = s + gv_unitLabel[gv_pick[p]];
+    }
     else if (gv_phase == MB_PHASE_OPT_IN) {
         if (gv_optIn[p]) {
             s = s + "volunteered";
@@ -1999,6 +2052,7 @@ void MB_RefreshInfo () {
     int r;
     int k;
     int q;
+    int[3] shown;
     for (p = 1; p <= 8; p += 1) {
         t = MB_TeamOf(p);
         if (t == 0) {
@@ -2013,11 +2067,14 @@ void MB_RefreshInfo () {
             }
         }
         else if (gv_phase == MB_PHASE_SINGLE) {
-            for (r = 1; r <= 2; r += 1) {
-                for (k = 1; k <= gv_teamSize[r]; k += 1) {
-                    q = gv_teamPlayers[r][k];
-                    MB_SetStrip(p, r, k, gv_pick[q], MB_StripName(q, gv_pick[q] != 0));
-                }
+            // Each team's row in draft order.
+            shown[1] = 0;
+            shown[2] = 0;
+            for (k = 1; k <= gv_orderCount; k += 1) {
+                q = gv_order[k];
+                r = MB_TeamOf(q);
+                shown[r] += 1;
+                MB_SetStrip(p, r, shown[r], gv_pick[q], MB_StripName(q, gv_pick[q] != 0));
             }
         }
         else if (gv_phase == MB_PHASE_CAPTAIN_DRAFT) {
@@ -2045,23 +2102,25 @@ void MB_RefreshInfo () {
 // observers included; the small button at its left collapses it for whoever presses it.
 //--------------------------------------------------------------------------------------------------
 const int MB_PORTRAIT = 40;
-const int MB_PORTRAIT_FRAME = 4;  // colour showing around the portrait
-const int MB_PORTRAIT_PITCH = 52;
+const int MB_PORTRAIT_FRAME = 2;  // colour showing around the portrait
+const int MB_PORTRAIT_PITCH = 48;
+const int MB_PICKS_PAD = 6;       // from the screen corner
+const int MB_PICKS_LEFT = 36;     // portraits start right of the toggle
 
 void MB_CreatePicksPanel () {
     int t;
     int k;
     int p;
     int c;
-    gv_picksDialog = DialogCreate(250, 110, c_anchorTopLeft, 0, 45, false);
+    gv_picksDialog = DialogCreate(MB_PICKS_LEFT + 4 * MB_PORTRAIT_PITCH + MB_PICKS_PAD, 2 * MB_PORTRAIT_PITCH + MB_PICKS_PAD, c_anchorTopLeft, 0, 0, false);
     DialogSetImageVisible(gv_picksDialog, false);
     // The old map's toggle: a small icon under an invisible button, no text.
     c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
     DialogControlSetSize(c, PlayerGroupAll(), 24, 24);
-    DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 4, 8);
+    DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, MB_PICKS_PAD, MB_PICKS_PAD + (MB_PORTRAIT + 2 * MB_PORTRAIT_FRAME - 24) / 2);
     DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), "Assets\\Textures\\ui_battlenet_glue_chatpanel_minimizehover.dds");
     gv_picksToggle = DialogControlCreate(gv_picksDialog, c_triggerControlTypeButton);
-    DialogControlSetSize(gv_picksToggle, PlayerGroupAll(), 32, 40);
+    DialogControlSetSize(gv_picksToggle, PlayerGroupAll(), MB_PICKS_LEFT - 2, MB_PORTRAIT_PITCH + MB_PICKS_PAD);
     DialogControlSetPosition(gv_picksToggle, PlayerGroupAll(), c_anchorTopLeft, 0, 0);
     DialogControlFadeTransparency(gv_picksToggle, PlayerGroupAll(), 0.0, 100.0);
     for (t = 1; t <= 2; t += 1) {
@@ -2072,14 +2131,14 @@ void MB_CreatePicksPanel () {
             }
             c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
             DialogControlSetSize(c, PlayerGroupAll(), MB_PORTRAIT + 2 * MB_PORTRAIT_FRAME, MB_PORTRAIT + 2 * MB_PORTRAIT_FRAME);
-            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 38 + (k - 1) * MB_PORTRAIT_PITCH, (t - 1) * MB_PORTRAIT_PITCH);
+            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, MB_PICKS_LEFT + (k - 1) * MB_PORTRAIT_PITCH, MB_PICKS_PAD + (t - 1) * MB_PORTRAIT_PITCH);
             DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), "Assets\\Textures\\white32.dds");
             DialogControlSetPropertyAsColor(c, c_triggerControlPropertyColor, PlayerGroupAll(), ColorFromIndex(PlayerGetColorIndex(p, false), c_teamColorDiffuse));
-            DialogControlFadeTransparency(c, PlayerGroupAll(), 0.0, 90.0);  // a light tint: 10% colour (testing)
+            DialogControlFadeTransparency(c, PlayerGroupAll(), 0.0, 85.0);  // a light tint: 15% colour (testing)
             gv_picksBack[t][k] = c;
             c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
             DialogControlSetSize(c, PlayerGroupAll(), MB_PORTRAIT, MB_PORTRAIT);
-            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 38 + MB_PORTRAIT_FRAME + (k - 1) * MB_PORTRAIT_PITCH, MB_PORTRAIT_FRAME + (t - 1) * MB_PORTRAIT_PITCH);
+            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, MB_PICKS_LEFT + MB_PORTRAIT_FRAME + (k - 1) * MB_PORTRAIT_PITCH, MB_PICKS_PAD + MB_PORTRAIT_FRAME + (t - 1) * MB_PORTRAIT_PITCH);
             DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), gv_unitIcon[gv_pick[p]]);
             DialogControlSetPropertyAsText(c, c_triggerControlPropertyTooltip, PlayerGroupAll(), TextWithColor(MB_Name(p), ColorFromIndex(PlayerGetColorIndex(p, false), c_teamColorDiffuse)) + MB_Text(" - " + gv_unitLabel[gv_pick[p]]));
             DialogControlSetPropertyAsBool(c, c_triggerControlPropertyAcceptMouseTarget, PlayerGroupAll(), true);
@@ -2183,12 +2242,21 @@ void MB_DisableMelee (int p) {
 // The map's melee setup can run after the mod starts, and would then spawn bases and re-enable
 // melee victory/defeat behind it. Wait (up to 5 s) until a player's starting units exist, give the
 // setup a moment to finish, then take over.
+// Melee's starting minerals arrive at load; left alone, they could be traded during the pick phase.
+void MB_ZeroResources (int p) {
+    PlayerModifyPropertyInt(p, c_playerPropMinerals, c_playerPropOperSetTo, 0);
+    PlayerModifyPropertyInt(p, c_playerPropVespene, c_playerPropOperSetTo, 0);
+}
+
 void MB_ClearMeleeStart () {
     int p;
     fixed waited;
     bool spawned;
     waited = 0.0;
     spawned = false;
+    for (p = 1; p <= 8; p += 1) {
+        MB_ZeroResources(p);
+    }
     while (waited < 5.0 && !spawned) {
         Wait(0.25, c_timeGame);
         waited += 0.25;
@@ -2202,6 +2270,7 @@ void MB_ClearMeleeStart () {
     for (p = 1; p <= 8; p += 1) {
         MB_DisableMelee(p);
         MB_RemovePlayerUnits(p);
+        MB_ZeroResources(p);
     }
 }
 
@@ -2521,6 +2590,47 @@ bool MB_WatchBattle (bool testConds, bool runActions) {
     return true;
 }
 
+void MB_CountdownSound (string id) {
+    SoundPlayForPlayer(SoundLink(id, c_soundIndexAny), c_maxPlayers, PlayerGroupAll(), 100.0, 0.0);
+}
+
+// Every pick, both teams, then a 3-2-1 into the battle (the engine's own countdown is hidden: it
+// plays at load, before the pick phase).
+void MB_RunPreview () {
+    int p;
+    int r;
+    int k;
+    int q;
+    int left;
+    gv_phase = MB_PHASE_PREVIEW;
+    gv_turnPlayer = 0;
+    for (p = 1; p <= 8; p += 1) {
+        if (MB_TeamOf(p) == 0) {
+            continue;
+        }
+        MB_HideButtons(p);
+        MB_HideCards(p);
+        MB_HideStrips(p);
+        MB_Layout(p, 0, 2, false);
+        for (r = 1; r <= 2; r += 1) {
+            for (k = 1; k <= gv_teamSize[r]; k += 1) {
+                q = gv_teamPlayers[r][k];
+                MB_SetStrip(p, r, k, gv_pick[q], TextWithColor(MB_Name(q), ColorFromIndex(PlayerGetColorIndex(q, false), c_teamColorDiffuse)));
+            }
+        }
+        MB_SetInfo(p, MB_Text(""));
+    }
+    MB_TitleAll(MB_Text("The picks"));
+    MB_RefreshObserver();
+    Wait(MB_PREVIEW_SECONDS, c_timeReal);
+    for (left = 3; left >= 1; left -= 1) {
+        MB_TitleAll(MB_Text("Battle starts in " + IntToString(left)));
+        MB_CountdownSound("UI_Bnet_MatchCountdown" + IntToString(left));
+        Wait(1.0, c_timeReal);
+    }
+    MB_CountdownSound("UI_Bnet_MatchCountdownGo");
+}
+
 void MB_StartBattle () {
     int p;
     int u;
@@ -2548,8 +2658,18 @@ void MB_StartBattle () {
         race = gv_unitRace[u];
         PlayerSetRace(p, race);
         MB_Unlock(p, gv_unitName[u]);
+        if (race == "Prot" && gv_unitName[u] != "Phoenix") {
+            MB_AllowForResearch(p, "Phoenix", "StargateTrain");  // air armour, for Observers and Prisms
+        }
+        MB_ZeroResources(p);  // whatever was traded in the pick phase anyway
         MeleeInitResourcesForPlayer(p, race);
         MeleeInitUnitsForPlayer(p, race, PlayerStartLocation(p));
+        if (race == "Zerg") {
+            // Melee's starting larva come with the game start, not the Hatchery; spawn them from its
+            // own larva spawner so they count toward its cap of 3.
+            UnitBehaviorSpawn(UnitGroupUnit(UnitGroup("Hatchery", p, RegionEntireMap(), UnitFilter(0, 0, 0, 0), 0), 1),
+                "SpawnLarva", 3);
+        }
     }
     MB_CreatePicksPanel();
     // Hatcheries spawn after the pick phase rather than at load, so their creep catches up fast.
@@ -2567,6 +2687,9 @@ void MB_StartBattle () {
 //--------------------------------------------------------------------------------------------------
 bool MB_Main (bool testConds, bool runActions) {
     int p;
+    // The engine's 3-2-1 start countdown (GameUI.SC2Layout). Its pause can't be skipped, only hidden.
+    DialogControlSetVisible(DialogControlHookupStandard(c_triggerControlTypeFlash,
+        "UIContainer/FullscreenUpperContainer/GameStartCountdownPanel/FlashFrame"), PlayerGroupAll(), false);
     MB_ClearMeleeStart();
     GameSetMissionTimePaused(true);
     MB_SetupRoster();
@@ -2599,6 +2722,7 @@ bool MB_Main (bool testConds, bool runActions) {
     else {
         MB_RunCaptains();
     }
+    MB_RunPreview();
     MB_StartBattle();
     return true;
 }

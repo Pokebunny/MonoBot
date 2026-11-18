@@ -9,7 +9,7 @@ replay. The design and the reasons behind it are in the map spec doc.
 | --- | --- |
 | `MonoBattle.SC2Mod/` | The mod itself, as the Editor saves it (folder format). Open this in the Editor |
 | `MonoBattle.galaxy` | The whole script: vote, four pick modes, unit rules, battle start, ending, trade lock. Edit here, then `sync_mod.py` |
-| `sync_mod.py` | Copies `MonoBattle.galaxy` into `MonoBattle.SC2Mod` (a test fails if they differ) |
+| `sync_mod.py` | Copies `MonoBattle.galaxy` into `MonoBattle.SC2Mod`, both the Editor's copy and the compiled `Lib*.galaxy` the game runs (a test fails if they differ) |
 | `Attributes`, `GameStrings.txt` | The one lobby setting, **Pick mode** (host only): Vote in game (default), or a fixed mode |
 | `UpgradeData.xml` | The replay markers (135 no-effect upgrades), generated from the script's roster |
 | `RaceSwapTest.galaxy` | A throwaway test mod for the one thing no existing mod proved: switching race mid-game |
@@ -111,8 +111,10 @@ the custom script with init function `MB_Init`, the markers, the Pick mode
 setting, the name "MonoBot Monobattle").
 
 1. **Edit** `MonoBattle.galaxy`, then run `python sc2mod/sync_mod.py`.
-2. **Open** `sc2mod/MonoBattle.SC2Mod` in the Editor and save, which
-   compiles the script. Fix anything it reports (or paste the errors to Claude).
+2. **Open** `sc2mod/MonoBattle.SC2Mod` in the Editor (close it first if it
+   was open before the sync, without saving) and save. Fix anything it
+   reports (or paste the errors to Claude). Saving doesn't always recompile
+   the script, which is why `sync_mod.py` writes the compiled copy itself.
 3. **Test** on a 4v4 melee map (the Editor's preferences name the map used
    for testing mods).
 4. **Publish** from a single-file copy: File → Save As, `.SC2Mod` file format,

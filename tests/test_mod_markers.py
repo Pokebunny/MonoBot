@@ -149,6 +149,9 @@ def test_mod_folder_holds_the_current_script():
     assert [line.strip() for line in code.strip().splitlines()] == [
         line.strip() for line in script.strip().splitlines()
     ]
+    # The compiled copy is what the game runs.
+    lib = glob.glob(os.path.join(SC2MOD, "MonoBattle.SC2Mod", "Base.SC2Data", "Lib*[!h].galaxy"))
+    assert len(lib) == 1 and script.strip() in open(lib[0], encoding="utf8").read()
 
 
 def test_every_pick_unlocks_its_own_unit():

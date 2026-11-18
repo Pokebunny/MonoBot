@@ -25,7 +25,7 @@ include "TriggerLibs/NativeLib"
 // Settings
 //--------------------------------------------------------------------------------------------------
 // Bump when the rules change; MonoBot reads it from MB_Version.
-const int MB_VERSION = 3;
+const int MB_VERSION = 4;
 
 const int MB_UNITS = 42;
 const int MB_ZERG_FIRST = 1;      // roster index ranges, by race
@@ -973,6 +973,7 @@ void MB_CreatePanel (int p) {
 // the cards or (buttonsBelow) beneath them.
 void MB_Layout (int p, int cards, int stripRows, bool buttonsBelow) {
     int y;
+    int lines;
     int i;
     int r;
     int k;
@@ -1014,8 +1015,13 @@ void MB_Layout (int p, int cards, int stripRows, bool buttonsBelow) {
         }
     }
     y = y + stripRows * 64;
+    lines = 1;
+    if (gv_phase == MB_PHASE_PICK_THREE) {
+        lines = gv_teamSize[MB_TeamOf(p)];  // each ally's offers (MB_OfferLines)
+    }
     DialogControlSetPosition(gv_info[p], PlayerGroupAll(), c_anchorTopLeft, 40, y);
-    DialogSetSize(gv_dialog[p], MB_PANEL_WIDTH, y + 50);
+    DialogControlSetSize(gv_info[p], PlayerGroupAll(), 920, lines * 30);
+    DialogSetSize(gv_dialog[p], MB_PANEL_WIDTH, y + lines * 30 + 20);
 }
 
 void MB_SetTitle (int p, text t) {
@@ -2036,6 +2042,21 @@ int MB_AssignedUnit (int t, int q) {
     return 0;
 }
 
+// Pick Three: every ally's three offers, one line each.
+text MB_OfferLines (int t) {
+    text s;
+    int k;
+    int q;
+    s = MB_Text("");
+    for (k = 1; k <= gv_teamSize[t]; k += 1) {
+        q = gv_teamPlayers[t][k];
+        if (gv_offer[q][1] != 0) {
+            s = s + MB_Name(q) + MB_Text(": " + gv_unitLabel[gv_offer[q][1]] + " / " + gv_unitLabel[gv_offer[q][2]] + " / " + gv_unitLabel[gv_offer[q][3]] + "<n/>");
+        }
+    }
+    return s;
+}
+
 // The team strips, as each phase lets players see: their own team in Blind Random, Pick Three and
 // the assignment; both teams in the drafts.
 void MB_RefreshInfo () {
@@ -2057,6 +2078,9 @@ void MB_RefreshInfo () {
                 q = gv_teamPlayers[t][k];
                 MB_SetStrip(p, 1, k, gv_pick[q], MB_StripName(q, gv_locked[q]));
             }
+        }
+        if (gv_phase == MB_PHASE_PICK_THREE) {
+            MB_SetInfo(p, MB_OfferLines(t));
         }
         else if (gv_phase == MB_PHASE_SINGLE) {
             // Each team's row in draft order.

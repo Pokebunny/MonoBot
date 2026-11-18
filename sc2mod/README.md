@@ -11,6 +11,7 @@ replay. The design and the reasons behind it are in the map spec doc.
 | `MonoBattle.galaxy` | The whole script: vote, four pick modes, unit rules, battle start, ending, trade lock. Edit here, then `sync_mod.py` |
 | `sync_mod.py` | Copies `MonoBattle.galaxy` into `MonoBattle.SC2Mod`, both the Editor's copy and the compiled `Lib*.galaxy` the game runs (a test fails if they differ) |
 | `Attributes`, `GameStrings.txt` | The one lobby setting, **Pick mode** (host only): Vote in game (default), or a fixed mode |
+| `MonoBattle.SC2Mod/Base.SC2Data/GameData/RequirementData.xml` | Drops Blizzard's "needs Marine/Phoenix allowed" condition from Stimpack and Protoss air research, since the mod locks those units |
 | `UpgradeData.xml` | The replay markers (135 no-effect upgrades), generated from the script's roster |
 | `RaceSwapTest.galaxy` | A throwaway test mod for the one thing no existing mod proved: switching race mid-game |
 | `lint_galaxy.py` | Static checks for the scripts (calls, argument counts, constants, Galaxy's locals-first rule) |

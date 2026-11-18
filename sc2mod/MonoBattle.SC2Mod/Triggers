@@ -23,7 +23,7 @@
                 // Settings
                 //--------------------------------------------------------------------------------------------------
                 // Bump when the rules change; MonoBot reads it from MB_Version.
-                const int MB_VERSION = 2;
+                const int MB_VERSION = 3;
 
                 const int MB_UNITS = 42;
                 const int MB_ZERG_FIRST = 1;      // roster index ranges, by race
@@ -463,13 +463,6 @@
                     TechTreeAbilityAllow(lp_player, AbilityCommand(&quot;SeekerMissile&quot;, 0), false);
                 }
 
-                // Some research buttons show only while another unit is allowed (Stimpack: Marine; Protoss air
-                // weapons and armour: Phoenix). Allow it but take away its train button, the first in lp_train.
-                void MB_AllowForResearch (int lp_player, string lp_unit, string lp_train) {
-                    TechTreeUnitAllow(lp_player, lp_unit, true);
-                    TechTreeAbilityAllow(lp_player, AbilityCommand(lp_train, 0), false);
-                }
-
                 void MB_Unlock (int lp_player, string lp_name) {
                     if (lp_name == &quot;Zergling&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;Zergling&quot;, true);
@@ -730,7 +723,6 @@
                     }
                     else if (lp_name == &quot;Marauder&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;Marauder&quot;, true);
-                        MB_AllowForResearch(lp_player, &quot;Marine&quot;, &quot;BarracksTrain&quot;);
                         TechTreeUnitAllow(lp_player, &quot;Medivac&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;PunisherGrenades&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;Stimpack&quot;, true);
@@ -2656,9 +2648,6 @@
                         race = gv_unitRace[u];
                         PlayerSetRace(p, race);
                         MB_Unlock(p, gv_unitName[u]);
-                        if (race == &quot;Prot&quot; &amp;&amp; gv_unitName[u] != &quot;Phoenix&quot;) {
-                            MB_AllowForResearch(p, &quot;Phoenix&quot;, &quot;StargateTrain&quot;);  // air armour, for Observers and Prisms
-                        }
                         MB_ZeroResources(p);  // whatever was traded in the pick phase anyway
                         MeleeInitResourcesForPlayer(p, race);
                         MeleeInitUnitsForPlayer(p, race, PlayerStartLocation(p));

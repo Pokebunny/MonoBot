@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Research that the game only shows while another unit is allowed (Stimpack: Marine; Protoss air
+     weapons and armour: Phoenix). The mod locks those units, so drop that condition: the script's
+     TechTreeUpgradeAllow per pick decides who researches what. -->
+<Catalog>
+    <CRequirement id="LearnStimpack">
+        <NodeArray index="Show" Link="NotCountUpgradeStimpackQueuedOrBetter"/>
+    </CRequirement>
+    <CRequirement id="LearnProtossAirWeapon1">
+        <NodeArray index="Show" Link="EqCountUpgradeProtossAirWeaponsLevel1QueuedOrBetter0"/>
+    </CRequirement>
+    <CRequirement id="LearnProtossAirWeapon2">
+        <NodeArray index="Show" Link="EqCountUpgradeProtossAirWeaponsLevel2QueuedOrBetter0"/>
+    </CRequirement>
+    <CRequirement id="LearnProtossAirWeapon3">
+        <NodeArray index="Show" Link="EqCountUpgradeProtossAirWeaponsLevel3QueuedOrBetter0"/>
+    </CRequirement>
+    <CRequirement id="LearnProtossAirArmor1">
+        <NodeArray index="Show" Link="EqCountUpgradeProtossAirArmorsLevel1QueuedOrBetter0"/>
+    </CRequirement>
+    <CRequirement id="LearnProtossAirArmor2">
+        <NodeArray index="Show" Link="EqCountUpgradeProtossAirArmorsLevel2QueuedOrBetter0"/>
+    </CRequirement>
+    <CRequirement id="LearnProtossAirArmor3">
+        <NodeArray index="Show" Link="EqCountUpgradeProtossAirArmorsLevel3QueuedOrBetter0"/>
+    </CRequirement>
+</Catalog>

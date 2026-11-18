@@ -66,7 +66,11 @@ only the Editor's compiler and a real game can prove them.
 Unit rules are the old map's: only the pick's own upgrades (including ones
 newer than the old map, like Interference Matrix and Lunge), morph precursors
 can't attack (e.g. a Baneling player's Zerglings), Medivacs never heal,
-Ravens are shared but can't use abilities unless picked. Changes from
+Ravens are shared but can't use abilities unless picked. Weapon upgrades go
+only to picks they help (infantry weapons: Marine, Marauder, Reaper, Ghost;
+Zerg melee: Zergling, Baneling, Ultralisk; Protoss ground: not Disruptor or air;
+Protoss air: Phoenix, Carrier, Void Ray, Tempest); armour is open to the whole
+race, Protoss air armour included, for Observers and Prisms. Changes from
 the old map: **Viper** is pickable and **Queen** isn't; Queens are shared and
 uncapped; Medivacs get Afterburners and Rapid Reignition; Tier Draft
 is gone; **no resource trading until 10:00** on the
@@ -165,8 +169,8 @@ Run `MonoBattle.galaxy` on a 4v4 melee map through each mode, then check:
       a failed vote can't be restarted for a minute, and every player's replay
       shows the result
 - [ ] The `MB_*` upgrades don't show anywhere in the UI or score screen
-- [ ] Hatcheries start with their usual larva (the old map added an extra
-      larva-spawn effect; it's left out until we know it's needed)
+- [x] The starting Hatchery has its 3 larva (the mod spawns them; melee's own
+      come with the game start, before the mod's base exists)
 - [ ] The replay uploads to MonoBot with the right mode, picks and winner
 
 ## Checking the scripts

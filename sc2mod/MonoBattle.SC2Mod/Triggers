@@ -435,6 +435,12 @@
                     TechTreeUpgradeAllow(lp_player, &quot;zerglingattackspeed&quot;, false);
                     TechTreeUpgradeAllow(lp_player, &quot;zerglingmovementspeed&quot;, false);
                     TechTreeUpgradeAllow(lp_player, &quot;ObverseIncubation&quot;, false);
+                    TechTreeUpgradeAllow(lp_player, &quot;TerranInfantryWeaponsLevel1&quot;, false);
+                    TechTreeUpgradeAllow(lp_player, &quot;TerranInfantryWeaponsLevel2&quot;, false);
+                    TechTreeUpgradeAllow(lp_player, &quot;TerranInfantryWeaponsLevel3&quot;, false);
+                    TechTreeUpgradeAllow(lp_player, &quot;ZergMeleeWeaponsLevel1&quot;, false);
+                    TechTreeUpgradeAllow(lp_player, &quot;ZergMeleeWeaponsLevel2&quot;, false);
+                    TechTreeUpgradeAllow(lp_player, &quot;ZergMeleeWeaponsLevel3&quot;, false);
                     TechTreeAbilityAllow(lp_player, AbilityCommand(&quot;MedivacHeal&quot;, 0), false);
                     TechTreeAbilityAllow(lp_player, AbilityCommand(&quot;ArmSiloWithNuke&quot;, 0), false);
                     TechTreeAbilityAllow(lp_player, AbilityCommand(&quot;ArchonWarp&quot;, 0), false);
@@ -457,11 +463,21 @@
                     TechTreeAbilityAllow(lp_player, AbilityCommand(&quot;SeekerMissile&quot;, 0), false);
                 }
 
+                // Some research buttons show only while another unit is allowed (Stimpack: Marine; Protoss air
+                // weapons and armour: Phoenix). Allow it but take away its train button, the first in lp_train.
+                void MB_AllowForResearch (int lp_player, string lp_unit, string lp_train) {
+                    TechTreeUnitAllow(lp_player, lp_unit, true);
+                    TechTreeAbilityAllow(lp_player, AbilityCommand(lp_train, 0), false);
+                }
+
                 void MB_Unlock (int lp_player, string lp_name) {
                     if (lp_name == &quot;Zergling&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;Zergling&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;zerglingattackspeed&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;zerglingmovementspeed&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;ZergMeleeWeaponsLevel1&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;ZergMeleeWeaponsLevel2&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;ZergMeleeWeaponsLevel3&quot;, true);
                     }
                     else if (lp_name == &quot;Baneling&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;Baneling&quot;, true);
@@ -469,6 +485,9 @@
                         TechTreeUnitAllow(lp_player, &quot;BanelingCocoon&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;CentrificalHooks&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;zerglingmovementspeed&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;ZergMeleeWeaponsLevel1&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;ZergMeleeWeaponsLevel2&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;ZergMeleeWeaponsLevel3&quot;, true);
                     }
                     else if (lp_name == &quot;Roach&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;Roach&quot;, true);
@@ -554,6 +573,9 @@
                         TechTreeUnitAllow(lp_player, &quot;Ultralisk&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;ChitinousPlating&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;AnabolicSynthesis&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;ZergMeleeWeaponsLevel1&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;ZergMeleeWeaponsLevel2&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;ZergMeleeWeaponsLevel3&quot;, true);
                     }
                     else if (lp_name == &quot;Zealot&quot;) {
                         TechTreeUpgradeAllow(lp_player, &quot;SunderingImpact&quot;, true);
@@ -637,12 +659,18 @@
                     }
                     else if (lp_name == &quot;Disruptor&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;Disruptor&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel1&quot;, false);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel2&quot;, false);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel3&quot;, false);
                         TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel1&quot;, false);
                         TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel2&quot;, false);
                         TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel3&quot;, false);
                     }
                     else if (lp_name == &quot;Phoenix&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;Phoenix&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel1&quot;, false);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel2&quot;, false);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel3&quot;, false);
                         TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel1&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel2&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel3&quot;, true);
@@ -650,6 +678,9 @@
                     }
                     else if (lp_name == &quot;Carrier&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;Carrier&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel1&quot;, false);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel2&quot;, false);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel3&quot;, false);
                         TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel1&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel2&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel3&quot;, true);
@@ -657,6 +688,9 @@
                     }
                     else if (lp_name == &quot;VoidRay&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;VoidRay&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel1&quot;, false);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel2&quot;, false);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel3&quot;, false);
                         TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel1&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel2&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel3&quot;, true);
@@ -664,6 +698,9 @@
                     }
                     else if (lp_name == &quot;Tempest&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;Tempest&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel1&quot;, false);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel2&quot;, false);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel3&quot;, false);
                         TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel1&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel2&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel3&quot;, true);
@@ -671,25 +708,35 @@
                     }
                     else if (lp_name == &quot;Oracle&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;Oracle&quot;, true);
-                        TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel1&quot;, true);
-                        TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel2&quot;, true);
-                        TechTreeUpgradeAllow(lp_player, &quot;ProtossAirWeaponsLevel3&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel1&quot;, false);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel2&quot;, false);
+                        TechTreeUpgradeAllow(lp_player, &quot;ProtossGroundWeaponsLevel3&quot;, false);
                     }
                     else if (lp_name == &quot;Marine&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;Marine&quot;, true);
                         TechTreeUnitAllow(lp_player, &quot;Medivac&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;Stimpack&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;ShieldWall&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;TerranInfantryWeaponsLevel1&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;TerranInfantryWeaponsLevel2&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;TerranInfantryWeaponsLevel3&quot;, true);
                     }
                     else if (lp_name == &quot;Reaper&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;Reaper&quot;, true);
                         TechTreeUnitAllow(lp_player, &quot;Medivac&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;TerranInfantryWeaponsLevel1&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;TerranInfantryWeaponsLevel2&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;TerranInfantryWeaponsLevel3&quot;, true);
                     }
                     else if (lp_name == &quot;Marauder&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;Marauder&quot;, true);
+                        MB_AllowForResearch(lp_player, &quot;Marine&quot;, &quot;BarracksTrain&quot;);
                         TechTreeUnitAllow(lp_player, &quot;Medivac&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;PunisherGrenades&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;Stimpack&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;TerranInfantryWeaponsLevel1&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;TerranInfantryWeaponsLevel2&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;TerranInfantryWeaponsLevel3&quot;, true);
                     }
                     else if (lp_name == &quot;Ghost&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;Ghost&quot;, true);
@@ -697,6 +744,9 @@
                         TechTreeUpgradeAllow(lp_player, &quot;PersonalCloaking&quot;, true);
                         TechTreeAbilityAllow(lp_player, AbilityCommand(&quot;ArmSiloWithNuke&quot;, 0), true);
                         TechTreeUpgradeAllow(lp_player, &quot;GhostMoebiusReactor&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;TerranInfantryWeaponsLevel1&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;TerranInfantryWeaponsLevel2&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;TerranInfantryWeaponsLevel3&quot;, true);
                     }
                     else if (lp_name == &quot;SiegeTank&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;SiegeTank&quot;, true);
@@ -772,9 +822,6 @@
                         TechTreeUpgradeAllow(lp_player, &quot;TerranShipWeaponsLevel1&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;TerranShipWeaponsLevel2&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;TerranShipWeaponsLevel3&quot;, true);
-                        TechTreeUpgradeAllow(lp_player, &quot;TerranVehicleAndShipWeaponsLevel1&quot;, true);
-                        TechTreeUpgradeAllow(lp_player, &quot;TerranVehicleAndShipWeaponsLevel2&quot;, true);
-                        TechTreeUpgradeAllow(lp_player, &quot;TerranVehicleAndShipWeaponsLevel3&quot;, true);
                     }
                     else if (lp_name == &quot;Liberator&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;Liberator&quot;, true);
@@ -2608,9 +2655,18 @@
                         race = gv_unitRace[u];
                         PlayerSetRace(p, race);
                         MB_Unlock(p, gv_unitName[u]);
+                        if (race == &quot;Prot&quot; &amp;&amp; gv_unitName[u] != &quot;Phoenix&quot;) {
+                            MB_AllowForResearch(p, &quot;Phoenix&quot;, &quot;StargateTrain&quot;);  // air armour, for Observers and Prisms
+                        }
                         MB_ZeroResources(p);  // whatever was traded in the pick phase anyway
                         MeleeInitResourcesForPlayer(p, race);
                         MeleeInitUnitsForPlayer(p, race, PlayerStartLocation(p));
+                        if (race == &quot;Zerg&quot;) {
+                            // Melee&apos;s starting larva come with the game start, not the Hatchery; spawn them from its
+                            // own larva spawner so they count toward its cap of 3.
+                            UnitBehaviorSpawn(UnitGroupUnit(UnitGroup(&quot;Hatchery&quot;, p, RegionEntireMap(), UnitFilter(0, 0, 0, 0), 0), 1),
+                                &quot;SpawnLarva&quot;, 3);
+                        }
                     }
                     MB_CreatePicksPanel();
                     // Hatcheries spawn after the pick phase rather than at load, so their creep catches up fast.

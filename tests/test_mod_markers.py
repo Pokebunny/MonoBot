@@ -151,6 +151,27 @@ def test_mod_folder_holds_the_current_script():
     ]
 
 
+def test_every_pick_unlocks_its_own_unit():
+    """MB_DisallowEverything locks every army unit; each pick must allow its own back."""
+    script = open(os.path.join(SC2MOD, "MonoBattle.galaxy"), encoding="utf8").read()
+    unlock = script[script.index("void MB_Unlock") :]
+    blocks = dict(re.findall(r'lp_name == "(\w+)"\) \{(.*?)\n    \}', unlock[: unlock.index("\n}\n")], re.S))
+    game_unit = {"SwarmHost": "SwarmHostMP", "Lurker": "LurkerMP", "Viking": "VikingFighter"}
+    # Other forms a pick switches to, each its own (locked) unit type.
+    modes = {
+        "SiegeTank": "SiegeTankSieged",
+        "Thor": "ThorAP",
+        "Hellion": "HellionTank",
+        "WidowMine": "WidowMineBurrowed",
+        "Viking": "VikingAssault",
+        "Liberator": "LiberatorAG",
+    }
+    for name in re.findall(r'MB_AddUnit\(\d+, "(\w+)"', script):
+        for unit in (game_unit.get(name, name), modes.get(name)):
+            if unit:
+                assert f'TechTreeUnitAllow(lp_player, "{unit}", true);' in blocks[name], (name, unit)
+
+
 def test_mod_roster_and_markers_match_the_parser():
     """The mod's roster names are MonoBot's unit names, in the same race, and
     every marker the parser reads is defined in the mod's data."""

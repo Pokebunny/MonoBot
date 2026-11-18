@@ -761,6 +761,7 @@
                     }
                     else if (lp_name == &quot;Thor&quot;) {
                         TechTreeUpgradeAllow(lp_player, &quot;SmartServos&quot;, true);
+                        TechTreeUnitAllow(lp_player, &quot;Thor&quot;, true);
                         TechTreeUnitAllow(lp_player, &quot;ThorAP&quot;, true);
                         TechTreeUnitAllow(lp_player, &quot;Medivac&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;TerranVehicleAndShipWeaponsLevel1&quot;, true);

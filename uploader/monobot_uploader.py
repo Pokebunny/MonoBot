@@ -202,15 +202,21 @@ def peek(data: bytes) -> Peek:
     return Peek(details[1].decode("utf-8", "replace"), sorted(teams.values(), reverse=True), bool(details.get(4)))
 
 
+def has_mod_markers(data: bytes) -> bool:
+    """The MonoBattle mod grants every player its MB_Version upgrade at load;
+    upgrade names sit in the tracker events as plain bytes."""
+    return b"MB_Version" in _mpq_file(data, "replay.tracker.events")
+
+
 def worth_sending(data: bytes) -> tuple[bool, str]:
     """Whether the server could keep this game, and why not.
 
-    The MonoBattle mod can't be seen here (it's one dependency hash among
-    eight, new with every publish), but it clears m_isBlizzardMap even on a
-    Blizzard melee map: all 4 mod test games did, while all 361 of the
-    owner's 4v4s flagged as Blizzard maps were co-op or ladder. So a 4v4
-    off a Blizzard map is sent and the server's parse decides. A replay this
-    can't read is sent too."""
+    The MonoBattle mod isn't in replay.details (it's one dependency hash among
+    eight, new with every publish), and m_isBlizzardMap can't tell it apart
+    either: Editor test games clear it, lobby games on a Blizzard map keep it.
+    So a 4v4 off a Blizzard map is sent and the server's parse decides; one on
+    a Blizzard map is sent only with the mod's markers. A replay this can't
+    read is sent too."""
     try:
         title, teams, blizzard_map = peek(data)
     except Exception as e:  # an odd file costs the server a parse, never a game
@@ -219,7 +225,14 @@ def worth_sending(data: bytes) -> tuple[bool, str]:
     if title.lower().startswith(ARCADE_MAP_PREFIX.lower()):
         return True, ""
     if teams == [4, 4]:
-        return (False, f"4v4 on {title}, a Blizzard map without the mod") if blizzard_map else (True, "")
+        if not blizzard_map:
+            return True, ""
+        try:
+            marked = has_mod_markers(data)
+        except Exception as e:
+            logger.debug("Couldn't read a replay's tracker events (%s); sending it", e)
+            return True, ""
+        return (True, "") if marked else (False, f"4v4 on {title}, a Blizzard map without the mod")
     return False, f"{'v'.join(map(str, teams)) or 'no players'} on {title}"
 
 

@@ -46,18 +46,25 @@ def test_peek_reads_the_map_and_teams_without_sc2reader():
 
 
 def test_only_what_could_be_a_monobattle_is_sent(monkeypatch):
-    for title, teams, blizzard_map, send in [
-        ("Monobattle LotV - Map Rotation", [4, 4], False, True),
-        # The mod clears the Blizzard-map flag even on a melee map: the server decides.
-        ("Brass Devil", [4, 4], False, True),
-        ("Brass Devil", [4, 4], True, False),  # an ordinary 4v4 on it
-        ("Scythe of Amon", [4, 4], True, False),  # co-op, AI included
-        ("Ulrena LE", [1, 1], True, False),
-        ("Dead of Night", [2], True, False),
+    for title, teams, blizzard_map, marked, send in [
+        ("Monobattle LotV - Map Rotation", [4, 4], False, False, True),
+        # An Editor test of the mod clears the Blizzard-map flag: the server decides.
+        ("Brass Devil", [4, 4], False, False, True),
+        ("Fortitude LE", [4, 4], True, True, True),  # a lobby game with the mod keeps it
+        ("Brass Devil", [4, 4], True, False, False),  # an ordinary 4v4 on it
+        ("Scythe of Amon", [4, 4], True, False, False),  # co-op, AI included
+        ("Ulrena LE", [1, 1], True, True, False),
+        ("Dead of Night", [2], True, False, False),
     ]:
         result = monobot_uploader.Peek(title, teams, blizzard_map)
         monkeypatch.setattr(monobot_uploader, "peek", lambda _data, r=result: r)
+        monkeypatch.setattr(monobot_uploader, "has_mod_markers", lambda _data, m=marked: m)
         assert worth_sending(b"")[0] is send, result
+
+
+def test_mod_markers_are_found_in_the_tracker_events():
+    with open(REAL_REPLAY, "rb") as f:
+        assert not monobot_uploader.has_mod_markers(f.read())
 
 
 def test_a_replay_it_cannot_read_is_sent_anyway():

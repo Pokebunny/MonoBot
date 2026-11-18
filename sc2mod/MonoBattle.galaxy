@@ -14,7 +14,7 @@ include "TriggerLibs/NativeLib"
 // Settings
 //--------------------------------------------------------------------------------------------------
 // Bump when the rules change; MonoBot reads it from MB_Version.
-const int MB_VERSION = 1;
+const int MB_VERSION = 2;
 
 const int MB_UNITS = 42;
 const int MB_ZERG_FIRST = 1;      // roster index ranges, by race
@@ -2664,7 +2664,7 @@ void MB_StartBattle () {
     // Hatcheries spawn after the pick phase rather than at load, so their creep catches up fast.
     CreepSetSpeed(c_creepSpeedGrowth, 1000.0);
     UISetResourceTradeCountdownTime(MB_TRADE_LOCK_SECONDS);
-    MB_Say(PlayerGroupAll(), MB_Text("Resource trading unlocks at 10:00. Good luck!"));
+    MB_Say(PlayerGroupAll(), MB_Text("MonoBattle v" + IntToString(MB_VERSION) + ". Resource trading unlocks at 10:00. Good luck!"));
     GameSetMissionTimePaused(false);
     TriggerExecute(TriggerCreate("MB_WatchBattle"), false, false);
     Wait(8.0, c_timeGame);

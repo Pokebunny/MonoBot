@@ -454,7 +454,6 @@
                     TechTreeUpgradeAllow(lp_player, &quot;AnabolicSynthesis&quot;, false);
                     TechTreeUpgradeAllow(lp_player, &quot;ChitinousPlating&quot;, false);
                     TechTreeUpgradeAllow(lp_player, &quot;VoidRaySpeedUpgrade&quot;, false);
-                    TechTreeUpgradeAllow(lp_player, &quot;GraviticDrive&quot;, false);
                     TechTreeUpgradeAllow(lp_player, &quot;DrillClaws&quot;, false);
                     TechTreeUpgradeAllow(lp_player, &quot;Charge&quot;, false);
                     TechTreeUpgradeAllow(lp_player, &quot;ZergBurrowMove&quot;, false);
@@ -821,6 +820,7 @@
                     else if (lp_name == &quot;WidowMine&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;WidowMine&quot;, true);
                         TechTreeUnitAllow(lp_player, &quot;WidowMineBurrowed&quot;, true);
+                        TechTreeUnitAllow(lp_player, &quot;Medivac&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;DrillClaws&quot;, true);
                     }
                     else if (lp_name == &quot;Banshee&quot;) {

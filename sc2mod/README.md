@@ -190,6 +190,6 @@ python sc2mod/audit_upgrades.py SC2GameData/mods
 `lint_galaxy.py` checks the scripts against Blizzard's function list.
 `audit_upgrades.py` lists researchable upgrades the mod leaves open to every
 pick; run it after a balance patch. Hi-Sec Auto Tracking, Neosteel Frame,
-Medivac Rapid Deployment and Rapid Reignition, the Observer speed upgrade, Secreted Coating and
+Medivac Rapid Deployment and Rapid Reignition, Observer and Warp Prism speed, Secreted Coating and
 Overlord transport are left on deliberately. That dump stopped updating in
 2026, so a function or upgrade it doesn't know is not necessarily wrong.

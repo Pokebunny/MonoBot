@@ -456,7 +456,6 @@ void MB_DisallowEverything (int lp_player) {
     TechTreeUpgradeAllow(lp_player, "AnabolicSynthesis", false);
     TechTreeUpgradeAllow(lp_player, "ChitinousPlating", false);
     TechTreeUpgradeAllow(lp_player, "VoidRaySpeedUpgrade", false);
-    TechTreeUpgradeAllow(lp_player, "GraviticDrive", false);
     TechTreeUpgradeAllow(lp_player, "DrillClaws", false);
     TechTreeUpgradeAllow(lp_player, "Charge", false);
     TechTreeUpgradeAllow(lp_player, "ZergBurrowMove", false);
@@ -823,6 +822,7 @@ void MB_Unlock (int lp_player, string lp_name) {
     else if (lp_name == "WidowMine") {
         TechTreeUnitAllow(lp_player, "WidowMine", true);
         TechTreeUnitAllow(lp_player, "WidowMineBurrowed", true);
+        TechTreeUnitAllow(lp_player, "Medivac", true);
         TechTreeUpgradeAllow(lp_player, "DrillClaws", true);
     }
     else if (lp_name == "Banshee") {

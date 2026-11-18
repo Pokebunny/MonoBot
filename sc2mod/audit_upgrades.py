@@ -23,6 +23,7 @@ LEFT_ON = {
     "MedivacRapidDeployment",
     "MedivacIncreaseSpeedBoost",  # Rapid Reignition
     "ObserverGraviticBooster",
+    "GraviticDrive",  # Warp Prism speed
     "SecretedCoating",
     "overlordtransport",
 }

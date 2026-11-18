@@ -133,6 +133,7 @@ int[9][21] gv_cardHotspot;
 int[9][21] gv_cardName;
 int[9][3][5] gv_stripIcon;  // team strips at the bottom: [viewer][row][slot]
 int[9][3][5] gv_stripName;
+int[9][5][4] gv_offerIcon;  // Pick Three: each ally's offers under their strip slot, [viewer][slot][offer]
 
 // Picks panel: everyone's unit in the top-left corner during the battle, as on the old map
 int gv_picksDialog;
@@ -902,6 +903,7 @@ const int MB_CARD_COLUMNS = 4;
 const int MB_CARD_WIDTH = 200;
 const int MB_CARD_GAP = 40;
 const int MB_CARD_ICON = 52;
+const int MB_OFFER_ICON = 32;     // Pick Three: allies' offers under the team strip
 const int MB_CARD_NAME_HEIGHT = 36;  // shorter and the game reports names as too tall for a line
 const int MB_CARD_PITCH = 96;   // icon, 4, name button, 4
 const int MB_PANEL_WIDTH = 1000;
@@ -952,6 +954,15 @@ void MB_CreatePanel (int p) {
             gv_stripName[p][r][k] = c;
         }
     }
+    for (k = 1; k <= 4; k += 1) {
+        for (i = 1; i <= 3; i += 1) {
+            c = DialogControlCreate(gv_dialog[p], c_triggerControlTypeImage);
+            DialogControlSetSize(c, PlayerGroupAll(), MB_OFFER_ICON, MB_OFFER_ICON);
+            DialogControlSetPropertyAsBool(c, c_triggerControlPropertyAcceptMouseTarget, PlayerGroupAll(), true);
+            DialogControlSetVisible(c, PlayerGroupAll(), false);
+            gv_offerIcon[p][k][i] = c;
+        }
+    }
     gv_info[p] = DialogControlCreate(gv_dialog[p], c_triggerControlTypeLabel);
     DialogControlSetSize(gv_info[p], PlayerGroupAll(), 920, 30);
     DialogControlSetPosition(gv_info[p], PlayerGroupAll(), c_anchorTopLeft, 40, 700);
@@ -962,7 +973,6 @@ void MB_CreatePanel (int p) {
 // the cards or (buttonsBelow) beneath them.
 void MB_Layout (int p, int cards, int stripRows, bool buttonsBelow) {
     int y;
-    int lines;
     int i;
     int r;
     int k;
@@ -1003,14 +1013,18 @@ void MB_Layout (int p, int cards, int stripRows, bool buttonsBelow) {
             DialogControlSetPosition(gv_stripName[p][r][k], PlayerGroupAll(), c_anchorTopLeft, 70 + (k - 1) * 240, y + 10 + (r - 1) * 64);
         }
     }
+    for (k = 1; k <= 4; k += 1) {
+        for (i = 1; i <= 3; i += 1) {
+            DialogControlSetPosition(gv_offerIcon[p][k][i], PlayerGroupAll(), c_anchorTopLeft,
+                20 + (k - 1) * 240 + (i - 1) * (MB_OFFER_ICON + 6), y + 50);
+        }
+    }
     y = y + stripRows * 64;
-    lines = 1;
     if (gv_phase == MB_PHASE_PICK_THREE) {
-        lines = gv_teamSize[MB_TeamOf(p)];  // each ally's offers (MB_OfferLines)
+        y = y + MB_OFFER_ICON + 8;  // the offer icons under the strip
     }
     DialogControlSetPosition(gv_info[p], PlayerGroupAll(), c_anchorTopLeft, 40, y);
-    DialogControlSetSize(gv_info[p], PlayerGroupAll(), 920, lines * 30);
-    DialogSetSize(gv_dialog[p], MB_PANEL_WIDTH, y + lines * 30 + 20);
+    DialogSetSize(gv_dialog[p], MB_PANEL_WIDTH, y + 50);
 }
 
 void MB_SetTitle (int p, text t) {
@@ -1095,6 +1109,11 @@ void MB_HideStrips (int p) {
         for (k = 1; k <= 4; k += 1) {
             DialogControlSetVisible(gv_stripIcon[p][r][k], PlayerGroupSingle(p), false);
             DialogControlSetVisible(gv_stripName[p][r][k], PlayerGroupSingle(p), false);
+        }
+    }
+    for (k = 1; k <= 4; k += 1) {
+        for (r = 1; r <= 3; r += 1) {
+            DialogControlSetVisible(gv_offerIcon[p][k][r], PlayerGroupSingle(p), false);
         }
     }
 }
@@ -2031,19 +2050,22 @@ int MB_AssignedUnit (int t, int q) {
     return 0;
 }
 
-// Pick Three: every ally's three offers, one line each.
-text MB_OfferLines (int t) {
-    text s;
-    int k;
-    int q;
-    s = MB_Text("");
-    for (k = 1; k <= gv_teamSize[t]; k += 1) {
-        q = gv_teamPlayers[t][k];
-        if (gv_offer[q][1] != 0) {
-            s = s + MB_Name(q) + MB_Text(": " + gv_unitLabel[gv_offer[q][1]] + " / " + gv_unitLabel[gv_offer[q][2]] + " / " + gv_unitLabel[gv_offer[q][3]] + "<n/>");
+// Pick Three: an ally's three offers under their strip slot k; once they've chosen, the rest go grey.
+void MB_SetOffers (int p, int k, int q) {
+    playergroup g;
+    int i;
+    int u;
+    g = PlayerGroupSingle(p);
+    for (i = 1; i <= 3; i += 1) {
+        u = gv_offer[q][i];
+        if (u == 0) {
+            continue;
         }
+        DialogControlSetPropertyAsString(gv_offerIcon[p][k][i], c_triggerControlPropertyImage, g, gv_unitIcon[u]);
+        DialogControlSetPropertyAsText(gv_offerIcon[p][k][i], c_triggerControlPropertyTooltip, g, MB_Text(gv_unitLabel[u]));
+        DialogControlSetPropertyAsBool(gv_offerIcon[p][k][i], c_triggerControlPropertyDesaturated, g, gv_pick[q] != 0 && gv_pick[q] != u);
+        DialogControlSetVisible(gv_offerIcon[p][k][i], g, true);
     }
-    return s;
 }
 
 // The team strips, as each phase lets players see: their own team in Blind Random, Pick Three and
@@ -2069,7 +2091,9 @@ void MB_RefreshInfo () {
             }
         }
         if (gv_phase == MB_PHASE_PICK_THREE) {
-            MB_SetInfo(p, MB_OfferLines(t));
+            for (k = 1; k <= gv_teamSize[t]; k += 1) {
+                MB_SetOffers(p, k, gv_teamPlayers[t][k]);
+            }
         }
         else if (gv_phase == MB_PHASE_SINGLE) {
             // Each team's row in draft order.

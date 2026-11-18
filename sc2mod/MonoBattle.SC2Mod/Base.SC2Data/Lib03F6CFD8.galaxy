@@ -834,6 +834,9 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel1", true);
         TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel2", true);
         TechTreeUpgradeAllow(lp_player, "TerranShipWeaponsLevel3", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel2", true);
+        TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel3", true);
     }
     else if (lp_name == "Liberator") {
         TechTreeUnitAllow(lp_player, "Liberator", true);

@@ -832,6 +832,9 @@
                         TechTreeUpgradeAllow(lp_player, &quot;TerranShipWeaponsLevel1&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;TerranShipWeaponsLevel2&quot;, true);
                         TechTreeUpgradeAllow(lp_player, &quot;TerranShipWeaponsLevel3&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;TerranVehicleAndShipWeaponsLevel1&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;TerranVehicleAndShipWeaponsLevel2&quot;, true);
+                        TechTreeUpgradeAllow(lp_player, &quot;TerranVehicleAndShipWeaponsLevel3&quot;, true);
                     }
                     else if (lp_name == &quot;Liberator&quot;) {
                         TechTreeUnitAllow(lp_player, &quot;Liberator&quot;, true);

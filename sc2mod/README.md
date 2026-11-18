@@ -67,7 +67,7 @@ only the Editor's compiler and a real game can prove them.
 
 Unit rules are the old map's: only the pick's own upgrades (including ones
 newer than the old map, like Interference Matrix and Lunge), morph precursors
-can't attack (e.g. a Baneling player's Zerglings), Medivacs never heal,
+can't attack (e.g. a Baneling player's Zerglings), Medivacs are open to every Terran pick but never heal,
 Ravens are shared but can't use abilities unless picked. Weapon upgrades go
 only to picks they help (infantry weapons: Marine, Marauder, Reaper, Ghost;
 Zerg melee: Zergling, Baneling, Ultralisk; Protoss ground: not Disruptor or air;

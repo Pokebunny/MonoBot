@@ -307,8 +307,8 @@ void MB_SetupRoster () {
 //--------------------------------------------------------------------------------------------------
 // Tech: everything army-related off, then the pick's unit, morph chain and own upgrades back on.
 // Ported from the old arcade map. Queens stay buildable by every Zerg with no cap; Ravens stay
-// buildable by every Terran but can't use abilities unless picked; Medivacs can boost (with
-// Rapid Reignition) but never heal.
+// buildable by every Terran but can't use abilities unless picked; Medivacs stay buildable by every
+// Terran (they carry SCVs too) and can boost (with Rapid Reignition) but never heal.
 //--------------------------------------------------------------------------------------------------
 void MB_DisallowEverything (int lp_player) {
     // Unit upgrades newer than the old map, gated to their pick in MB_Unlock.
@@ -734,7 +734,6 @@ void MB_Unlock (int lp_player, string lp_name) {
     }
     else if (lp_name == "Marine") {
         TechTreeUnitAllow(lp_player, "Marine", true);
-        TechTreeUnitAllow(lp_player, "Medivac", true);
         TechTreeUpgradeAllow(lp_player, "Stimpack", true);
         TechTreeUpgradeAllow(lp_player, "ShieldWall", true);
         TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel1", true);
@@ -743,14 +742,12 @@ void MB_Unlock (int lp_player, string lp_name) {
     }
     else if (lp_name == "Reaper") {
         TechTreeUnitAllow(lp_player, "Reaper", true);
-        TechTreeUnitAllow(lp_player, "Medivac", true);
         TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel1", true);
         TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel2", true);
         TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel3", true);
     }
     else if (lp_name == "Marauder") {
         TechTreeUnitAllow(lp_player, "Marauder", true);
-        TechTreeUnitAllow(lp_player, "Medivac", true);
         TechTreeUpgradeAllow(lp_player, "PunisherGrenades", true);
         TechTreeUpgradeAllow(lp_player, "Stimpack", true);
         TechTreeUpgradeAllow(lp_player, "TerranInfantryWeaponsLevel1", true);
@@ -759,7 +756,6 @@ void MB_Unlock (int lp_player, string lp_name) {
     }
     else if (lp_name == "Ghost") {
         TechTreeUnitAllow(lp_player, "Ghost", true);
-        TechTreeUnitAllow(lp_player, "Medivac", true);
         TechTreeUpgradeAllow(lp_player, "PersonalCloaking", true);
         TechTreeAbilityAllow(lp_player, AbilityCommand("ArmSiloWithNuke", 0), true);
         TechTreeUpgradeAllow(lp_player, "GhostMoebiusReactor", true);
@@ -770,7 +766,6 @@ void MB_Unlock (int lp_player, string lp_name) {
     else if (lp_name == "SiegeTank") {
         TechTreeUnitAllow(lp_player, "SiegeTank", true);
         TechTreeUnitAllow(lp_player, "SiegeTankSieged", true);
-        TechTreeUnitAllow(lp_player, "Medivac", true);
         TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
         TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel2", true);
         TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel3", true);
@@ -782,7 +777,6 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "SmartServos", true);
         TechTreeUnitAllow(lp_player, "Thor", true);
         TechTreeUnitAllow(lp_player, "ThorAP", true);
-        TechTreeUnitAllow(lp_player, "Medivac", true);
         TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
         TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel2", true);
         TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel3", true);
@@ -795,7 +789,6 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "SmartServos", true);
         TechTreeUnitAllow(lp_player, "HellionTank", true);
         TechTreeUnitAllow(lp_player, "Hellion", true);
-        TechTreeUnitAllow(lp_player, "Medivac", true);
         TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
         TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel2", true);
         TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel3", true);
@@ -809,7 +802,6 @@ void MB_Unlock (int lp_player, string lp_name) {
         TechTreeUpgradeAllow(lp_player, "CycloneLockOnRangeUpgrade", true);
         TechTreeUpgradeAllow(lp_player, "HurricaneThrusters", true);
         TechTreeUnitAllow(lp_player, "Cyclone", true);
-        TechTreeUnitAllow(lp_player, "Medivac", true);
         TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel1", true);
         TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel2", true);
         TechTreeUpgradeAllow(lp_player, "TerranVehicleAndShipWeaponsLevel3", true);
@@ -822,7 +814,6 @@ void MB_Unlock (int lp_player, string lp_name) {
     else if (lp_name == "WidowMine") {
         TechTreeUnitAllow(lp_player, "WidowMine", true);
         TechTreeUnitAllow(lp_player, "WidowMineBurrowed", true);
-        TechTreeUnitAllow(lp_player, "Medivac", true);
         TechTreeUpgradeAllow(lp_player, "DrillClaws", true);
     }
     else if (lp_name == "Banshee") {

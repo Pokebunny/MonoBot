@@ -222,6 +222,31 @@
                     }
                 }
 
+                // Team 1 in warm colours (red, orange, yellow, pink), team 2 in cool (blue, teal, purple, violet),
+                // in slot order. Chosen for the widest gap between the teams (CIEDE2000, closest pair pink-blue);
+                // alike within a team is fine. Brown would widen it but vanishes on the minimap.
+                void MB_SetTeamColors () {
+                    int[3][5] colour;
+                    int[3] n;
+                    int t;
+                    int p;
+                    colour[1][1] = 1;
+                    colour[1][2] = 6;
+                    colour[1][3] = 5;
+                    colour[1][4] = 15;
+                    colour[2][1] = 2;
+                    colour[2][2] = 3;
+                    colour[2][3] = 4;
+                    colour[2][4] = 9;
+                    for (p = 1; p &lt;= 8; p += 1) {
+                        t = MB_TeamOf(p);
+                        if (t != 0 &amp;&amp; n[t] &lt; 4) {
+                            n[t] += 1;
+                            PlayerSetColorIndex(p, colour[t][n[t]], true);
+                        }
+                    }
+                }
+
                 //--------------------------------------------------------------------------------------------------
                 // Roster: index ranges by race (Zerg 1-13, Protoss 14-28, Terran 29-42) are relied on above.
                 //--------------------------------------------------------------------------------------------------
@@ -2729,6 +2754,7 @@
                     GameSetMissionTimePaused(true);
                     MB_SetupRoster();
                     MB_BuildTeams();
+                    MB_SetTeamColors();
                     for (p = 1; p &lt;= 8; p += 1) {
                         MB_DisallowEverything(p);
                         if (MB_TeamOf(p) != 0) {

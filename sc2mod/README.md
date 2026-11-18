@@ -23,7 +23,8 @@ only the Editor's compiler and a real game can prove them.
 
 1. **Load.** The map's own melee setup runs, then the mod pauses the game
    clock, removes every player's starting units, turns off melee
-   victory/defeat and locks all army tech.
+   victory/defeat, locks all army tech and recolours the teams: team 1
+   red/orange/yellow/pink, team 2 blue/teal/purple/violet.
 2. **Mode.** The host's **Pick mode** lobby setting decides. On *Vote in
    game* (the default), everyone votes for 14 s: Blind Random, Single Draft,
    Pick Three or Captains Draft; most votes wins, ties are random. Any other

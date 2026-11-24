@@ -318,7 +318,7 @@ def _text(content: str) -> dict:
 class Leaderboard(CommunityCog):
     @commands.hybrid_command(
         aliases=["ladder"],
-        description="show the rating leaderboard (race, unit, mode like br/sd/p3/cd, season like s1 or s2+s3, career, units)",
+        description="rating leaderboard (race, unit, mode br/sd/p3/cd, season s1 or s2+s3, career, units)",
         help="show the rating leaderboard — add a race (!leaderboard zerg), a unit (!leaderboard marine), "
         "a pick mode (br / blind random, sd / single draft, p3 / pick three, cd / captains draft), "
         "'kings' for who tops the most unit boards, "

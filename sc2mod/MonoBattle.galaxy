@@ -14,7 +14,7 @@ include "TriggerLibs/NativeLib"
 // Settings
 //--------------------------------------------------------------------------------------------------
 // Bump when the rules change; MonoBot reads it from MB_Version.
-const int MB_VERSION = 5;
+const int MB_VERSION = 6;
 
 const int MB_UNITS = 42;
 const int MB_ZERG_FIRST = 1;      // roster index ranges, by race
@@ -1945,8 +1945,10 @@ text MB_SingleLines () {
 void MB_CreateObserverPanel () {
     int p;
     gv_observers = PlayerGroupEmpty();
-    for (p = 1; p <= 15; p += 1) {
-        if (MB_TeamOf(p) == 0 && MB_IsPlaying(p)) {
+    // Observers hold no player number of their own, so the panel goes to every number not on a
+    // team, in case their own view maps to one of them.
+    for (p = 0; p <= 15; p += 1) {
+        if (MB_TeamOf(p) == 0) {
             PlayerGroupAdd(gv_observers, p);
         }
     }
@@ -1961,6 +1963,26 @@ void MB_CreateObserverPanel () {
     DialogControlSetSize(gv_obsInfo, PlayerGroupAll(), 520, 390);
     DialogControlSetPosition(gv_obsInfo, PlayerGroupAll(), c_anchorTopLeft, 20, 60);
     DialogSetVisible(gv_obsDialog, gv_observers, true);
+}
+
+// Temporary: one label per player number not on a team, each shown only to that number, for the
+// whole game. Whichever an observer or replay viewer sees is the number their own view uses.
+void MB_ObserverProbe () {
+    int p;
+    int d;
+    int c;
+    for (p = 0; p <= 15; p += 1) {
+        if (MB_TeamOf(p) == 0) {
+            d = DialogCreate(320, 40, c_anchorTopRight, 580, 60 + p * 42, false);
+            DialogSetImageVisible(d, false);
+            c = DialogControlCreate(d, c_triggerControlTypeLabel);
+            DialogControlSetSize(c, PlayerGroupAll(), 300, 30);
+            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 10, 5);
+            DialogControlSetPropertyAsText(c, c_triggerControlPropertyText, PlayerGroupAll(),
+                MB_Text("probe: player " + IntToString(p) + ", status " + IntToString(PlayerStatus(p))));
+            DialogSetVisible(d, PlayerGroupSingle(p), true);
+        }
+    }
 }
 
 void MB_ObserverTitle (text t) {
@@ -2748,6 +2770,7 @@ bool MB_Main (bool testConds, bool runActions) {
         }
     }
     MB_CreateObserverPanel();
+    MB_ObserverProbe();
     gv_mode = MB_LobbyMode();
     if (gv_mode == 0) {
         MB_RunVote();

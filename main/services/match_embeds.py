@@ -31,7 +31,7 @@ _MODE_WORDS = {
     "blind_random": "br",
     "single_draft": "sd",
     "tier_draft": "td",
-    "pick_three": "pt",
+    "pick_three": "p3",
     "captains_draft": "cd",
 }
 

@@ -67,7 +67,7 @@ _MODES = {
     **dict.fromkeys(("br", "blindrandom", "blind_random", "random"), "blind_random"),
     **dict.fromkeys(("sd", "singledraft", "single_draft"), "single_draft"),
     **dict.fromkeys(("td", "tierdraft", "tier_draft"), "tier_draft"),
-    **dict.fromkeys(("pt", "pickthree", "pick_three"), "pick_three"),
+    **dict.fromkeys(("p3", "pt", "pick3", "pickthree", "pick_three"), "pick_three"),
     **dict.fromkeys(("cd", "captainsdraft", "captains_draft", "captains"), "captains_draft"),
 }
 
@@ -318,9 +318,9 @@ def _text(content: str) -> dict:
 class Leaderboard(CommunityCog):
     @commands.hybrid_command(
         aliases=["ladder"],
-        description="show the rating leaderboard (race, unit, mode like br/sd, season like s1 or s2+s3, career, units)",
+        description="show the rating leaderboard (race, unit, mode like br/sd/p3/cd, season like s1 or s2+s3, career, units)",
         help="show the rating leaderboard — add a race (!leaderboard zerg), a unit (!leaderboard marine), "
-        "a pick mode (br / blind random, sd / single draft), "
+        "a pick mode (br / blind random, sd / single draft, p3 / pick three, cd / captains draft), "
         "'kings' for who tops the most unit boards, "
         "a season (s1) or seasons rated as one (s2+s3), 'career' for all-time, "
         "'mmr' for raw matchmaking rating with no confidence penalty, or 'units' to rate unit picks (all-time, or !leaderboard units s3)",

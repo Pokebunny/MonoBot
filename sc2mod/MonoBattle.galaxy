@@ -162,6 +162,10 @@ bool MB_IsPlaying (int p) {
 }
 
 int MB_TeamOf (int p) {
+    // The lobby files observers under a team too (seen: an observer in team 2's slots).
+    if (PlayerType(p) == c_playerTypeSpectator || PlayerType(p) == c_playerTypeReferee) {
+        return 0;
+    }
     if (PlayerGroupHasPlayer(GameAttributePlayersForTeam(1), p)) {
         return 1;
     }
@@ -1945,8 +1949,8 @@ text MB_SingleLines () {
 void MB_CreateObserverPanel () {
     int p;
     gv_observers = PlayerGroupEmpty();
-    // Observers hold no player number of their own, so the panel goes to every number not on a
-    // team, in case their own view maps to one of them.
+    // Every number not on a team: observers are spectator-type players, but which numbers they get
+    // is unproven.
     for (p = 0; p <= 15; p += 1) {
         if (MB_TeamOf(p) == 0) {
             PlayerGroupAdd(gv_observers, p);
@@ -1962,25 +1966,40 @@ void MB_CreateObserverPanel () {
     gv_obsInfo = DialogControlCreate(gv_obsDialog, c_triggerControlTypeLabel);
     DialogControlSetSize(gv_obsInfo, PlayerGroupAll(), 520, 390);
     DialogControlSetPosition(gv_obsInfo, PlayerGroupAll(), c_anchorTopLeft, 20, 60);
+    // An observer sees it by their own number, not by the player whose vision they follow.
+    DialogSetObservedType(gv_obsDialog, c_triggerObservedTypeSelectedOrObservedPlayerId);
     DialogSetVisible(gv_obsDialog, gv_observers, true);
 }
 
-// Temporary: one label per player number not on a team, each shown only to that number, for the
-// whole game. Whichever an observer or replay viewer sees is the number their own view uses.
+// Temporary: two labels per player number not on a team, each shown only to that number, for the
+// whole game: "own" by the viewer's own number, "followed" by the default (the followed player's).
+// Which an observer or replay viewer sees shows how their view is addressed.
 void MB_ObserverProbe () {
     int p;
+    int k;
     int d;
     int c;
+    string how;
     for (p = 0; p <= 15; p += 1) {
         if (MB_TeamOf(p) == 0) {
-            d = DialogCreate(320, 40, c_anchorTopRight, 580, 60 + p * 42, false);
-            DialogSetImageVisible(d, false);
-            c = DialogControlCreate(d, c_triggerControlTypeLabel);
-            DialogControlSetSize(c, PlayerGroupAll(), 300, 30);
-            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 10, 5);
-            DialogControlSetPropertyAsText(c, c_triggerControlPropertyText, PlayerGroupAll(),
-                MB_Text("probe: player " + IntToString(p) + ", status " + IntToString(PlayerStatus(p))));
-            DialogSetVisible(d, PlayerGroupSingle(p), true);
+            for (k = 0; k <= 1; k += 1) {
+                how = "followed";
+                if (k == 0) {
+                    how = "own";
+                }
+                d = DialogCreate(380, 40, c_anchorTopRight, 580 + k * 390, 60 + p * 42, false);
+                DialogSetImageVisible(d, false);
+                c = DialogControlCreate(d, c_triggerControlTypeLabel);
+                DialogControlSetSize(c, PlayerGroupAll(), 360, 30);
+                DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 10, 5);
+                DialogControlSetPropertyAsText(c, c_triggerControlPropertyText, PlayerGroupAll(),
+                    MB_Text("probe " + IntToString(p) + " " + how + ": status " + IntToString(PlayerStatus(p))
+                        + ", type " + IntToString(PlayerType(p))));
+                if (k == 0) {
+                    DialogSetObservedType(d, c_triggerObservedTypeSelectedOrObservedPlayerId);
+                }
+                DialogSetVisible(d, PlayerGroupSingle(p), true);
+            }
         }
     }
 }

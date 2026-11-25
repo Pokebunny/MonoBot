@@ -150,8 +150,7 @@
                 int gv_picksDialog;
                 int gv_picksToggle;
                 int[3][5] gv_picksPortrait;
-                int[3][5] gv_picksBack;   // player-colour square behind each portrait
-                int[3][5] gv_picksInner;  // dark square on it, leaving a colour border
+                int[3][5][5] gv_picksBorder;  // four player-colour bars around each portrait
                 bool[17] gv_picksHidden;  // per viewer, observers included
 
                 //--------------------------------------------------------------------------------------------------
@@ -2185,7 +2184,7 @@
 
                 //--------------------------------------------------------------------------------------------------
                 // Picks panel: a small portrait per player in the top-left corner, team 1&apos;s row above team 2&apos;s, each
-                // in a solid border of the player&apos;s colour (white32 tinted, under a dark inset square), as on the old map;
+                // in a solid border of the player&apos;s colour (four tinted white32 bars, nothing behind), as on the old map;
                 // hovering one shows the player&apos;s name in their colour and their unit. Shown to everyone,
                 // observers included; the small button at its left collapses it for whoever presses it.
                 //--------------------------------------------------------------------------------------------------
@@ -2200,6 +2199,10 @@
                     int k;
                     int p;
                     int c;
+                    int b;
+                    int x;
+                    int y;
+                    int side;
                     color colour;
                     gv_picksDialog = DialogCreate(MB_PICKS_LEFT + 4 * MB_PORTRAIT_PITCH + MB_PICKS_PAD, 2 * MB_PORTRAIT_PITCH + MB_PICKS_PAD, c_anchorTopLeft, 0, 0, false);
                     DialogSetImageVisible(gv_picksDialog, false);
@@ -2219,22 +2222,23 @@
                                 continue;
                             }
                             colour = ColorFromIndex(PlayerGetColorIndex(p, false), c_teamColorDiffuse);
-                            c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
-                            DialogControlSetSize(c, PlayerGroupAll(), MB_PORTRAIT + 2 * MB_PORTRAIT_FRAME, MB_PORTRAIT + 2 * MB_PORTRAIT_FRAME);
-                            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, MB_PICKS_LEFT + (k - 1) * MB_PORTRAIT_PITCH, MB_PICKS_PAD + (t - 1) * MB_PORTRAIT_PITCH);
-                            DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), &quot;Assets\\Textures\\white32.dds&quot;);
-                            DialogControlSetPropertyAsColor(c, c_triggerControlPropertyColor, PlayerGroupAll(), colour);
-                            gv_picksBack[t][k] = c;
-                            c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
-                            DialogControlSetSize(c, PlayerGroupAll(), MB_PORTRAIT, MB_PORTRAIT);
-                            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, MB_PICKS_LEFT + MB_PORTRAIT_FRAME + (k - 1) * MB_PORTRAIT_PITCH, MB_PICKS_PAD + MB_PORTRAIT_FRAME + (t - 1) * MB_PORTRAIT_PITCH);
-                            DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), &quot;Assets\\Textures\\white32.dds&quot;);
-                            // Opaque, so it reads the same over any terrain: 12% of the colour on near-black.
-                            DialogControlSetPropertyAsColor(c, c_triggerControlPropertyColor, PlayerGroupAll(), Color(
-                                4.0 + ColorGetComponent(colour, c_colorComponentRed) * 0.12,
-                                4.0 + ColorGetComponent(colour, c_colorComponentGreen) * 0.12,
-                                4.0 + ColorGetComponent(colour, c_colorComponentBlue) * 0.12));
-                            gv_picksInner[t][k] = c;
+                            x = MB_PICKS_LEFT + (k - 1) * MB_PORTRAIT_PITCH;
+                            y = MB_PICKS_PAD + (t - 1) * MB_PORTRAIT_PITCH;
+                            side = MB_PORTRAIT + 2 * MB_PORTRAIT_FRAME;
+                            for (b = 1; b &lt;= 4; b += 1) {
+                                c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
+                                if (b &lt;= 2) {  // top, bottom
+                                    DialogControlSetSize(c, PlayerGroupAll(), side, MB_PORTRAIT_FRAME);
+                                    DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, x, y + (b - 1) * (side - MB_PORTRAIT_FRAME));
+                                }
+                                else {  // left, right
+                                    DialogControlSetSize(c, PlayerGroupAll(), MB_PORTRAIT_FRAME, side);
+                                    DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, x + (b - 3) * (side - MB_PORTRAIT_FRAME), y);
+                                }
+                                DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), &quot;Assets\\Textures\\white32.dds&quot;);
+                                DialogControlSetPropertyAsColor(c, c_triggerControlPropertyColor, PlayerGroupAll(), colour);
+                                gv_picksBorder[t][k][b] = c;
+                            }
                             c = DialogControlCreate(gv_picksDialog, c_triggerControlTypeImage);
                             DialogControlSetSize(c, PlayerGroupAll(), MB_PORTRAIT, MB_PORTRAIT);
                             DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, MB_PICKS_LEFT + MB_PORTRAIT_FRAME + (k - 1) * MB_PORTRAIT_PITCH, MB_PICKS_PAD + MB_PORTRAIT_FRAME + (t - 1) * MB_PORTRAIT_PITCH);
@@ -2250,13 +2254,15 @@
                 void MB_TogglePicks (int viewer) {
                     int t;
                     int k;
+                    int b;
                     gv_picksHidden[viewer] = !gv_picksHidden[viewer];
                     for (t = 1; t &lt;= 2; t += 1) {
                         for (k = 1; k &lt;= 4; k += 1) {
                             if (gv_picksPortrait[t][k] != 0) {
                                 DialogControlSetVisible(gv_picksPortrait[t][k], PlayerGroupSingle(viewer), !gv_picksHidden[viewer]);
-                                DialogControlSetVisible(gv_picksBack[t][k], PlayerGroupSingle(viewer), !gv_picksHidden[viewer]);
-                                DialogControlSetVisible(gv_picksInner[t][k], PlayerGroupSingle(viewer), !gv_picksHidden[viewer]);
+                                for (b = 1; b &lt;= 4; b += 1) {
+                                    DialogControlSetVisible(gv_picksBorder[t][k][b], PlayerGroupSingle(viewer), !gv_picksHidden[viewer]);
+                                }
                             }
                         }
                     }

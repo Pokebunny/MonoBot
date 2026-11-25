@@ -1951,66 +1951,28 @@
                 }
 
                 //--------------------------------------------------------------------------------------------------
-                // Observer panel: everyone in the game who isn&apos;t on a team (observers, and whoever else holds a
-                // slot without a team) sees the whole pick phase as it happens, both teams, nothing hidden. It
-                // closes at battle start, where the picks panel takes over.
+                // Observer panel: observers and replay viewers see the whole pick phase as it happens, both teams,
+                // nothing hidden. It closes at battle start, where the picks panel takes over.
                 //--------------------------------------------------------------------------------------------------
                 void MB_CreateObserverPanel () {
-                    int p;
-                    gv_observers = PlayerGroupEmpty();
-                    // Every number not on a team: observers are spectator-type players, but which numbers they get
-                    // is unproven.
-                    for (p = 0; p &lt;= 15; p += 1) {
-                        if (MB_TeamOf(p) == 0) {
-                            PlayerGroupAdd(gv_observers, p);
-                        }
-                    }
-                    if (PlayerGroupCount(gv_observers) == 0) {
+                    // Observers and replay viewers on their own vision see what&apos;s shown to the game UI&apos;s default
+                    // observed player, for UI marked to follow it (as WCS GameHeart / Observer PlusPlus do).
+                    int obs = CatalogFieldValueGetAsInt(c_gameCatalogGameUI, &quot;Dflt&quot;, &quot;DefaultObservedPlayerId&quot;, c_playerAny);
+                    if (MB_TeamOf(obs) != 0) {
                         return;
                     }
+                    gv_observers = PlayerGroupSingle(obs);
                     gv_obsDialog = DialogCreate(560, 460, c_anchorTopRight, 10, 60, false);
+                    DialogSetObservedType(gv_obsDialog, c_triggerObservedTypeDefaultObservedPlayerId);
                     gv_obsTitle = DialogControlCreate(gv_obsDialog, c_triggerControlTypeLabel);
+                    DialogControlSetObservedType(gv_obsTitle, c_triggerObservedTypeDefaultObservedPlayerId);
                     DialogControlSetSize(gv_obsTitle, PlayerGroupAll(), 520, 36);
                     DialogControlSetPosition(gv_obsTitle, PlayerGroupAll(), c_anchorTopLeft, 20, 20);
                     gv_obsInfo = DialogControlCreate(gv_obsDialog, c_triggerControlTypeLabel);
+                    DialogControlSetObservedType(gv_obsInfo, c_triggerObservedTypeDefaultObservedPlayerId);
                     DialogControlSetSize(gv_obsInfo, PlayerGroupAll(), 520, 390);
                     DialogControlSetPosition(gv_obsInfo, PlayerGroupAll(), c_anchorTopLeft, 20, 60);
-                    // An observer sees it by their own number, not by the player whose vision they follow.
-                    DialogSetObservedType(gv_obsDialog, c_triggerObservedTypeSelectedOrObservedPlayerId);
                     DialogSetVisible(gv_obsDialog, gv_observers, true);
-                }
-
-                // Temporary: two labels per player number not on a team, each shown only to that number, for the
-                // whole game: &quot;own&quot; by the viewer&apos;s own number, &quot;followed&quot; by the default (the followed player&apos;s).
-                // Which an observer or replay viewer sees shows how their view is addressed.
-                void MB_ObserverProbe () {
-                    int p;
-                    int k;
-                    int d;
-                    int c;
-                    string how;
-                    for (p = 0; p &lt;= 15; p += 1) {
-                        if (MB_TeamOf(p) == 0) {
-                            for (k = 0; k &lt;= 1; k += 1) {
-                                how = &quot;followed&quot;;
-                                if (k == 0) {
-                                    how = &quot;own&quot;;
-                                }
-                                d = DialogCreate(380, 40, c_anchorTopRight, 580 + k * 390, 60 + p * 42, false);
-                                DialogSetImageVisible(d, false);
-                                c = DialogControlCreate(d, c_triggerControlTypeLabel);
-                                DialogControlSetSize(c, PlayerGroupAll(), 360, 30);
-                                DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 10, 5);
-                                DialogControlSetPropertyAsText(c, c_triggerControlPropertyText, PlayerGroupAll(),
-                                    MB_Text(&quot;probe &quot; + IntToString(p) + &quot; &quot; + how + &quot;: status &quot; + IntToString(PlayerStatus(p))
-                                        + &quot;, type &quot; + IntToString(PlayerType(p))));
-                                if (k == 0) {
-                                    DialogSetObservedType(d, c_triggerObservedTypeSelectedOrObservedPlayerId);
-                                }
-                                DialogSetVisible(d, PlayerGroupSingle(p), true);
-                            }
-                        }
-                    }
                 }
 
                 void MB_ObserverTitle (text t) {
@@ -2798,7 +2760,6 @@
                         }
                     }
                     MB_CreateObserverPanel();
-                    MB_ObserverProbe();
                     gv_mode = MB_LobbyMode();
                     if (gv_mode == 0) {
                         MB_RunVote();

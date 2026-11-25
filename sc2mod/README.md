@@ -42,7 +42,7 @@ only the Editor's compiler and a real game can prove them.
      (a random player if none) drafts their team's units from the shared pool
      of 20 in snake order, 30 s a pick, then assigns them to players in 30 s.
      Unassigned units go out at random.
-   **Observers** (anyone in the game not on a team) get their own panel in
+   **Observers** (and replay viewers, on their own vision) get their own panel in
    the top-right corner for the whole pick phase: the votes, every Blind
    Random roll and repick, every Pick Three offer and choice, the draft as it
    happens and each captain's assignments, both teams, nothing hidden.

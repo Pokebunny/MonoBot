@@ -2011,37 +2011,34 @@ void MB_CreateObserverPanel () {
     DialogControlSetVisible(gv_obsPanel, gv_observers, true);
 }
 
-// Temporary probe: row D, a script dialog label per player number 0-16 shown only to that number;
-// row C, the same as a label in the game's UI container; "A" = shown to everyone. Whichever an
-// observer sees says what reaches them.
+// Temporary probe (round 2): labels in the game's UI container (script dialogs never reach
+// observers; tested), one per player number 0-16 shown only to that number, plus "A" for everyone.
+// One row per observed type: row 1 ObservedPlayerId, 2 ObservedOrSelected, 3 SelectedOrObserved
+// (type 0, the default, showed observers the followed player's labels).
 void MB_ObserverProbe () {
     int p;
-    int d;
+    int t;
     int c;
     int upper;
     playergroup g;
     string name;
     upper = DialogControlHookupStandard(c_triggerControlTypePanel, "UIContainer/FullscreenUpperContainer");
-    for (p = 0; p <= 17; p += 1) {
-        g = PlayerGroupSingle(p);
-        name = IntToString(p);
-        if (p == 17) {
-            g = PlayerGroupAll();
-            name = "A";
+    for (t = 1; t <= 3; t += 1) {
+        for (p = 0; p <= 17; p += 1) {
+            g = PlayerGroupSingle(p);
+            name = IntToString(p);
+            if (p == 17) {
+                g = PlayerGroupAll();
+                name = "A";
+            }
+            c = DialogControlCreateInPanel(upper, c_triggerControlTypeLabel);
+            DialogControlSetObservedType(c, t);
+            DialogControlSetSize(c, PlayerGroupAll(), 56, 30);
+            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTop, -540 + p * 60, 90 + t * 40);
+            DialogControlSetPropertyAsText(c, c_triggerControlPropertyText, PlayerGroupAll(), MB_Text(IntToString(t) + "-" + name));
+            DialogControlSetVisible(c, PlayerGroupAll(), false);
+            DialogControlSetVisible(c, g, true);
         }
-        d = DialogCreate(60, 40, c_anchorTop, -540 + p * 60, 120, false);
-        DialogSetImageVisible(d, false);
-        c = DialogControlCreate(d, c_triggerControlTypeLabel);
-        DialogControlSetSize(c, PlayerGroupAll(), 56, 30);
-        DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 2, 5);
-        DialogControlSetPropertyAsText(c, c_triggerControlPropertyText, PlayerGroupAll(), MB_Text("D" + name));
-        DialogSetVisible(d, g, true);
-        c = DialogControlCreateInPanel(upper, c_triggerControlTypeLabel);
-        DialogControlSetSize(c, PlayerGroupAll(), 56, 30);
-        DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTop, -540 + p * 60, 170);
-        DialogControlSetPropertyAsText(c, c_triggerControlPropertyText, PlayerGroupAll(), MB_Text("C" + name));
-        DialogControlSetVisible(c, PlayerGroupAll(), false);
-        DialogControlSetVisible(c, g, true);
     }
 }
 

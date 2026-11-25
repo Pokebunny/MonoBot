@@ -1980,11 +1980,23 @@
                     int obs;
                     int upper;
                     int c;
+                    int p;
                     obs = CatalogFieldValueGetAsInt(c_gameCatalogGameUI, &quot;Dflt&quot;, &quot;DefaultObservedPlayerId&quot;, c_playerAny);
                     if (MB_TeamOf(obs) != 0) {
                         return;
                     }
                     gv_observers = PlayerGroupSingle(obs);
+                    // The observers&apos; view sees with player 14&apos;s eyes, so every player shares vision with 14
+                    // (passive and control too, so observers can inspect units), as GameHeart does.
+                    for (p = 1; p &lt;= 8; p += 1) {
+                        if (MB_IsPlaying(p)) {
+                            PlayerSetAlliance(obs, c_allianceIdPassive, p, true);
+                            PlayerSetAlliance(p, c_allianceIdPassive, obs, true);
+                            PlayerSetAlliance(p, c_allianceIdControl, obs, true);
+                            PlayerSetAlliance(p, c_allianceIdVision, obs, true);
+                        }
+                    }
+                    UIUnitColorStyleOverride(gv_observers, c_unitColorStyleNormal);
                     upper = DialogControlHookupStandard(c_triggerControlTypePanel, &quot;UIContainer/FullscreenUpperContainer&quot;);
                     gv_obsPanel = DialogControlCreateInPanel(upper, c_triggerControlTypePanel);
                     DialogControlSetObservedType(gv_obsPanel, c_triggerObservedTypeDefaultObservedPlayerId);

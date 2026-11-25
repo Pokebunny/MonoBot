@@ -1187,15 +1187,6 @@ int MB_CardIndex (int p, int control) {
     return 0;
 }
 
-// The player's colour mixed halfway to white: dark ones (violet, purple, blue) are unreadable as
-// text on the game's dark tooltips and panels.
-color MB_NameColor (int p) {
-    color c = ColorFromIndex(PlayerGetColorIndex(p, false), c_teamColorDiffuse);
-    return Color((ColorGetComponent(c, c_colorComponentRed) + 100.0) / 2.0,
-                 (ColorGetComponent(c, c_colorComponentGreen) + 100.0) / 2.0,
-                 (ColorGetComponent(c, c_colorComponentBlue) + 100.0) / 2.0);
-}
-
 text MB_Name (int p) {
     if (p == 0) {
         return MB_Text("nobody");
@@ -2176,7 +2167,7 @@ void MB_RefreshInfo () {
 //--------------------------------------------------------------------------------------------------
 // Picks panel: a small portrait per player in the top-left corner, team 1's row above team 2's, each
 // in a solid border of the player's colour (four tinted white32 bars, nothing behind), as on the old map;
-// hovering one shows the player's name in their colour and their unit. Shown to everyone,
+// hovering one shows the player's name and their unit. Shown to everyone,
 // observers included; the small button at its left collapses it for whoever presses it.
 //--------------------------------------------------------------------------------------------------
 const int MB_PORTRAIT = 40;
@@ -2234,7 +2225,7 @@ void MB_CreatePicksPanel () {
             DialogControlSetSize(c, PlayerGroupAll(), MB_PORTRAIT, MB_PORTRAIT);
             DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, MB_PICKS_LEFT + MB_PORTRAIT_FRAME + (k - 1) * MB_PORTRAIT_PITCH, MB_PICKS_PAD + MB_PORTRAIT_FRAME + (t - 1) * MB_PORTRAIT_PITCH);
             DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), gv_unitIcon[gv_pick[p]]);
-            DialogControlSetPropertyAsText(c, c_triggerControlPropertyTooltip, PlayerGroupAll(), TextWithColor(MB_Name(p), MB_NameColor(p)) + MB_Text(" - " + gv_unitLabel[gv_pick[p]]));
+            DialogControlSetPropertyAsText(c, c_triggerControlPropertyTooltip, PlayerGroupAll(), MB_Name(p) + MB_Text(" - " + gv_unitLabel[gv_pick[p]]));
             DialogControlSetPropertyAsBool(c, c_triggerControlPropertyAcceptMouseTarget, PlayerGroupAll(), true);
             gv_picksPortrait[t][k] = c;
         }
@@ -2712,7 +2703,7 @@ void MB_RunPreview () {
         for (r = 1; r <= 2; r += 1) {
             for (k = 1; k <= gv_teamSize[r]; k += 1) {
                 q = gv_teamPlayers[r][k];
-                MB_SetStrip(p, r, k, gv_pick[q], TextWithColor(MB_Name(q), MB_NameColor(q)));
+                MB_SetStrip(p, r, k, gv_pick[q], MB_Name(q));
             }
         }
         MB_SetInfo(p, MB_Text(""));

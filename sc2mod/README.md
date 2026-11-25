@@ -53,8 +53,8 @@ only the Editor's compiler and a real game can prove them.
 5. **Battle.** Each player's race is set to their pick's, their pick and its
    upgrades are unlocked, and a melee base spawns at their start location.
    The clock starts at 0:00. The **picks panel** appears in the top-left
-   corner, as on the old map: a small portrait per player (team 1's row above
-   team 2's), the player's name in their colour and their unit on hover, and a
+   corner, as on the old map: a small portrait per player in a border of their
+   colour (team 1's row above team 2's), the player's name and unit on hover, and a
    small button at its left that collapses it. It's shown to everyone, observers included.
 6. **End.** A team with no structures left, or no players left, loses. Every
    game ends with Victory/Defeat. Typing **gg** opens a **concede vote** for

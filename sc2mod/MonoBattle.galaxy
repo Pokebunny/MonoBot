@@ -165,6 +165,10 @@ bool MB_IsPlaying (int p) {
 }
 
 int MB_TeamOf (int p) {
+    // 16 is the observers' own view (DefaultObservedPlayerId), outside the player range.
+    if (p < 0 || p > 15) {
+        return 0;
+    }
     // The lobby files observers under a team too (seen: an observer in team 2's slots).
     if (PlayerType(p) == c_playerTypeSpectator || PlayerType(p) == c_playerTypeReferee) {
         return 0;

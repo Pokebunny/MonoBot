@@ -119,7 +119,8 @@ setting, the name "MonoBot Monobattle").
    the script, which is why `sync_mod.py` writes the compiled copy itself.
 3. **Test** on a 4v4 melee map (the Editor's preferences name the map used
    for testing mods).
-4. **Publish** from a single-file copy: File → Save As, `.SC2Mod` file format,
+4. **Publish** with `MB_RELEASE` in `MonoBattle.galaxy` set to the version
+   Battle.net will give it (a minor update goes 1.9 → 1.10), synced. Publish from a single-file copy: File → Save As, `.SC2Mod` file format,
    into `sc2mod/build/` (ignored by git), then publish that file as an
    extension mod. The Editor can't publish a folder mod.
 

@@ -1456,7 +1456,7 @@ void MB_DealOffers (int t) {
 void MB_PickThreeButtons (int p) {
     int i;
     int state;
-    MB_Layout(p, 3, 1, false);
+    MB_Layout(p, 3, 1, true);
     MB_HideButtons(p);
     MB_HideCards(p);
     for (i = 1; i <= 3; i += 1) {

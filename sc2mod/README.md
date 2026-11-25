@@ -82,8 +82,11 @@ clock; balance is live LotV (Void Multi, no balance mod).
 Not ported: the stats bank (MonoBot holds the real history), votekick, the
 gg sound, the resource radial menu, the Tab stats screen.
 
-Wishlist (observers): more caster-friendly overlays, once the observer tests
-below show how custom UI reaches observers and replays.
+Wishlist (observers): the draft pool as icons in the observer panel (taken
+units grey, with who took them; Pick Three offers as icons), and the picks
+panel for observers in battle. Observer UI must be controls in the game's UI
+container shown to player 14 (`GameUIData.xml`); script dialogs never reach
+the observer view.
 
 ## Replay markers
 

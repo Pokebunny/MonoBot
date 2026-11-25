@@ -27,7 +27,7 @@ include "TriggerLibs/NativeLib"
 // Bump when the rules change; MonoBot reads it from MB_Version.
 const int MB_VERSION = 6;
 // The Battle.net version this will be published as (scripts can't read it); shown in chat.
-const string MB_RELEASE = "1.14";
+const string MB_RELEASE = "1.15";
 
 const int MB_UNITS = 42;
 const int MB_ZERG_FIRST = 1;      // roster index ranges, by race

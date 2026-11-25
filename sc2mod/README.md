@@ -43,11 +43,12 @@ only the Editor's compiler and a real game can prove them.
      (a random player if none) drafts their team's units from the shared pool
      of 20 in snake order, 30 s a pick, then assigns them to players in 30 s.
      Unassigned units go out at random.
-   **Observers** (and replay viewers, on their own vision) get their own panel in
-   the top-right corner for the whole pick phase: the votes, every Blind
-   Random roll and repick, every Pick Three offer and choice, the draft as it
-   happens and each captain's assignments, both teams, nothing hidden.
-   Players never see it.
+   **Observers** (and replay viewers, on their own vision) get their own panel,
+   centred near the top, for the whole pick phase: laid out like the players'
+   panel but with both teams and nothing hidden: the draft pool (taken units
+   grey, a bar in the drafter's colour), both team strips, every Pick Three
+   offer and choice, Blind Random repicks, the votes and each captain's
+   assignments. Display only (observers can't click). Players never see it.
 4. **Preview.** Every pick, both teams, for 7 s, then a 3-2-1 with the game's
    countdown sounds. (The game's own 3-2-1 plays at load, before anyone has
    picked, so the mod hides it.)
@@ -82,9 +83,8 @@ clock; balance is live LotV (Void Multi, no balance mod).
 Not ported: the stats bank (MonoBot holds the real history), votekick, the
 gg sound, the resource radial menu, the Tab stats screen.
 
-Wishlist (observers): the draft pool as icons in the observer panel (taken
-units grey, with who took them; Pick Three offers as icons), and the picks
-panel for observers in battle. Observer UI must be controls in the game's UI
+Wishlist (observers): the picks panel for observers in battle. Observer UI
+must be controls in the game's UI
 container shown to player 14 (`GameUIData.xml`); script dialogs never reach
 the observer view.
 

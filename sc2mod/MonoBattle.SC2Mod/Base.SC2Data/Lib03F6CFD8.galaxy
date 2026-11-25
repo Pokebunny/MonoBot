@@ -27,7 +27,7 @@ include "TriggerLibs/NativeLib"
 // Bump when the rules change; MonoBot reads it from MB_Version.
 const int MB_VERSION = 6;
 // The Battle.net version this will be published as (scripts can't read it); shown in chat.
-const string MB_RELEASE = "1.15";
+const string MB_RELEASE = "1.16";
 
 const int MB_UNITS = 42;
 const int MB_ZERG_FIRST = 1;      // roster index ranges, by race
@@ -129,11 +129,19 @@ int[9] gv_concedeLabel;
 int[9] gv_concedeYesButton;
 int[9] gv_concedeNoButton;
 
-// Observer panel: the whole pick phase, live, for everyone not on a team
+// Observer panel: the pick phase as players see it, both teams, display only
 playergroup gv_observers;
 int gv_obsPanel;
+int gv_obsBack;
 int gv_obsTitle;
 int gv_obsInfo;
+int[21] gv_obsCard;          // draft pool icons
+int[21] gv_obsCardBar;       // under a taken one, in its drafter's colour
+int[3] gv_obsTeamLabel;
+int[3][5] gv_obsStripIcon;   // [team][slot]
+int[3][5] gv_obsStripName;
+int[3][5][4] gv_obsOffer;    // [team][slot][offer]
+int[21] gv_poolTakenBy;      // player who drafted each pool slot
 int[9] gv_firstRoll;      // Blind Random: the unit a repick replaced
 
 // Per-player pick panel
@@ -160,6 +168,7 @@ bool[17] gv_picksHidden;  // per viewer, observers included
 //--------------------------------------------------------------------------------------------------
 void MB_StartBattle ();
 void MB_RefreshInfo ();
+void MB_RefreshObserver ();
 void MB_ObserverTitle (text t);
 void MB_ConcedeVote (int p, bool yes);
 
@@ -1599,6 +1608,7 @@ void MB_PoolButtons () {
             }
         }
     }
+    MB_RefreshObserver();
 }
 
 int MB_RandomFreeSlot () {
@@ -1665,6 +1675,7 @@ void MB_TakeSlot (int i) {
     int t;
     p = gv_turnPlayer;
     gv_poolTaken[i] = true;
+    gv_poolTakenBy[i] = p;
     if (gv_mode == MB_MODE_SINGLE) {
         gv_pick[p] = gv_pool[i];
         gv_locked[p] = true;
@@ -1921,9 +1932,7 @@ void MB_RunCaptains () {
     }
 }
 
-//--------------------------------------------------------------------------------------------------
-// Info line: what each player may see right now.
-//--------------------------------------------------------------------------------------------------
+// Each team's drafted units, one line per team.
 text MB_DraftLines () {
     text s;
     string line;
@@ -1940,40 +1949,31 @@ text MB_DraftLines () {
     return s;
 }
 
-text MB_AssignLines (int t) {
-    text s;
-    int k;
-    s = MB_Text("");
-    for (k = 1; k <= gv_teamUnitCount[t]; k += 1) {
-        s = s + MB_Text(gv_unitLabel[gv_teamUnits[t][k]]);
-        if (gv_assignee[t][k] != 0) {
-            s = s + MB_Text(" -> ") + MB_Name(gv_assignee[t][k]);
-        }
-        s = s + MB_Text("<n/>");
-    }
-    return s;
+//--------------------------------------------------------------------------------------------------
+// Observer panel: the pick phase laid out as players see it (the draft pool, team strips, Pick
+// Three offers), but both teams and nothing hidden; display only, since observers' clicks never
+// reach the script. Centred near the top, where the observer view has nothing of its own. It
+// closes at battle start.
+//--------------------------------------------------------------------------------------------------
+const int MB_OBS_TOP = 90;
+const int MB_OBS_POOL_COLUMNS = 10;
+const int MB_OBS_POOL_PITCH = 92;
+const int MB_OBS_POOL_ROW = 66;     // icon, a gap, the drafter's colour bar
+
+// A control in the observer panel, hidden until a refresh shows it to observers.
+int MB_ObsControl (int panel, int type, int width, int height) {
+    int c;
+    c = DialogControlCreateInPanel(panel, type);
+    DialogControlSetObservedType(c, c_triggerObservedTypeDefaultObservedPlayerId);
+    DialogControlSetSize(c, PlayerGroupAll(), width, height);
+    DialogControlSetVisible(c, PlayerGroupAll(), false);
+    return c;
 }
 
-text MB_SingleLines () {
-    text s;
-    int n;
-    int p;
-    s = MB_Text("");
-    for (n = 1; n <= gv_orderCount; n += 1) {
-        p = gv_order[n];
-        s = s + MB_Name(p) + MB_Text(" (team " + IntToString(MB_TeamOf(p)) + "): ");
-        if (gv_pick[p] != 0) {
-            s = s + MB_Text(gv_unitLabel[gv_pick[p]]);
-        }
-        s = s + MB_Text("<n/>");
-    }
-    return s;
+void MB_ObsShow (int c, bool show) {
+    DialogControlSetVisible(c, gv_observers, show);
 }
 
-//--------------------------------------------------------------------------------------------------
-// Observer panel: observers and replay viewers see the whole pick phase as it happens, both teams,
-// nothing hidden. It closes at battle start, where the picks panel takes over.
-//--------------------------------------------------------------------------------------------------
 void MB_CreateObserverPanel () {
     // Observers on the Everyone view see the UI of the last player they followed, else the game
     // UI's default observed player, which GameUIData.xml sets to 14, a number nobody plays as
@@ -1983,6 +1983,9 @@ void MB_CreateObserverPanel () {
     int upper;
     int c;
     int p;
+    int i;
+    int t;
+    int k;
     obs = CatalogFieldValueGetAsInt(c_gameCatalogGameUI, "Dflt", "DefaultObservedPlayerId", c_playerAny);
     if (MB_TeamOf(obs) != 0) {
         return;
@@ -2000,112 +2003,47 @@ void MB_CreateObserverPanel () {
     }
     UIUnitColorStyleOverride(gv_observers, c_unitColorStyleNormal);
     upper = DialogControlHookupStandard(c_triggerControlTypePanel, "UIContainer/FullscreenUpperContainer");
-    gv_obsPanel = DialogControlCreateInPanel(upper, c_triggerControlTypePanel);
-    DialogControlSetObservedType(gv_obsPanel, c_triggerObservedTypeDefaultObservedPlayerId);
-    DialogControlSetSize(gv_obsPanel, PlayerGroupAll(), 560, 460);
-    DialogControlSetPosition(gv_obsPanel, PlayerGroupAll(), c_anchorTopRight, 10, 60);
-    DialogControlSetVisible(gv_obsPanel, PlayerGroupAll(), false);
-    c = DialogControlCreateInPanel(gv_obsPanel, c_triggerControlTypeImage);
-    DialogControlSetObservedType(c, c_triggerObservedTypeDefaultObservedPlayerId);
-    DialogControlSetSize(c, PlayerGroupAll(), 560, 460);
-    DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 0, 0);
-    DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), "Assets\\Textures\\white32.dds");
-    DialogControlSetPropertyAsColor(c, c_triggerControlPropertyColor, PlayerGroupAll(), Color(0, 0, 0));
-    DialogControlFadeTransparency(c, PlayerGroupAll(), 0.0, 30.0);
-    gv_obsTitle = DialogControlCreateInPanel(gv_obsPanel, c_triggerControlTypeLabel);
-    DialogControlSetObservedType(gv_obsTitle, c_triggerObservedTypeDefaultObservedPlayerId);
-    DialogControlSetSize(gv_obsTitle, PlayerGroupAll(), 520, 36);
-    DialogControlSetPosition(gv_obsTitle, PlayerGroupAll(), c_anchorTopLeft, 20, 20);
-    gv_obsInfo = DialogControlCreateInPanel(gv_obsPanel, c_triggerControlTypeLabel);
-    DialogControlSetObservedType(gv_obsInfo, c_triggerObservedTypeDefaultObservedPlayerId);
-    DialogControlSetSize(gv_obsInfo, PlayerGroupAll(), 520, 390);
-    DialogControlSetPosition(gv_obsInfo, PlayerGroupAll(), c_anchorTopLeft, 20, 60);
+    gv_obsPanel = MB_ObsControl(upper, c_triggerControlTypePanel, MB_PANEL_WIDTH, 400);
+    DialogControlSetPosition(gv_obsPanel, PlayerGroupAll(), c_anchorTop, 0, MB_OBS_TOP);
+    gv_obsBack = MB_ObsControl(gv_obsPanel, c_triggerControlTypeImage, MB_PANEL_WIDTH, 400);
+    DialogControlSetPosition(gv_obsBack, PlayerGroupAll(), c_anchorTopLeft, 0, 0);
+    DialogControlSetPropertyAsString(gv_obsBack, c_triggerControlPropertyImage, PlayerGroupAll(), "Assets\\Textures\\white32.dds");
+    DialogControlSetPropertyAsColor(gv_obsBack, c_triggerControlPropertyColor, PlayerGroupAll(), Color(0, 0, 0));
+    DialogControlFadeTransparency(gv_obsBack, PlayerGroupAll(), 0.0, 30.0);
+    gv_obsTitle = MB_ObsControl(gv_obsPanel, c_triggerControlTypeLabel, 920, 36);
+    DialogControlSetPosition(gv_obsTitle, PlayerGroupAll(), c_anchorTopLeft, 40, 20);
+    for (i = 1; i <= MB_POOL_SIZE; i += 1) {
+        c = MB_ObsControl(gv_obsPanel, c_triggerControlTypeImage, MB_CARD_ICON, MB_CARD_ICON);
+        DialogControlSetPropertyAsBool(c, c_triggerControlPropertyAcceptMouseTarget, PlayerGroupAll(), true);
+        gv_obsCard[i] = c;
+        c = MB_ObsControl(gv_obsPanel, c_triggerControlTypeImage, MB_CARD_ICON, 5);
+        DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), "Assets\\Textures\\white32.dds");
+        gv_obsCardBar[i] = c;
+    }
+    for (t = 1; t <= 2; t += 1) {
+        gv_obsTeamLabel[t] = MB_ObsControl(gv_obsPanel, c_triggerControlTypeLabel, 920, 26);
+        for (k = 1; k <= 4; k += 1) {
+            c = MB_ObsControl(gv_obsPanel, c_triggerControlTypeImage, 44, 44);
+            DialogControlSetPropertyAsBool(c, c_triggerControlPropertyAcceptMouseTarget, PlayerGroupAll(), true);
+            gv_obsStripIcon[t][k] = c;
+            gv_obsStripName[t][k] = MB_ObsControl(gv_obsPanel, c_triggerControlTypeLabel, MB_STRIP_NAME_WIDTH, 28);
+            for (i = 1; i <= 3; i += 1) {
+                c = MB_ObsControl(gv_obsPanel, c_triggerControlTypeImage, MB_OFFER_ICON, MB_OFFER_ICON);
+                DialogControlSetPropertyAsBool(c, c_triggerControlPropertyAcceptMouseTarget, PlayerGroupAll(), true);
+                gv_obsOffer[t][k][i] = c;
+            }
+        }
+    }
+    gv_obsInfo = MB_ObsControl(gv_obsPanel, c_triggerControlTypeLabel, 920, 56);
     DialogControlSetVisible(gv_obsPanel, gv_observers, true);
+    DialogControlSetVisible(gv_obsBack, gv_observers, true);
+    DialogControlSetVisible(gv_obsTitle, gv_observers, true);
 }
 
 void MB_ObserverTitle (text t) {
     if (gv_obsPanel != 0) {
         DialogControlSetPropertyAsText(gv_obsTitle, c_triggerControlPropertyText, gv_observers, t);
     }
-}
-
-// One player's state in the vote, Blind Random, Pick Three or the captain opt-in.
-text MB_ObserverLine (int p) {
-    string s;
-    s = ": ";
-    if (gv_phase == MB_PHASE_VOTE) {
-        if (gv_vote[p] != 0) {
-            s = s + "votes " + MB_ModeName(gv_vote[p]);
-        }
-        else {
-            s = s + "-";
-        }
-    }
-    else if (gv_phase == MB_PHASE_BLIND) {
-        if (gv_rolls[p] == 0) {
-            s = s + "choosing a race";
-        }
-        else if (gv_rolls[p] > 1) {
-            s = s + gv_unitLabel[gv_firstRoll[p]] + " -> " + gv_unitLabel[gv_pick[p]] + " (repick)";
-        }
-        else {
-            s = s + gv_unitLabel[gv_pick[p]];
-            if (!gv_locked[p]) {
-                s = s + " (may repick)";
-            }
-        }
-    }
-    else if (gv_phase == MB_PHASE_PICK_THREE && gv_offer[p][1] != 0) {
-        s = s + gv_unitLabel[gv_offer[p][1]] + " / " + gv_unitLabel[gv_offer[p][2]] + " / " + gv_unitLabel[gv_offer[p][3]];
-        if (gv_pick[p] != 0) {
-            s = s + " -> " + gv_unitLabel[gv_pick[p]];
-            if (gv_locked[p]) {
-                s = s + " (locked)";
-            }
-        }
-    }
-    else if (gv_phase == MB_PHASE_PREVIEW) {
-        s = s + gv_unitLabel[gv_pick[p]];
-    }
-    else if (gv_phase == MB_PHASE_OPT_IN) {
-        if (gv_optIn[p]) {
-            s = s + "volunteered";
-        }
-        else {
-            s = s + "-";
-        }
-    }
-    return MB_Name(p) + MB_Text(s + "<n/>");
-}
-
-void MB_RefreshObserver () {
-    text s;
-    int t;
-    int k;
-    if (gv_obsPanel == 0) {
-        return;
-    }
-    s = MB_Text("");
-    if (gv_phase == MB_PHASE_SINGLE) {
-        s = MB_SingleLines();
-    }
-    else if (gv_phase == MB_PHASE_CAPTAIN_DRAFT) {
-        s = MB_Text("Captains: ") + MB_Name(gv_captain[1]) + MB_Text(" / ") + MB_Name(gv_captain[2]) + MB_Text("<n/>") + MB_DraftLines();
-    }
-    else if (gv_phase == MB_PHASE_ASSIGN) {
-        for (t = 1; t <= 2; t += 1) {
-            s = s + MB_Text("Team " + IntToString(t) + "<n/>") + MB_AssignLines(t);
-        }
-    }
-    else {
-        for (t = 1; t <= 2; t += 1) {
-            s = s + MB_Text("Team " + IntToString(t) + "<n/>");
-            for (k = 1; k <= gv_teamSize[t]; k += 1) {
-                s = s + MB_ObserverLine(gv_teamPlayers[t][k]);
-            }
-        }
-    }
-    DialogControlSetPropertyAsText(gv_obsInfo, c_triggerControlPropertyText, gv_observers, s);
 }
 
 // A strip name: grey while still choosing, yellow for whoever's turn it is, white otherwise.
@@ -2127,6 +2065,174 @@ int MB_AssignedUnit (int t, int q) {
         }
     }
     return 0;
+}
+
+// Observer strip slot k of team t, at height y: a unit icon (a question mark for none) and a name.
+void MB_ObsStrip (int t, int k, int y, int u, text name) {
+    int x;
+    x = MB_STRIP_LEFT + (k - 1) * MB_STRIP_PITCH;
+    if (u != 0) {
+        DialogControlSetPropertyAsString(gv_obsStripIcon[t][k], c_triggerControlPropertyImage, gv_observers, gv_unitIcon[u]);
+        DialogControlSetPropertyAsText(gv_obsStripIcon[t][k], c_triggerControlPropertyTooltip, gv_observers, MB_Text(gv_unitLabel[u]));
+    }
+    else {
+        DialogControlSetPropertyAsString(gv_obsStripIcon[t][k], c_triggerControlPropertyImage, gv_observers, "Assets\\Textures\\ui_tip_questionmark.dds");
+        DialogControlSetPropertyAsText(gv_obsStripIcon[t][k], c_triggerControlPropertyTooltip, gv_observers, MB_Text("Not picked yet"));
+    }
+    DialogControlSetPosition(gv_obsStripIcon[t][k], PlayerGroupAll(), c_anchorTopLeft, x, y);
+    DialogControlSetPosition(gv_obsStripName[t][k], PlayerGroupAll(), c_anchorTopLeft, x + 50, y + 10);
+    DialogControlSetPropertyAsText(gv_obsStripName[t][k], c_triggerControlPropertyText, gv_observers, name);
+    MB_ObsShow(gv_obsStripIcon[t][k], true);
+    MB_ObsShow(gv_obsStripName[t][k], true);
+}
+
+// Observer offer icon i under strip slot k of team t: unit u, grey if not (or no longer) the choice.
+void MB_ObsOffer (int t, int k, int i, int y, int u, bool grey) {
+    int c;
+    c = gv_obsOffer[t][k][i];
+    DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, gv_observers, gv_unitIcon[u]);
+    DialogControlSetPropertyAsText(c, c_triggerControlPropertyTooltip, gv_observers, MB_Text(gv_unitLabel[u]));
+    DialogControlSetPropertyAsBool(c, c_triggerControlPropertyDesaturated, gv_observers, grey);
+    DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft,
+        MB_STRIP_LEFT + (k - 1) * MB_STRIP_PITCH + (i - 1) * (MB_OFFER_ICON + 6), y + 50);
+    MB_ObsShow(c, true);
+}
+
+// The observer panel redrawn from the pick state: the pool in the drafts, then each team's strip
+// (with Pick Three offers, or a Blind Random repick's first roll, beneath), then one info line.
+void MB_RefreshObserver () {
+    int y;
+    int x;
+    int i;
+    int t;
+    int k;
+    int n;
+    int q;
+    int u;
+    bool pool;
+    bool offers;
+    bool settled;
+    bool hasInfo;
+    text info;
+    text label;
+    if (gv_obsPanel == 0) {
+        return;
+    }
+    y = 66;
+    pool = gv_phase == MB_PHASE_SINGLE || gv_phase == MB_PHASE_CAPTAIN_DRAFT || gv_phase == MB_PHASE_ASSIGN;
+    for (i = 1; i <= MB_POOL_SIZE; i += 1) {
+        if (!pool) {
+            MB_ObsShow(gv_obsCard[i], false);
+            MB_ObsShow(gv_obsCardBar[i], false);
+            continue;
+        }
+        x = (MB_PANEL_WIDTH - ((MB_OBS_POOL_COLUMNS - 1) * MB_OBS_POOL_PITCH + MB_CARD_ICON)) / 2
+            + ModI(i - 1, MB_OBS_POOL_COLUMNS) * MB_OBS_POOL_PITCH;
+        n = y + ((i - 1) / MB_OBS_POOL_COLUMNS) * MB_OBS_POOL_ROW;
+        DialogControlSetPosition(gv_obsCard[i], PlayerGroupAll(), c_anchorTopLeft, x, n);
+        DialogControlSetPropertyAsString(gv_obsCard[i], c_triggerControlPropertyImage, gv_observers, gv_unitIcon[gv_pool[i]]);
+        DialogControlSetPropertyAsText(gv_obsCard[i], c_triggerControlPropertyTooltip, gv_observers, MB_Text(gv_unitLabel[gv_pool[i]]));
+        DialogControlSetPropertyAsBool(gv_obsCard[i], c_triggerControlPropertyDesaturated, gv_observers, gv_poolTaken[i]);
+        MB_ObsShow(gv_obsCard[i], true);
+        if (gv_poolTaken[i]) {
+            DialogControlSetPosition(gv_obsCardBar[i], PlayerGroupAll(), c_anchorTopLeft, x, n + MB_CARD_ICON + 3);
+            DialogControlSetPropertyAsColor(gv_obsCardBar[i], c_triggerControlPropertyColor, gv_observers,
+                ColorFromIndex(PlayerGetColorIndex(gv_poolTakenBy[i], false), c_teamColorDiffuse));
+        }
+        MB_ObsShow(gv_obsCardBar[i], gv_poolTaken[i]);
+    }
+    if (pool) {
+        y = y + 2 * MB_OBS_POOL_ROW + 8;
+    }
+    offers = gv_phase == MB_PHASE_PICK_THREE || gv_phase == MB_PHASE_BLIND;
+    for (t = 1; t <= 2; t += 1) {
+        label = MB_Text("Team " + IntToString(t));
+        if ((gv_phase == MB_PHASE_CAPTAIN_DRAFT || gv_phase == MB_PHASE_ASSIGN) && gv_captain[t] != 0) {
+            label = label + MB_Text(" - captain ") + MB_Name(gv_captain[t]);
+        }
+        DialogControlSetPosition(gv_obsTeamLabel[t], PlayerGroupAll(), c_anchorTopLeft, 40, y);
+        DialogControlSetPropertyAsText(gv_obsTeamLabel[t], c_triggerControlPropertyText, gv_observers, label);
+        MB_ObsShow(gv_obsTeamLabel[t], true);
+        y = y + 28;
+        for (k = 1; k <= 4; k += 1) {
+            MB_ObsShow(gv_obsStripIcon[t][k], false);
+            MB_ObsShow(gv_obsStripName[t][k], false);
+            for (i = 1; i <= 3; i += 1) {
+                MB_ObsShow(gv_obsOffer[t][k][i], false);
+            }
+        }
+        if (gv_phase == MB_PHASE_CAPTAIN_DRAFT) {
+            for (k = 1; k <= gv_teamUnitCount[t]; k += 1) {
+                MB_ObsStrip(t, k, y, gv_teamUnits[t][k], MB_Text(gv_unitLabel[gv_teamUnits[t][k]]));
+            }
+        }
+        else if (gv_phase == MB_PHASE_SINGLE) {
+            n = 0;  // the team's players in draft order
+            for (k = 1; k <= gv_orderCount; k += 1) {
+                q = gv_order[k];
+                if (MB_TeamOf(q) == t) {
+                    n += 1;
+                    MB_ObsStrip(t, n, y, gv_pick[q], MB_StripName(q, gv_pick[q] != 0));
+                }
+            }
+        }
+        else {
+            for (k = 1; k <= gv_teamSize[t]; k += 1) {
+                q = gv_teamPlayers[t][k];
+                u = gv_pick[q];
+                settled = gv_locked[q];
+                if (gv_phase == MB_PHASE_VOTE) {
+                    u = 0;
+                    settled = gv_vote[q] != 0;
+                }
+                else if (gv_phase == MB_PHASE_OPT_IN) {
+                    u = 0;
+                    settled = gv_optIn[q];
+                }
+                else if (gv_phase == MB_PHASE_ASSIGN) {
+                    u = MB_AssignedUnit(t, q);
+                    settled = u != 0;
+                }
+                else if (gv_phase == MB_PHASE_PREVIEW) {
+                    settled = true;
+                }
+                MB_ObsStrip(t, k, y, u, MB_StripName(q, settled));
+                if (gv_phase == MB_PHASE_PICK_THREE && gv_offer[q][1] != 0) {
+                    for (i = 1; i <= 3; i += 1) {
+                        MB_ObsOffer(t, k, i, y, gv_offer[q][i], gv_pick[q] != 0 && gv_pick[q] != gv_offer[q][i]);
+                    }
+                }
+                else if (gv_phase == MB_PHASE_BLIND && gv_rolls[q] > 1) {
+                    MB_ObsOffer(t, k, 1, y, gv_firstRoll[q], true);  // the roll the repick replaced
+                }
+            }
+        }
+        y = y + 54;
+        if (offers) {
+            y = y + MB_OFFER_ICON + 8;
+        }
+    }
+    hasInfo = true;
+    if (gv_phase == MB_PHASE_VOTE) {
+        info = MB_Text("Votes: ");
+        for (i = 1; i <= 4; i += 1) {
+            info = info + MB_Text(MB_ModeName(i) + " " + IntToString(MB_VoteCount(i)) + "    ");
+        }
+    }
+    else if (gv_phase == MB_PHASE_ASSIGN) {
+        info = MB_DraftLines();
+    }
+    else {
+        hasInfo = false;
+    }
+    if (hasInfo) {
+        DialogControlSetPosition(gv_obsInfo, PlayerGroupAll(), c_anchorTopLeft, 40, y);
+        DialogControlSetPropertyAsText(gv_obsInfo, c_triggerControlPropertyText, gv_observers, info);
+        y = y + 56;
+    }
+    MB_ObsShow(gv_obsInfo, hasInfo);
+    DialogControlSetSize(gv_obsPanel, PlayerGroupAll(), MB_PANEL_WIDTH, y + 16);
+    DialogControlSetSize(gv_obsBack, PlayerGroupAll(), MB_PANEL_WIDTH, y + 16);
 }
 
 // Pick Three: an ally's three offers under their strip slot k; once they've chosen, the rest go grey.

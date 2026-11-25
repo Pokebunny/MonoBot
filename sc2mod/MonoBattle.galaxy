@@ -930,6 +930,10 @@ const int MB_OFFER_ICON = 32;     // Pick Three: allies' offers under the team s
 const int MB_CARD_NAME_HEIGHT = 36;  // shorter and the game reports names as too tall for a line
 const int MB_CARD_PITCH = 96;   // icon, 4, name button, 4
 const int MB_PANEL_WIDTH = 1000;
+// Team strips: four columns, clear of the panel's ~30 px border on both sides.
+const int MB_STRIP_LEFT = 40;
+const int MB_STRIP_PITCH = 234;
+const int MB_STRIP_NAME_WIDTH = 180;
 
 void MB_CreatePanel (int p) {
     int i;
@@ -966,13 +970,11 @@ void MB_CreatePanel (int p) {
         for (k = 1; k <= 4; k += 1) {
             c = DialogControlCreate(gv_dialog[p], c_triggerControlTypeImage);
             DialogControlSetSize(c, PlayerGroupAll(), 44, 44);
-            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 20 + (k - 1) * 240, 560 + (r - 1) * 64);
             DialogControlSetPropertyAsBool(c, c_triggerControlPropertyAcceptMouseTarget, PlayerGroupAll(), true);
             DialogControlSetVisible(c, PlayerGroupAll(), false);
             gv_stripIcon[p][r][k] = c;
             c = DialogControlCreate(gv_dialog[p], c_triggerControlTypeLabel);
-            DialogControlSetSize(c, PlayerGroupAll(), 186, 28);
-            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 70 + (k - 1) * 240, 570 + (r - 1) * 64);
+            DialogControlSetSize(c, PlayerGroupAll(), MB_STRIP_NAME_WIDTH, 28);
             DialogControlSetVisible(c, PlayerGroupAll(), false);
             gv_stripName[p][r][k] = c;
         }
@@ -1004,7 +1006,7 @@ void MB_Layout (int p, int cards, int stripRows, bool buttonsBelow) {
     int inRow;
     int x;
     y = 80;
-    if (!buttonsBelow) {
+    if (!buttonsBelow && gv_phase != MB_PHASE_PREVIEW) {
         for (i = 1; i <= MB_TEXT_BUTTONS; i += 1) {
             DialogControlSetPosition(gv_button[p][i], PlayerGroupAll(), c_anchorTopLeft, 36 + (i - 1) * 236, y);
         }
@@ -1032,14 +1034,14 @@ void MB_Layout (int p, int cards, int stripRows, bool buttonsBelow) {
     }
     for (r = 1; r <= 2; r += 1) {
         for (k = 1; k <= 4; k += 1) {
-            DialogControlSetPosition(gv_stripIcon[p][r][k], PlayerGroupAll(), c_anchorTopLeft, 20 + (k - 1) * 240, y + (r - 1) * 64);
-            DialogControlSetPosition(gv_stripName[p][r][k], PlayerGroupAll(), c_anchorTopLeft, 70 + (k - 1) * 240, y + 10 + (r - 1) * 64);
+            DialogControlSetPosition(gv_stripIcon[p][r][k], PlayerGroupAll(), c_anchorTopLeft, MB_STRIP_LEFT + (k - 1) * MB_STRIP_PITCH, y + (r - 1) * 64);
+            DialogControlSetPosition(gv_stripName[p][r][k], PlayerGroupAll(), c_anchorTopLeft, MB_STRIP_LEFT + 50 + (k - 1) * MB_STRIP_PITCH, y + 10 + (r - 1) * 64);
         }
     }
     for (k = 1; k <= 4; k += 1) {
         for (i = 1; i <= 3; i += 1) {
             DialogControlSetPosition(gv_offerIcon[p][k][i], PlayerGroupAll(), c_anchorTopLeft,
-                20 + (k - 1) * 240 + (i - 1) * (MB_OFFER_ICON + 6), y + 50);
+                MB_STRIP_LEFT + (k - 1) * MB_STRIP_PITCH + (i - 1) * (MB_OFFER_ICON + 6), y + 50);
         }
     }
     y = y + stripRows * 64;

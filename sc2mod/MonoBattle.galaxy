@@ -1088,6 +1088,9 @@ void MB_SetCard (int p, int i, int u, int state) {
     if (state == MB_CARD_CHOSEN) {
         name = TextWithColor(name, Color(40, 100, 40));
     }
+    else if (state == MB_CARD_TAKEN) {
+        name = TextWithColor(name, Color(45, 45, 45));
+    }
     DialogControlSetPropertyAsString(gv_cardImage[p][i], c_triggerControlPropertyImage, g, gv_unitIcon[u]);
     DialogControlSetPropertyAsBool(gv_cardImage[p][i], c_triggerControlPropertyDesaturated, g, state == MB_CARD_TAKEN);
     DialogControlSetPropertyAsText(gv_cardHotspot[p][i], c_triggerControlPropertyTooltip, g, MB_Text(gv_unitLabel[u]));

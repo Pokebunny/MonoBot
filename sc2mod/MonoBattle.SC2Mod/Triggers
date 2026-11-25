@@ -129,7 +129,7 @@
 
                 // Observer panel: the whole pick phase, live, for everyone not on a team
                 playergroup gv_observers;
-                int gv_obsDialog;
+                int gv_obsPanel;
                 int gv_obsTitle;
                 int gv_obsInfo;
                 int[9] gv_firstRoll;      // Blind Random: the unit a repick replaced
@@ -1975,26 +1975,42 @@
                 void MB_CreateObserverPanel () {
                     // Observers and replay viewers on their own vision see what&apos;s shown to the game UI&apos;s default
                     // observed player, for UI marked to follow it (as WCS GameHeart / Observer PlusPlus do).
-                    int obs = CatalogFieldValueGetAsInt(c_gameCatalogGameUI, &quot;Dflt&quot;, &quot;DefaultObservedPlayerId&quot;, c_playerAny);
+                    int obs;
+                    int upper;
+                    int c;
+                    obs = CatalogFieldValueGetAsInt(c_gameCatalogGameUI, &quot;Dflt&quot;, &quot;DefaultObservedPlayerId&quot;, c_playerAny);
                     if (MB_TeamOf(obs) != 0) {
                         return;
                     }
                     gv_observers = PlayerGroupSingle(obs);
-                    gv_obsDialog = DialogCreate(560, 460, c_anchorTopRight, 10, 60, false);
-                    DialogSetObservedType(gv_obsDialog, c_triggerObservedTypeDefaultObservedPlayerId);
-                    gv_obsTitle = DialogControlCreate(gv_obsDialog, c_triggerControlTypeLabel);
+                    // A script dialog shown this way didn&apos;t reach observers in testing; GameHeart&apos;s frames live in
+                    // the game&apos;s own UI container, so ours is a panel created there.
+                    upper = DialogControlHookupStandard(c_triggerControlTypePanel, &quot;UIContainer/FullscreenUpperContainer&quot;);
+                    gv_obsPanel = DialogControlCreateInPanel(upper, c_triggerControlTypePanel);
+                    DialogControlSetObservedType(gv_obsPanel, c_triggerObservedTypeDefaultObservedPlayerId);
+                    DialogControlSetSize(gv_obsPanel, PlayerGroupAll(), 560, 460);
+                    DialogControlSetPosition(gv_obsPanel, PlayerGroupAll(), c_anchorTopRight, 10, 60);
+                    DialogControlSetVisible(gv_obsPanel, PlayerGroupAll(), false);
+                    c = DialogControlCreateInPanel(gv_obsPanel, c_triggerControlTypeImage);
+                    DialogControlSetObservedType(c, c_triggerObservedTypeDefaultObservedPlayerId);
+                    DialogControlSetSize(c, PlayerGroupAll(), 560, 460);
+                    DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 0, 0);
+                    DialogControlSetPropertyAsString(c, c_triggerControlPropertyImage, PlayerGroupAll(), &quot;Assets\\Textures\\white32.dds&quot;);
+                    DialogControlSetPropertyAsColor(c, c_triggerControlPropertyColor, PlayerGroupAll(), Color(0, 0, 0));
+                    DialogControlFadeTransparency(c, PlayerGroupAll(), 0.0, 30.0);
+                    gv_obsTitle = DialogControlCreateInPanel(gv_obsPanel, c_triggerControlTypeLabel);
                     DialogControlSetObservedType(gv_obsTitle, c_triggerObservedTypeDefaultObservedPlayerId);
                     DialogControlSetSize(gv_obsTitle, PlayerGroupAll(), 520, 36);
                     DialogControlSetPosition(gv_obsTitle, PlayerGroupAll(), c_anchorTopLeft, 20, 20);
-                    gv_obsInfo = DialogControlCreate(gv_obsDialog, c_triggerControlTypeLabel);
+                    gv_obsInfo = DialogControlCreateInPanel(gv_obsPanel, c_triggerControlTypeLabel);
                     DialogControlSetObservedType(gv_obsInfo, c_triggerObservedTypeDefaultObservedPlayerId);
                     DialogControlSetSize(gv_obsInfo, PlayerGroupAll(), 520, 390);
                     DialogControlSetPosition(gv_obsInfo, PlayerGroupAll(), c_anchorTopLeft, 20, 60);
-                    DialogSetVisible(gv_obsDialog, gv_observers, true);
+                    DialogControlSetVisible(gv_obsPanel, gv_observers, true);
                 }
 
                 void MB_ObserverTitle (text t) {
-                    if (gv_obsDialog != 0) {
+                    if (gv_obsPanel != 0) {
                         DialogControlSetPropertyAsText(gv_obsTitle, c_triggerControlPropertyText, gv_observers, t);
                     }
                 }
@@ -2052,7 +2068,7 @@
                     text s;
                     int t;
                     int k;
-                    if (gv_obsDialog == 0) {
+                    if (gv_obsPanel == 0) {
                         return;
                     }
                     s = MB_Text(&quot;&quot;);
@@ -2737,8 +2753,9 @@
                             DialogDestroy(gv_dialog[p]);
                         }
                     }
-                    if (gv_obsDialog != 0) {
-                        DialogDestroy(gv_obsDialog);
+                    if (gv_obsPanel != 0) {
+                        DialogControlDestroy(gv_obsPanel);
+                        gv_obsPanel = 0;
                     }
                     gv_phase = MB_PHASE_BATTLE;
                     for (p = 1; p &lt;= 8; p += 1) {

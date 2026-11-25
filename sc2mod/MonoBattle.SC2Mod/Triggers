@@ -1061,6 +1061,11 @@
                     DialogSetSize(gv_dialog[p], MB_PANEL_WIDTH, y + 50);
                 }
 
+                // For a row holding only button 2 (after MB_Layout with the buttons above).
+                void MB_CentreButton (int p) {
+                    DialogControlSetPosition(gv_button[p][2], PlayerGroupAll(), c_anchorTopLeft, (MB_PANEL_WIDTH - 220) / 2, 80);
+                }
+
                 void MB_SetTitle (int p, text t) {
                     DialogControlSetPropertyAsText(gv_title[p], c_triggerControlPropertyText, PlayerGroupSingle(p), t);
                 }
@@ -1369,7 +1374,7 @@
                     MB_SetCard(p, 1, gv_pick[p], MB_CARD_SHOWN);
                     if (gv_locked[p]) {
                         MB_SetButton(p, 2, &quot;Locked in&quot;, false);
-                        DialogControlSetPosition(gv_button[p][2], PlayerGroupAll(), c_anchorTopLeft, (MB_PANEL_WIDTH - 220) / 2, 80);
+                        MB_CentreButton(p);
                     }
                     else {
                         MB_SetButton(p, 2, &quot;Repick&quot;, true);
@@ -1869,6 +1874,7 @@
                             MB_HideButtons(p);
                             MB_HideCards(p);
                             MB_SetButton(p, 2, &quot;I&apos;ll captain&quot;, true);
+                            MB_CentreButton(p);
                         }
                     }
                     MB_RefreshInfo();

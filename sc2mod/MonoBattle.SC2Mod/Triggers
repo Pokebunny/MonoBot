@@ -1369,6 +1369,7 @@
                     MB_SetCard(p, 1, gv_pick[p], MB_CARD_SHOWN);
                     if (gv_locked[p]) {
                         MB_SetButton(p, 2, &quot;Locked in&quot;, false);
+                        DialogControlSetPosition(gv_button[p][2], PlayerGroupAll(), c_anchorTopLeft, (MB_PANEL_WIDTH - 220) / 2, 80);
                     }
                     else {
                         MB_SetButton(p, 2, &quot;Repick&quot;, true);

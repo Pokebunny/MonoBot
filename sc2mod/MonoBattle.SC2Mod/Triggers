@@ -1973,8 +1973,10 @@
                 // nothing hidden. It closes at battle start, where the picks panel takes over.
                 //--------------------------------------------------------------------------------------------------
                 void MB_CreateObserverPanel () {
-                    // Observers and replay viewers on their own vision see what&apos;s shown to the game UI&apos;s default
-                    // observed player, for UI marked to follow it (as WCS GameHeart / Observer PlusPlus do).
+                    // Observers on the Everyone view see the UI of the last player they followed, else the game
+                    // UI&apos;s default observed player, which GameUIData.xml sets to 14, a number nobody plays as
+                    // (unset it&apos;s 16, invalid, and they get player 1&apos;s). Only controls in the game&apos;s own UI
+                    // container follow the observed player; script dialogs never reach that view. (Probe-tested.)
                     int obs;
                     int upper;
                     int c;
@@ -1983,8 +1985,6 @@
                         return;
                     }
                     gv_observers = PlayerGroupSingle(obs);
-                    // A script dialog shown this way didn&apos;t reach observers in testing; GameHeart&apos;s frames live in
-                    // the game&apos;s own UI container, so ours is a panel created there.
                     upper = DialogControlHookupStandard(c_triggerControlTypePanel, &quot;UIContainer/FullscreenUpperContainer&quot;);
                     gv_obsPanel = DialogControlCreateInPanel(upper, c_triggerControlTypePanel);
                     DialogControlSetObservedType(gv_obsPanel, c_triggerObservedTypeDefaultObservedPlayerId);
@@ -2007,37 +2007,6 @@
                     DialogControlSetSize(gv_obsInfo, PlayerGroupAll(), 520, 390);
                     DialogControlSetPosition(gv_obsInfo, PlayerGroupAll(), c_anchorTopLeft, 20, 60);
                     DialogControlSetVisible(gv_obsPanel, gv_observers, true);
-                }
-
-                // Temporary probe (round 2): labels in the game&apos;s UI container (script dialogs never reach
-                // observers; tested), one per player number 0-16 shown only to that number, plus &quot;A&quot; for everyone.
-                // One row per observed type: row 1 ObservedPlayerId, 2 ObservedOrSelected, 3 SelectedOrObserved
-                // (type 0, the default, showed observers the followed player&apos;s labels).
-                void MB_ObserverProbe () {
-                    int p;
-                    int t;
-                    int c;
-                    int upper;
-                    playergroup g;
-                    string name;
-                    upper = DialogControlHookupStandard(c_triggerControlTypePanel, &quot;UIContainer/FullscreenUpperContainer&quot;);
-                    for (t = 1; t &lt;= 3; t += 1) {
-                        for (p = 0; p &lt;= 17; p += 1) {
-                            g = PlayerGroupSingle(p);
-                            name = IntToString(p);
-                            if (p == 17) {
-                                g = PlayerGroupAll();
-                                name = &quot;A&quot;;
-                            }
-                            c = DialogControlCreateInPanel(upper, c_triggerControlTypeLabel);
-                            DialogControlSetObservedType(c, t);
-                            DialogControlSetSize(c, PlayerGroupAll(), 56, 30);
-                            DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTop, -540 + p * 60, 90 + t * 40);
-                            DialogControlSetPropertyAsText(c, c_triggerControlPropertyText, PlayerGroupAll(), MB_Text(IntToString(t) + &quot;-&quot; + name));
-                            DialogControlSetVisible(c, PlayerGroupAll(), false);
-                            DialogControlSetVisible(c, g, true);
-                        }
-                    }
                 }
 
                 void MB_ObserverTitle (text t) {
@@ -2845,7 +2814,6 @@
                         }
                     }
                     MB_CreateObserverPanel();
-                    MB_ObserverProbe();
                     gv_mode = MB_LobbyMode();
                     if (gv_mode == 0) {
                         MB_RunVote();

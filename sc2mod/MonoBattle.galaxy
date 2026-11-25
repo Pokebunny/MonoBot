@@ -2000,6 +2000,40 @@ void MB_CreateObserverPanel () {
     DialogControlSetVisible(gv_obsPanel, gv_observers, true);
 }
 
+// Temporary probe: row D, a script dialog label per player number 0-16 shown only to that number;
+// row C, the same as a label in the game's UI container; "A" = shown to everyone. Whichever an
+// observer sees says what reaches them.
+void MB_ObserverProbe () {
+    int p;
+    int d;
+    int c;
+    int upper;
+    playergroup g;
+    string name;
+    upper = DialogControlHookupStandard(c_triggerControlTypePanel, "UIContainer/FullscreenUpperContainer");
+    for (p = 0; p <= 17; p += 1) {
+        g = PlayerGroupSingle(p);
+        name = IntToString(p);
+        if (p == 17) {
+            g = PlayerGroupAll();
+            name = "A";
+        }
+        d = DialogCreate(60, 40, c_anchorTop, -540 + p * 60, 120, false);
+        DialogSetImageVisible(d, false);
+        c = DialogControlCreate(d, c_triggerControlTypeLabel);
+        DialogControlSetSize(c, PlayerGroupAll(), 56, 30);
+        DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTopLeft, 2, 5);
+        DialogControlSetPropertyAsText(c, c_triggerControlPropertyText, PlayerGroupAll(), MB_Text("D" + name));
+        DialogSetVisible(d, g, true);
+        c = DialogControlCreateInPanel(upper, c_triggerControlTypeLabel);
+        DialogControlSetSize(c, PlayerGroupAll(), 56, 30);
+        DialogControlSetPosition(c, PlayerGroupAll(), c_anchorTop, -540 + p * 60, 170);
+        DialogControlSetPropertyAsText(c, c_triggerControlPropertyText, PlayerGroupAll(), MB_Text("C" + name));
+        DialogControlSetVisible(c, PlayerGroupAll(), false);
+        DialogControlSetVisible(c, g, true);
+    }
+}
+
 void MB_ObserverTitle (text t) {
     if (gv_obsPanel != 0) {
         DialogControlSetPropertyAsText(gv_obsTitle, c_triggerControlPropertyText, gv_observers, t);
@@ -2805,6 +2839,7 @@ bool MB_Main (bool testConds, bool runActions) {
         }
     }
     MB_CreateObserverPanel();
+    MB_ObserverProbe();
     gv_mode = MB_LobbyMode();
     if (gv_mode == 0) {
         MB_RunVote();

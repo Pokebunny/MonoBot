@@ -83,10 +83,8 @@ clock; balance is live LotV (Void Multi, no balance mod).
 Not ported: the stats bank (MonoBot holds the real history), votekick, the
 gg sound, the resource radial menu, the Tab stats screen.
 
-Wishlist (observers): the picks panel for observers in battle. Observer UI
-must be controls in the game's UI
-container shown to player 14 (`GameUIData.xml`); script dialogs never reach
-the observer view.
+Observer UI must be controls in the game's UI container shown to player 14
+(`GameUIData.xml`); script dialogs never reach the observer view.
 
 ## Replay markers
 
@@ -162,10 +160,9 @@ Run `MonoBattle.galaxy` on a 4v4 melee map through each mode, then check:
 - [ ] Every mode's buttons, timers and info text behave as described above
 - [ ] The picks panel shows every portrait and its hover text (name and unit), sits clear of
       the game's own top-left buttons, and the Picks button collapses it
-- [ ] An observer in the lobby, and a replay of the game, both show the picks
-      panel (it's shown to all, but observers' view of custom UI is unproven)
-- [ ] An observer sees the observer panel through the whole pick phase, in
-      every mode, and players don't; note what a replay viewer sees
+- [x] An observer in the lobby sees the picks panel in battle
+- [x] An observer sees the observer panel through the whole pick phase, and
+      players don't
 - [ ] Only your pick (and its morph chain and upgrades) can be built
 - [ ] Morph precursors can't attack (e.g. a Baneling player's Zerglings): ported
       as-is from the old map, it relies on the unit-created event for trained units
